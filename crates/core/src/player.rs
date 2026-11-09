@@ -107,6 +107,8 @@ pub struct Player<A: AudioOutput> {
     history_recorded: bool,
     saved_session: Option<crate::session::Session>,
     session_saved_at: Instant,
+    // A disk checkpoint is provisional until a startup handoff or user control.
+    startup_handoff_available: bool,
 }
 
 impl<A: AudioOutput> Player<A> {
@@ -131,6 +133,7 @@ impl<A: AudioOutput> Player<A> {
             history_recorded: false,
             saved_session: None,
             session_saved_at: Instant::now(),
+            startup_handoff_available: true,
         };
         match crate::session::Session::load() {
             Ok(Some(session)) => {
@@ -300,8 +303,8 @@ impl<A: AudioOutput> Player<A> {
             }
             Action::Restore { snapshot, media } => {
                 ensure!(
-                    self.queue.is_empty() && self.audio.is_none(),
-                    "只能向空播放器恢复会话"
+                    self.startup_handoff_available && self.audio.is_none() && !self.switching,
+                    "只能向尚未操作的播放器交接会话"
                 );
                 crate::audio_quality::set_preferred(snapshot.preferred_quality)?;
                 self.volume = 0.0;
@@ -335,6 +338,7 @@ impl<A: AudioOutput> Player<A> {
                         self.audio().play();
                     }
                 }
+                self.startup_handoff_available = false;
             }
             Action::Play(media) => {
                 ensure!(!self.switching, "正在切换曲目");
@@ -508,6 +512,19 @@ impl<A: AudioOutput> Player<A> {
     }
 
     pub fn handle(&mut self, message: Message) {
+        if let Message::Action(action, _) = &message
+            && !matches!(
+                action,
+                Action::Status
+                    | Action::DisplayStatus
+                    | Action::MergeTrackMetadata(_)
+                    | Action::Restore { .. }
+            )
+        {
+            // Consume before dispatching work so an in-flight resolve cannot
+            // later apply to a session replaced by an upgrade handoff.
+            self.startup_handoff_available = false;
+        }
         let checkpoint = !matches!(
             &message,
             Message::Action(Action::Status | Action::DisplayStatus, _)

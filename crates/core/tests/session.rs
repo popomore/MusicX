@@ -2,14 +2,14 @@ use anyhow::{Result, bail};
 use musicx_core::{
     audio::{AudioOutput, AudioSnapshot, AudioState},
     player::{Action, Message, Player, State},
-    protocol::{AlbumPage, AudioQuality, Quality, QueueContext, Track, TrackInfo},
+    protocol::{AlbumPage, AudioQuality, Quality, QueueContext, Status, Track, TrackInfo},
 };
 use musicx_plugin_api::{DataSource, Media};
 use std::{
     cell::Cell,
     process::Command,
     sync::{
-        OnceLock,
+        Arc, OnceLock,
         atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc,
     },
@@ -111,6 +111,62 @@ fn media(track: Track) -> Media {
         user_agent: Some("private-agent".into()),
         quality: AudioQuality::default(),
     }
+}
+
+fn handoff(player: &mut Player<Audio>, state: State) -> Result<Status> {
+    let snapshot = Status {
+        state,
+        track: Some(track(3)),
+        queue: Arc::new(vec![track(3), track(4)]),
+        index: Some(0),
+        queue_length: 2,
+        queue_revision: 42,
+        queue_context: Some(QueueContext::History),
+        position: 95.5,
+        duration: 180.0,
+        volume: 0.6,
+        ..Status::default()
+    };
+    let (send, reply) = tokio::sync::oneshot::channel();
+    player.handle(Message::Action(
+        Action::Restore {
+            snapshot: Box::new(snapshot),
+            media: (state == State::Playing).then(|| media(track(3))),
+        },
+        Some(send),
+    ));
+    reply.blocking_recv().unwrap()
+}
+
+#[test]
+fn startup_session_allows_upgrade_handoff_until_user_control() {
+    let directory = std::env::temp_dir().join(format!(
+        "musicx-handoff-{}",
+        musicx_core::storage::random_hex::<12>()
+    ));
+    std::fs::create_dir(&directory).unwrap();
+    for phase in [
+        "handoff_playing",
+        "handoff_paused",
+        "handoff_after_seek",
+        "handoff_during_resume",
+    ] {
+        for step in ["save", phase] {
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "session_worker", "--nocapture"])
+                .env("MINI_CLOUDMUSIC_DATA_DIR", &directory)
+                .env("MUSICX_SESSION_TEST_PHASE", step)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{step}: {}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+    std::fs::remove_dir_all(directory).unwrap();
 }
 
 #[test]
@@ -251,6 +307,79 @@ fn session_worker() {
             assert!(player.status().state == State::Idle);
             action(&mut player, Action::Play(media(track(1))));
             assert!(player.status().state == State::Playing);
+        }
+        "handoff_playing" | "handoff_paused" => {
+            assert_eq!(
+                player.status().track.as_ref().map(|track| track.id),
+                Some(2)
+            );
+            // Polling and background metadata enrichment must not consume the handoff.
+            player.tick();
+            action(&mut player, Action::DisplayStatus);
+            let mut enriched = track(2);
+            enriched.cover_url = Some("https://example.invalid/cover".into());
+            action(&mut player, Action::MergeTrackMetadata(enriched));
+            let state = if phase == "handoff_playing" {
+                State::Playing
+            } else {
+                State::Paused
+            };
+            let restored = handoff(&mut player, state)
+                .expect("startup checkpoint must accept upgrade handoff");
+            assert!(restored.state == state);
+            assert_eq!(restored.track.as_ref().map(|track| track.id), Some(3));
+            assert_eq!(
+                restored
+                    .queue
+                    .iter()
+                    .map(|track| track.id)
+                    .collect::<Vec<_>>(),
+                vec![3, 4]
+            );
+            assert_eq!(restored.position, 95.5);
+            assert_eq!(restored.volume, 0.6);
+            assert_eq!(restored.index, Some(0));
+            assert_eq!(restored.queue_revision, 42);
+            if state == State::Playing {
+                player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+            } else {
+                assert_eq!(LOADS.load(Ordering::Relaxed), 0);
+            }
+            assert!(
+                handoff(&mut player, State::Paused).is_err(),
+                "handoff is accepted only once"
+            );
+            assert!(player.status().state == state);
+            assert_eq!(player.status().position, 95.5);
+        }
+        "handoff_after_seek" => {
+            action(
+                &mut player,
+                Action::Seek {
+                    seconds: 12.0,
+                    track_key: None,
+                },
+            );
+            assert!(handoff(&mut player, State::Paused).is_err());
+            assert_eq!(
+                player.status().track.as_ref().map(|track| track.id),
+                Some(2)
+            );
+            assert_eq!(player.status().position, 12.0);
+            assert_eq!(LOADS.load(Ordering::Relaxed), 0);
+        }
+        "handoff_during_resume" => {
+            action(&mut player, Action::Resume);
+            assert!(player.status().switching);
+            assert!(handoff(&mut player, State::Paused).is_err());
+            player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+            player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+            assert!(player.status().state == State::Playing);
+            assert_eq!(
+                player.status().track.as_ref().map(|track| track.id),
+                Some(2)
+            );
+            assert_eq!(player.status().position, 73.25);
         }
         _ => panic!("unknown test phase"),
     }

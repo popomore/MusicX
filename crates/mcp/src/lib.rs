@@ -323,8 +323,9 @@ fn validate_list(tracks: &[protocol::Track], index: usize) -> Result<()> {
     Ok(())
 }
 
-// Local upgrade handoff: authenticated like all UI routes, and only accepted by
-// an empty player. It carries metadata, never expiring audio URLs or credentials.
+// Local upgrade handoff: authenticated like all UI routes, and accepted before
+// user control or an earlier handoff, including over a cold-start checkpoint.
+// It carries metadata, never expiring audio URLs or credentials.
 async fn ui_restore(State(services): State<Services>, Json(snapshot): Json<Status>) -> UiResult {
     validate_snapshot(&snapshot).map_err(ui_error)?;
     let track = snapshot.index.map(|index| snapshot.queue[index].clone());
