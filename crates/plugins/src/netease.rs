@@ -1,6 +1,6 @@
 //! Legacy numeric-ID entry points backed entirely by the MyGo NetEase plugin.
 pub use crate::protocol::Track;
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Result, bail, ensure};
 use serde_json::{Value, json};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -40,12 +40,12 @@ pub fn resolve(id: u64) -> Result<Media> {
 pub fn resolve_with_quality(id: u64, quality: crate::protocol::Quality) -> Result<Media> {
     ensure!(id > 0, "无效歌曲ID");
     crate::mygo::ensure_netease()?;
-    let value = crate::mygo::invoke("netease", "__mini_track", json!({"id":id.to_string()}))?;
-    let track =
-        crate::mygo::catalog_track("netease", &value).context("网易云插件没有返回歌曲信息")?;
-    crate::mygo::resolve_with_quality(track, quality)
+    crate::mygo::resolve_with_quality(id_track(id), quality)
 }
 fn id_track(id: u64) -> Track {
+    if let Some(track) = crate::mygo::remembered_track("netease", &id.to_string()) {
+        return track;
+    }
     with_plugin_source(Track {
         id,
         title: id.to_string(),
@@ -57,6 +57,7 @@ fn id_track(id: u64) -> Track {
         source: None,
     })
 }
+
 pub fn lyrics(id: u64) -> Result<crate::protocol::Lyrics> {
     crate::mygo::ensure_netease()?;
     crate::mygo::lyrics(&id_track(id))
@@ -169,4 +170,32 @@ pub fn login() -> Result<()> {
     }
     let _ = crate::music_sources::login_state(&challenge.key, true);
     bail!("等待扫码超时")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn id_playback_reuses_public_plugin_metadata_without_private_exports() {
+        let id = 9_223_372_036_854_775_000_u64;
+        crate::mygo::remember_artwork(
+            "netease",
+            &json!({"tracks":[{
+                "id":id.to_string(),"name":"来自插件搜索的曲名","artists":[{"name":"歌手"}],"duration":42000
+            }]}),
+        );
+        let track = id_track(id);
+        assert_eq!(track.title, "来自插件搜索的曲名");
+        assert_eq!(track.artist, "歌手");
+        assert_eq!(track.duration, 42.0);
+        assert_eq!(track.source.unwrap().id, id.to_string());
+        assert!(crate::mygo::remembered_track("other-plugin", &id.to_string()).is_none());
+    }
+    #[test]
+    fn unknown_id_has_an_explicit_identity_without_invented_metadata() {
+        let track = id_track(9_223_372_036_854_774_999);
+        assert_eq!(track.title, "9223372036854774999");
+        assert!(track.artist.is_empty());
+        assert_eq!(track.source.unwrap().plugin, "netease");
+    }
 }

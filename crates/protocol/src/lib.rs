@@ -494,6 +494,8 @@ pub struct SourceSetting {
 pub struct MusicSource {
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub description: String,
     pub version: String,
     pub repository: Option<String>,
     pub installed: bool,
@@ -504,6 +506,12 @@ pub struct MusicSource {
     pub qr_sign_in: bool,
     #[serde(default)]
     pub web_sign_in: bool,
+}
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MusicSourceCatalog {
+    pub sources: Vec<MusicSource>,
+    pub refreshing: bool,
+    pub warning: Option<String>,
 }
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SourceAccount {
@@ -534,6 +542,8 @@ pub struct SourcePlaylist {
 pub enum MusicSourceAction {
     List,
     Catalog,
+    CatalogView,
+    RefreshCatalog,
     Get {
         source: String,
     },

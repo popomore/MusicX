@@ -1,9 +1,12 @@
 //! MyGo compatibility, source registration and legacy NetEase entry points.
 mod catalog;
+mod http;
 pub mod music_sources;
 pub mod mygo;
 pub mod netease;
 mod quality;
+mod repository;
+mod source_catalog;
 mod web_auth;
 
 use anyhow::Result;
@@ -24,14 +27,6 @@ impl DataSource for MyGo {
 
     fn resolve(&self, track: Track, quality: Quality) -> Result<Media> {
         catalog::resolve_with_quality(track, quality)
-    }
-
-    fn resolve_selection(&self, track: Track, quality: Quality) -> Result<Media> {
-        if track.source.is_some() {
-            self.resolve(track, quality)
-        } else {
-            netease::resolve_with_quality(track.id, quality)
-        }
     }
 
     fn info(&self, track: Track) -> TrackInfo {

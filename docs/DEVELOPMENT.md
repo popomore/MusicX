@@ -117,7 +117,33 @@ Install a compatible single-file JavaScript plugin from a local directory.
 cargo run --release --locked -- plugin-install /path/to/plugin
 ```
 
-Available actions depend on the plugin's capabilities. Catalog installs use a fixed Git commit. Known plugins retain the bundled SHA-256 checks; newly discovered plugins are resolved to a commit and checked for host compatibility before installation. [MyGo Music plugin directory](https://music.egoist.dev/zh/plugins)
+Available actions depend on the plugin's capabilities. Repository installs prefer the latest Release's platform or generic ZIP, then its source archive. Repositories without a Release resolve the default branch to one fixed commit and download its ZIP. Packages are checked against MusicX's single-file JavaScript host and compiled without executing plugin code before installation; TypeScript, external modules, and unsupported host permissions remain unavailable. The default NetEase source uses the same installation flow, without a built-in version or checksum pin. [MyGo Music plugin directory](https://music.egoist.dev/zh/plugins)
+
+Playback and sign-in call public plugin exports. MusicX does not inject access to NetEase's internal functions. Numeric-ID playback reuses metadata from earlier plugin search results when available, otherwise it displays the ID while streaming. Playing a full track preserves its supplied metadata. Sign-in methods follow the installed plugin: QR sign-in needs `host.signInPrompt`, and web sign-in needs `host.webSignIn`.
+
+The add-source page accepts `owner/repo` or a GitHub repository URL directly, even when discovery is unavailable. MCP clients can use `manage_music_sources` with `action=install` and `repository`. Installation records the repository and selected version locally; commit-based installs also record the full commit SHA.
+
+### Use a custom plugin catalog
+
+The default catalog uses the same GitHub topic search as the [MyGo plugin page](https://github.com/egoist/mygo-music/blob/main/website/src/plugins.ts):
+
+```text
+https://api.github.com/search/repositories?q=topic%3Amygo-music-plugin%20archived%3Afalse&sort=stars&per_page=100
+```
+
+The catalog is downloaded when first used and saved to `mygo_source_catalog.json` in MusicX's data directory (by default `~/Library/Application Support/MusicX/`). GitHub results are reduced to repository, name, and description metadata. Cached entries are displayed immediately. After one hour, the next browse schedules a background refresh while keeping the existing list usable. The Refresh Catalog action revalidates even a fresh cache. ETags are saved and sent with `If-None-Match`; a `304` response keeps the existing data. Failed refreshes preserve the last valid download and briefly back off automatic retries. Catalog data is not bundled or tracked in Git.
+
+Repositories are checked when added. Set `MUSICX_PLUGIN_CATALOG_URL` when starting the helper to override the default HTTP(S) JSON endpoint.
+
+```sh
+MUSICX_PLUGIN_CATALOG_URL="https://example.com/mygo_source_catalog.json" ./run
+```
+
+Custom endpoints may return a GitHub repository search response (`{"items":[{"full_name":"owner/repo"}]}`) or an array of snapshot entries with `repo`, `commit`, `manifest`, `exports`, `manifest_sha256`, and `entry_sha256` fields. Snapshot entries require a full Git commit SHA and SHA-256 hashes for the manifest and entry script. An already-cached explicit snapshot pins those installs; ordinary repository installs do not fetch or require a catalog. Changing the URL downloads the new catalog instead of reusing the previous URL's cache.
+
+Catalog requests have a 25-second timeout and a 2 MiB response limit. Fetch or parse errors are reported when no valid cached copy exists. Invalid responses do not replace the cache. Unset the variable to restore the official topic search. Playback and account settings for installed plugins use their local installation without reading or downloading the catalog.
+
+`catalog` retains its array response for existing MCP clients. `catalog_view` and `refresh_catalog` return `sources`, `refreshing`, and `warning`; clients can poll `catalog_view` while `refreshing` is true to display the completed background update. ZIP downloads are limited to 16 MiB and 4,096 entries; only the checked manifest and JavaScript entry are written into the installation.
 
 ## Checks before opening a pull request
 
