@@ -10,17 +10,15 @@ MusicX is a native macOS menu bar player. Ask an MCP client to find and play a t
 
 > “Play a track by Jay Chou and queue two more.”
 
-## Quick start
+## Install MusicX
 
-You need macOS 14 or later, Rust 1.97 or later, and the Xcode Command Line Tools.
+MusicX requires macOS 14 or later. The first notarized download is in preparation. Published builds will appear on [GitHub Releases](https://github.com/popomore/MusicX/releases).
 
-Run MusicX from the repository root.
+1. Open the `MusicX-macos-*.dmg` for your Mac.
+2. Drag **MusicX** to **Applications** and open it there.
+3. Use the MusicX menu bar icon to reopen the player after closing the window.
 
-```sh
-./run
-```
-
-The launcher builds the app and installs the pinned NetEase Cloud Music plugin if needed. Click the menu bar icon to open the player. A dot on the icon indicates playback. Right-click and choose **Quit MusicX**, or press Command-Q with the panel focused, to end the session.
+MusicX installs its default NetEase Cloud Music source on first launch. A dot on the menu bar icon indicates playback. Right-click and choose **Quit MusicX**, or press Command-Q with the panel focused, to end the session.
 
 ## A player that fits in the menu bar
 
@@ -30,27 +28,7 @@ The launcher builds the app and installs the pinned NetEase Cloud Music plugin i
 
 ## Connect an MCP client
 
-With MusicX running, get the local bearer token.
-
-```sh
-cargo run --release --locked -- mcp-token
-```
-
-Connect your client to `http://127.0.0.1:45967/mcp` using Streamable HTTP. Adapt the keys to your client.
-
-```json
-{
-  "mcpServers": {
-    "musicx": {
-      "type": "http",
-      "url": "http://127.0.0.1:45967/mcp",
-      "headers": {
-        "Authorization": "Bearer <local MCP token>"
-      }
-    }
-  }
-}
-```
+Open **Settings → MCP Connection** in MusicX and choose **Copy MCP Configuration**. Paste the configuration into a client that supports Streamable HTTP. If your client asks for separate fields, use the address shown in MusicX and **Copy Token** to supply the bearer token.
 
 The client can search, play, queue, seek, and work with sources, local playlists, and playback history. [MCP tool reference](docs/DEVELOPMENT.md#mcp-tools)
 

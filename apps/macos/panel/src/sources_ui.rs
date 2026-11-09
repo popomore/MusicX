@@ -77,6 +77,54 @@ impl Sources {
 pub fn settings_view(model: Model) -> impl IntoElement {
     flow(model, false, || {})
 }
+
+fn mcp_settings() -> impl IntoElement {
+    let message = signal("");
+    view()
+        .gap(px(6.0))
+        .pb(px(14.0))
+        .child(section("MCP 连接"))
+        .child(caption(remote::mcp_endpoint()))
+        .child(
+            view()
+                .flex_row()
+                .gap(px(4.0))
+                .child(action(
+                    "复制 MCP 配置",
+                    || remote::mcp_token().is_none(),
+                    move || {
+                        if let Some(token) = remote::mcp_token() {
+                            let config = serde_json::json!({
+                                "mcpServers": {
+                                    "musicx": {
+                                        "type": "http",
+                                        "url": remote::mcp_endpoint(),
+                                        "headers": { "Authorization": format!("Bearer {token}") }
+                                    }
+                                }
+                            });
+                            set_clipboard(format!("{config:#}"));
+                            message.set("配置已复制");
+                        }
+                    },
+                ))
+                .child(action(
+                    "复制令牌",
+                    || remote::mcp_token().is_none(),
+                    move || {
+                        if let Some(token) = remote::mcp_token() {
+                            set_clipboard(token);
+                            message.set("令牌已复制");
+                        }
+                    },
+                )),
+        )
+        .child(caption(move || match message.get() {
+            "" => "将配置粘贴到支持 Streamable HTTP 的客户端。",
+            feedback => feedback,
+        }))
+}
+
 pub fn import_view(model: Model, back: impl Fn() + Copy + 'static) -> impl IntoElement {
     flow(model, true, back)
 }
@@ -176,6 +224,7 @@ fn flow(model: Model, importing: bool, back: impl Fn() + Copy + 'static) -> impl
                                     )
                             },
                         ))
+                        .child(when(move || !importing, mcp_settings))
                         .child(when(move || !importing, || section("音乐来源")))
                         .child(each(
                             move || {
