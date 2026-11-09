@@ -25,6 +25,7 @@ fn initialize() -> anyhow::Result<()> {
     STARTED
         .get_or_init(|| {
             let start = || -> anyhow::Result<()> {
+                musicx_core::storage::migrate_legacy_data(|| Ok(()))?;
                 player::configure(&musicx_plugins::MYGO)?;
                 musicx_mcp::start(musicx_mcp::Services {
                     submit: player::submit,

@@ -10,7 +10,7 @@ MusicX 是用 Rust 编写的 macOS 菜单栏音乐播放器。AVPlayer 负责音
 ./run
 ```
 
-`./run` 分别构建三个 macOS 进程，并将签名应用包准备到 `~/Library/Application Support/Mini Cloud Music/runtime/`。播放核心和界面分别构建，以保持它们各自的依赖特性。设置 `CARGO_TARGET_DIR` 可以指定构建输出目录。
+`./run` 分别构建三个 macOS 进程，并将签名应用包准备到 `~/Library/Application Support/MusicX/runtime/`。播放核心和界面分别构建，以保持它们各自的依赖特性。设置 `CARGO_TARGET_DIR` 可以指定构建输出目录。
 
 - **MusicX Helper** 运行播放核心和 MCP。菜单栏标志内的小圆点表示播放中，悬停显示曲名和状态。
 - **MusicX** 是按需打开的 NSH 窗口。左击菜单栏标志可打开，关闭窗口后后台继续播放。
@@ -102,7 +102,7 @@ cargo run --locked -- plugin-install /path/to/plugin
 
 插件能力依来源而定。播放器支持搜索、取流、专辑和歌词，以及插件声明的配置、账号关联和歌单导入。数据源目录和接口见 [MyGo Music 插件目录](https://music.egoist.dev/zh/plugins)。
 
-本机账号、令牌、历史和歌单位于 `~/Library/Application Support/Mini Cloud Music/`。MCP 只监听本机回环地址。
+本机账号、令牌、历史和歌单位于 `~/Library/Application Support/MusicX/`，已安装的 MyGo 插件位于其中的 `mygo-plugins/`。从旧版升级时，退出旧后台再运行 `./run`。如果 `MusicX` 目录尚不存在，程序会把旧的 `Mini Cloud Music` 目录整体迁入。如果两个目录已经存在，程序优先使用 `MusicX` 并保留旧目录。MCP 只监听本机回环地址。
 
 ## 验证
 

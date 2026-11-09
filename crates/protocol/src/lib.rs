@@ -19,13 +19,21 @@ pub fn address() -> std::net::SocketAddr {
     address
 }
 
+const DATA_DIR_ENV: &str = "MINI_CLOUDMUSIC_DATA_DIR";
+
 pub fn data_dir() -> Option<std::path::PathBuf> {
-    std::env::var_os("MINI_CLOUDMUSIC_DATA_DIR")
+    std::env::var_os(DATA_DIR_ENV)
         .map(std::path::PathBuf::from)
         .or_else(|| {
-            std::env::home_dir()
-                .map(|home| home.join("Library/Application Support/Mini Cloud Music"))
+            std::env::home_dir().map(|home| home.join("Library/Application Support/MusicX"))
         })
+}
+
+pub fn legacy_data_dir() -> Option<std::path::PathBuf> {
+    if std::env::var_os(DATA_DIR_ENV).is_some() {
+        return None;
+    }
+    Some(data_dir()?.with_file_name("Mini Cloud Music"))
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

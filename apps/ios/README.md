@@ -18,4 +18,4 @@ iOS 最低部署版本由 `.cargo/config.toml` 设为 15.0。同一个配置引�
 
 ## 数据和 MCP
 
-应用沙箱的 `Library/Application Support/Mini Cloud Music` 保存账号、历史和 MCP 令牌。Streamable HTTP 在手机本机 `127.0.0.1:45968/mcp` 监听。登录和私有歌单需要在手机上独立授权。
+应用沙箱的 `Library/Application Support/MusicX` 保存账号、历史和 MCP 令牌。首次升级时会迁入旧目录的数据。Streamable HTTP 在手机本机 `127.0.0.1:45968/mcp` 监听。登录和私有歌单需要在手机上独立授权。
