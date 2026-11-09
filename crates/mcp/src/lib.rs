@@ -308,7 +308,7 @@ fn local_queue(services: Services, id: String, index: usize) -> Result<Action> {
 
 fn validate_list(tracks: &[protocol::Track], index: usize) -> Result<()> {
     anyhow::ensure!(
-        !tracks.is_empty() && tracks.len() <= 10000,
+        !tracks.is_empty() && tracks.len() <= protocol::MAX_QUEUE_TRACKS,
         "播放列表应包含1至10000首歌"
     );
     anyhow::ensure!(index < tracks.len(), "无效的播放位置");
@@ -323,8 +323,9 @@ fn validate_list(tracks: &[protocol::Track], index: usize) -> Result<()> {
     Ok(())
 }
 
-// Local upgrade handoff: authenticated like all UI routes, and only accepted by
-// an empty player. It carries metadata, never expiring audio URLs or credentials.
+// Local upgrade handoff: authenticated like all UI routes, and accepted before
+// user control or an earlier handoff, including over a cold-start checkpoint.
+// It carries metadata, never expiring audio URLs or credentials.
 async fn ui_restore(State(services): State<Services>, Json(snapshot): Json<Status>) -> UiResult {
     validate_snapshot(&snapshot).map_err(ui_error)?;
     let track = snapshot.index.map(|index| snapshot.queue[index].clone());
@@ -352,7 +353,10 @@ async fn ui_restore(State(services): State<Services>, Json(snapshot): Json<Statu
 }
 
 fn validate_snapshot(snapshot: &Status) -> Result<()> {
-    anyhow::ensure!(snapshot.queue.len() <= 10000, "队列过长");
+    anyhow::ensure!(
+        snapshot.queue.len() <= protocol::MAX_QUEUE_TRACKS,
+        "队列过长"
+    );
     anyhow::ensure!(
         snapshot
             .index

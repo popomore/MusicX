@@ -21,6 +21,8 @@ Search and discovery are exposed through MCP. Use MCP Connection in settings to 
 
 Changing sources, liking a track, and editing a playlist are independent of queue progression. A failed track selection preserves the existing queue. Quality changes keep the current track and playback position while requesting a new stream.
 
+MusicX remembers the current track, queue, playback position, and volume across restarts. It restores the session paused, so opening the app does not start audio. Press Play to request a fresh stream and continue from the saved position. Playback progress is checkpointed every five seconds and saved on playback actions and normal quit.
+
 ## Music sources and accounts
 
 MusicX supports compatible MyGo Music plugins, including NetEase Cloud Music. A source can offer search, playback, lyrics, album information, account sign-in, or playlist import depending on its capabilities. The settings view surfaces the available actions for each source.

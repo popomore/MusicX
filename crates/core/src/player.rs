@@ -10,7 +10,7 @@ use tokio::sync::oneshot;
 use crate::{
     audio::{AudioOutput, AudioSnapshot, AudioState},
     history,
-    protocol::{HistoryProgress, Track},
+    protocol::{HistoryProgress, MAX_QUEUE_TRACKS, Track},
 };
 
 pub use crate::protocol::{State, Status};
@@ -52,6 +52,7 @@ pub type Reply = Option<oneshot::Sender<Result<Status>>>;
 
 const AUTO_ADVANCE_MAX_ATTEMPTS: usize = 8;
 const AUTO_ADVANCE_RETRY_WINDOW: Duration = Duration::from_secs(20);
+const SESSION_CHECKPOINT_INTERVAL: Duration = Duration::from_secs(5);
 
 pub struct AutoAdvance {
     index: usize,
@@ -104,11 +105,16 @@ pub struct Player<A: AudioOutput> {
     end_handled: bool,
     requested_play: bool,
     history_recorded: bool,
+    preserve_restored_history: bool,
+    saved_session: Option<crate::session::Session>,
+    session_saved_at: Instant,
+    // A disk checkpoint is provisional until a startup handoff or user control.
+    startup_handoff_available: bool,
 }
 
 impl<A: AudioOutput> Player<A> {
     pub fn new(dispatch: fn(Message), source: &'static dyn DataSource) -> Self {
-        Self {
+        let mut player = Self {
             audio: None,
             volume: 1.0,
             dispatch,
@@ -126,7 +132,31 @@ impl<A: AudioOutput> Player<A> {
             end_handled: false,
             requested_play: false,
             history_recorded: false,
+            preserve_restored_history: false,
+            saved_session: None,
+            session_saved_at: Instant::now(),
+            startup_handoff_available: true,
+        };
+        match crate::session::Session::load() {
+            Ok(Some(session)) => {
+                player.queue = session.queue.clone();
+                player.queue_context = session.queue_context.clone();
+                player.index = session.index;
+                player.volume = session.volume;
+                player.deferred_position = session.index.map(|_| session.position);
+                player.history_recorded = session.index.is_some_and(|index| {
+                    history::restore(&session.queue[index]).unwrap_or_else(|error| {
+                        eprintln!("恢复播放历史失败：{error:#}");
+                        false
+                    })
+                });
+                player.preserve_restored_history = player.history_recorded;
+                player.saved_session = Some(session);
+            }
+            Ok(None) => {}
+            Err(error) => eprintln!("恢复播放会话失败：{error:#}"),
         }
+        player
     }
 
     fn audio(&self) -> &A {
@@ -146,6 +176,7 @@ impl<A: AudioOutput> Player<A> {
 
     pub fn shutdown(&mut self) {
         self.flush_history();
+        self.save_session(true);
         self.audio.take();
     }
 
@@ -243,6 +274,7 @@ impl<A: AudioOutput> Player<A> {
         self.deferred_position = None;
         self.end_handled = false;
         self.history_recorded = false;
+        self.preserve_restored_history = false;
         self.requested_play = true;
         Ok(())
     }
@@ -275,22 +307,23 @@ impl<A: AudioOutput> Player<A> {
             }
             Action::Restore { snapshot, media } => {
                 ensure!(
-                    self.queue.is_empty() && self.audio.is_none(),
-                    "只能向空播放器恢复会话"
+                    self.startup_handoff_available && self.audio.is_none() && !self.switching,
+                    "只能向尚未操作的播放器交接会话"
                 );
                 crate::audio_quality::set_preferred(snapshot.preferred_quality)?;
-                self.volume = 0.0;
                 if let Some(media) = media {
-                    self.load(&media)?;
-                    self.audio().pause();
+                    // Load paused without changing the checkpoint volume on failure.
+                    self.load_with_play(&media, false)?;
                 }
                 self.queue = snapshot.queue;
                 self.queue_revision = snapshot.queue_revision;
                 self.queue_context = snapshot.queue_context;
                 self.index = snapshot.index;
-                if self.audio.is_none() && self.index.is_some() {
-                    self.deferred_position = Some(snapshot.position);
-                }
+                self.deferred_position = if self.audio.is_none() {
+                    self.index.map(|_| snapshot.position)
+                } else {
+                    None
+                };
                 self.volume = snapshot.volume;
                 self.history_recorded = self.index.is_some_and(|index| {
                     history::restore(&self.queue[index]).unwrap_or_else(|error| {
@@ -298,6 +331,7 @@ impl<A: AudioOutput> Player<A> {
                         false
                     })
                 });
+                self.preserve_restored_history = self.audio.is_none() && self.history_recorded;
                 self.end_handled = snapshot.state == State::Ended;
                 self.requested_play = matches!(
                     snapshot.state,
@@ -310,9 +344,14 @@ impl<A: AudioOutput> Player<A> {
                         self.audio().play();
                     }
                 }
+                self.startup_handoff_available = false;
             }
             Action::Play(media) => {
                 ensure!(!self.switching, "正在切换曲目");
+                ensure!(
+                    self.queue.len() < MAX_QUEUE_TRACKS,
+                    "播放队列最多支持{MAX_QUEUE_TRACKS}首歌"
+                );
                 self.load(&media)?;
                 let target = self.index.map_or(0, |index| index + 1);
                 Arc::make_mut(&mut self.queue).insert(target, media.track);
@@ -320,6 +359,10 @@ impl<A: AudioOutput> Player<A> {
                 self.queue_revision += 1;
             }
             Action::Enqueue(media) => {
+                ensure!(
+                    self.queue.len() < MAX_QUEUE_TRACKS,
+                    "播放队列最多支持{MAX_QUEUE_TRACKS}首歌"
+                );
                 if self.index.is_none() {
                     self.load(&media)?;
                     self.index = Some(0);
@@ -335,7 +378,7 @@ impl<A: AudioOutput> Player<A> {
             } => {
                 ensure!(!self.switching, "正在切换曲目");
                 ensure!(
-                    index < tracks.len() && tracks.len() <= 10000,
+                    index < tracks.len() && tracks.len() <= MAX_QUEUE_TRACKS,
                     "无效的播放列表"
                 );
                 self.load(&media)?;
@@ -392,6 +435,9 @@ impl<A: AudioOutput> Player<A> {
                     self.end_handled = false;
                 }
                 if self.deferred_position.is_some() {
+                    if self.deferred_position != Some(position) {
+                        self.preserve_restored_history = false;
+                    }
                     self.deferred_position = Some(position);
                 } else {
                     self.seek(position);
@@ -429,7 +475,10 @@ impl<A: AudioOutput> Player<A> {
 
     fn capture_history(&mut self, status: &Status, flush: bool) {
         let Some(track) = &status.track else { return };
-        if self.pending_seek.is_some()
+        // Metadata duration can differ from the actual duration in history.
+        // Passive startup must not rewrite that progress before a seek or load.
+        if self.preserve_restored_history
+            || self.pending_seek.is_some()
             || !matches!(status.state, State::Playing | State::Paused | State::Ended)
         {
             return;
@@ -467,7 +516,39 @@ impl<A: AudioOutput> Player<A> {
         }
     }
 
+    fn save_session(&mut self, force: bool) {
+        if !force && self.session_saved_at.elapsed() < SESSION_CHECKPOINT_INTERVAL {
+            return;
+        }
+        self.session_saved_at = Instant::now();
+        let session = crate::session::Session::capture(&self.status());
+        if self.saved_session.as_ref() == Some(&session) {
+            return;
+        }
+        match session.save() {
+            Ok(()) => self.saved_session = Some(session),
+            Err(error) => eprintln!("保存播放会话失败：{error:#}"),
+        }
+    }
+
     pub fn handle(&mut self, message: Message) {
+        if let Message::Action(action, _) = &message
+            && !matches!(
+                action,
+                Action::Status
+                    | Action::DisplayStatus
+                    | Action::MergeTrackMetadata(_)
+                    | Action::Restore { .. }
+            )
+        {
+            // Consume before dispatching work so an in-flight resolve cannot
+            // later apply to a session replaced by an upgrade handoff.
+            self.startup_handoff_available = false;
+        }
+        let checkpoint = !matches!(
+            &message,
+            Message::Action(Action::Status | Action::DisplayStatus, _)
+        );
         let dispatch = self.dispatch;
         let source = self.source;
         match message {
@@ -626,11 +707,13 @@ impl<A: AudioOutput> Player<A> {
                     self.load_with_play(&media, false)?;
                     self.requested_play = play;
                     self.history_recorded = recorded;
-                    self.seek(if position >= media.track.duration - 0.12 {
-                        0.0
-                    } else {
-                        position
-                    });
+                    self.seek(
+                        if media.track.duration > 0.0 && position >= media.track.duration - 0.12 {
+                            0.0
+                        } else {
+                            position
+                        },
+                    );
                     if play {
                         self.audio().play();
                     }
@@ -672,6 +755,7 @@ impl<A: AudioOutput> Player<A> {
                 self.respond(result, reply);
             }
         }
+        self.save_session(checkpoint);
     }
 
     fn advance_on_end(&mut self) {

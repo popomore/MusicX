@@ -5,6 +5,10 @@ edition = "2024"
 rust-version = "1.97"
 publish = false
 
+[[test]]
+name = "window_lifecycle"
+harness = false
+
 [dependencies]
 musicx-protocol = { path = "../../../crates/protocol" }
 nsh-core = "=0.4.0"
