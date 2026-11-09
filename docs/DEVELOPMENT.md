@@ -37,6 +37,29 @@ xcrun stapler validate target/distribution/MusicX-release.dmg
 
 [Apple's macOS packaging guide](https://developer.apple.com/documentation/xcode/packaging-mac-software-for-distribution) · [Notarization requirements](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution)
 
+## Build and publish with GitHub Actions
+
+The macOS workflow runs formatting and workspace tests on pull requests and pushes to `main`. Download the Apple Silicon DMG and its SHA-256 checksum from the successful run's **Artifacts** section. These builds use ad hoc signing for testing. [Workflow](../.github/workflows/macos.yml)
+
+Set these repository Actions secrets before publishing a release.
+
+| Secret | Value |
+| --- | --- |
+| `APPLE_DEVELOPER_ID_P12_BASE64` | Base64-encoded Developer ID Application certificate and private key exported as a `.p12` |
+| `APPLE_DEVELOPER_ID_P12_PASSWORD` | Password used to export the `.p12` |
+| `APPLE_NOTARY_KEY_BASE64` | Base64-encoded App Store Connect team API private key `.p8` |
+| `APPLE_NOTARY_KEY_ID` | App Store Connect API key ID |
+| `APPLE_NOTARY_ISSUER_ID` | App Store Connect API issuer ID |
+
+Tag a commit on `main` with a version that matches `apps/macos/helper/Cargo.toml`. For version 0.2.0, push `v0.2.0`.
+
+```sh
+git tag -a v0.2.0 -m "MusicX 0.2.0"
+git push origin v0.2.0
+```
+
+The tag run signs the DMG, submits it to Apple, and staples the accepted notarization ticket. The publish job verifies the checksum before attaching both files to the GitHub Release.
+
 ## Repository layout
 
 | Path | Responsibility |
