@@ -21,14 +21,82 @@ mod sources_ui;
 mod ui;
 use musicx_protocol as protocol;
 use nsh_platform_macos::objc2_app_kit::*;
-use objc2::MainThreadMarker;
-use std::{
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use objc2::{MainThreadMarker, rc::Retained};
+use std::{sync::mpsc, time::Duration};
 
 fn on_disconnected() {
     dispatch2::DispatchQueue::main().exec_async(desktop::stop_panel);
+}
+
+fn on_main<T: Send + 'static>(action: impl FnOnce() -> T + Send + 'static) -> T {
+    let (send, receive) = mpsc::sync_channel(1);
+    dispatch2::DispatchQueue::main().exec_async(move || {
+        let _ = send.send(action());
+    });
+    receive
+        .recv_timeout(Duration::from_secs(10))
+        .expect("AppKit main thread timed out")
+}
+
+fn app_window() -> (Retained<NSApplication>, Retained<NSWindow>) {
+    let app = NSApplication::sharedApplication(MainThreadMarker::new().unwrap());
+    let window = app.windows().firstObject().expect("player window");
+    (app, window)
+}
+
+fn wait_for(predicate: fn(&NSApplication, &NSWindow) -> bool) -> bool {
+    for _ in 0..100 {
+        if on_main(move || {
+            let (app, window) = app_window();
+            predicate(&app, &window)
+        }) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    false
+}
+
+fn front(app: &NSApplication, window: &NSWindow) -> bool {
+    app.isActive() && window.isVisible() && window.isKeyWindow() && !window.isMiniaturized()
+}
+
+fn reopen() {
+    let (app, _) = app_window();
+    assert!(
+        !app.delegate()
+            .unwrap()
+            .applicationShouldHandleReopen_hasVisibleWindows(&app, false)
+    );
+}
+
+fn lifecycle_checks() -> anyhow::Result<Vec<&'static str>> {
+    let mut passed = Vec::new();
+    let mut check = |phase, predicate: fn(&NSApplication, &NSWindow) -> bool| {
+        anyhow::ensure!(wait_for(predicate), "{phase} timed out");
+        passed.push(phase);
+        Ok::<_, anyhow::Error>(())
+    };
+    check("launch", front)?;
+    on_main(|| app_window().1.miniaturize(None));
+    // Confirm the Dock transition before requesting reopen; a delayed animation
+    // must fail this precondition instead of yielding a false positive.
+    check("confirmed minimized", |_, window| window.isMiniaturized())?;
+    on_main(|| app_window().0.hide(None));
+    check("inactive before minimized reopen", |app, _| !app.isActive())?;
+    on_main(reopen);
+    check("minimized reopen", front)?;
+    on_main(|| {
+        let (app, window) = app_window();
+        window.orderOut(None);
+        app.hide(None);
+    });
+    check("inactive hidden window", |app, window| {
+        !app.isActive() && !window.isVisible()
+    })?;
+    on_main(reopen);
+    check("hidden reopen", front)?;
+    Ok(passed)
 }
 
 fn main() {
@@ -36,39 +104,15 @@ fn main() {
         println!("Skipped: set MUSICX_NATIVE_UI_TEST=1 in an interactive macOS session.");
         return;
     }
-    let results = Arc::new(Mutex::new(Vec::new()));
-    let observed = results.clone();
-    let worker = std::thread::spawn(move || {
-        for phase in ["launch", "minimized reopen", "hidden reopen"] {
-            std::thread::sleep(Duration::from_secs(1));
-            let observed = observed.clone();
-            dispatch2::DispatchQueue::main().exec_async(move || {
-                let app = NSApplication::sharedApplication(MainThreadMarker::new().unwrap());
-                let window = app.windows().firstObject().expect("player window");
-                let passed = app.isActive()
-                    && window.isVisible()
-                    && window.isKeyWindow()
-                    && !window.isMiniaturized();
-                observed.lock().unwrap().push((phase, passed));
-                match phase {
-                    "launch" => window.miniaturize(None),
-                    "minimized reopen" => window.orderOut(None),
-                    _ => {
-                        desktop::stop_panel();
-                        return;
-                    }
-                }
-                let delegate = app.delegate().unwrap();
-                assert!(!delegate.applicationShouldHandleReopen_hasVisibleWindows(&app, false));
-            });
-        }
+    let worker = std::thread::spawn(|| {
+        let result = lifecycle_checks();
+        on_main(desktop::stop_panel);
+        result
     });
     assert_eq!(desktop::run_panel(), std::process::ExitCode::SUCCESS);
-    worker.join().unwrap();
-    let results = results.lock().unwrap();
-    assert_eq!(results.len(), 3);
-    for (phase, passed) in results.iter() {
-        println!("{phase}: visible, active, key, not minimized = {passed}");
-        assert!(passed, "{phase}");
+    let passed = worker.join().unwrap().unwrap();
+    assert_eq!(passed.len(), 6);
+    for phase in passed {
+        println!("{phase}: passed");
     }
 }
