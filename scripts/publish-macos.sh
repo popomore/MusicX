@@ -4,15 +4,33 @@ set -euo pipefail
 tag=${GITHUB_REF_NAME:?}
 repo=${GITHUB_REPOSITORY:?}
 source_sha=${SOURCE_SHA:?}
+signing_mode=${SIGNING_MODE:?}
 cd "$(dirname "$1")"
 dmg=$(basename "$1")
 checksum="$dmg.sha256"
 manifest='release-manifest.json'
 
+title="MusicX ${tag#v}"
+notes="Download MusicX for Apple Silicon and drag the app to Applications. Requires macOS 14 or later."
+case "$signing_mode" in
+    ad-hoc)
+        prerelease=true
+        title+=" (Preview)"
+        notes+=$'\n\nThis preview uses ad hoc signing. macOS may block it on first launch because it lacks Apple notarization.'
+        ;;
+    developer-id)
+        prerelease=false
+        ;;
+    *)
+        echo "::error::Unknown macOS signing mode."
+        exit 1
+        ;;
+esac
+
 sha256sum --check "$checksum"
 tag_sha=$(gh api "repos/$repo/commits/refs/tags/$tag" --jq .sha)
 if [[ "$tag_sha" != "$source_sha" ]]; then
-    echo "::error::The release tag no longer points to the signed build."
+    echo "::error::The release tag no longer points to the packaged build."
     exit 1
 fi
 
@@ -23,9 +41,9 @@ file_digests() {
 }
 
 jq -n --arg tag "$tag" --arg version "${tag#v}" --arg source_sha "$source_sha" \
-    --argjson files "$(file_digests "$dmg" "$checksum")" '
+    --arg signing_mode "$signing_mode" --argjson files "$(file_digests "$dmg" "$checksum")" '
     {schema: 1, unit: "musicx-macos", tag: $tag, version: $version, source_sha: $source_sha,
-     files: ($files | map({name, sha256: (.digest | ltrimstr("sha256:"))}))}
+     signing_mode: $signing_mode, files: ($files | map({name, sha256: (.digest | ltrimstr("sha256:"))}))}
 ' > "$manifest"
 expected=$(file_digests "$dmg" "$checksum" "$manifest")
 
@@ -35,10 +53,13 @@ release=$(gh api --paginate "repos/$repo/releases?per_page=100" |
         | if length > 1 then error("Multiple releases match the tag") else .[0] end')
 if [[ "$release" == null ]]; then
     gh release create "$tag" --repo "$repo" --verify-tag --draft \
-        --title "MusicX ${tag#v}" \
-        --notes "Download MusicX for Apple Silicon and drag the app to Applications. Requires macOS 14 or later."
-    release=$(gh release view "$tag" --repo "$repo" --json databaseId,isDraft |
-        jq -c '{id: .databaseId, draft: .isDraft}')
+        --prerelease="$prerelease" --title "$title" --notes "$notes"
+    release=$(gh release view "$tag" --repo "$repo" --json databaseId,isDraft,isPrerelease |
+        jq -c '{id: .databaseId, draft: .isDraft, prerelease: .isPrerelease}')
+fi
+if ! jq -e --argjson prerelease "$prerelease" '.prerelease == $prerelease' <<< "$release" > /dev/null; then
+    echo "::error::The existing release type does not match this build's signing mode."
+    exit 1
 fi
 release_id=$(jq -er .id <<< "$release")
 
@@ -66,7 +87,7 @@ if jq -e '.draft' <<< "$release" > /dev/null; then
 fi
 
 if ! jq -e --argjson expected "$expected" '. == $expected' <<< "$actual" > /dev/null; then
-    echo "::error::GitHub release assets do not match the signed build."
+    echo "::error::GitHub release assets do not match the packaged build."
     exit 1
 fi
 

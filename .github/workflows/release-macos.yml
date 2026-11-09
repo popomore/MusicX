@@ -23,6 +23,7 @@ jobs:
     outputs:
       artifact-id: ${{ steps.artifacts.outputs.artifact-id }}
       source-sha: ${{ steps.source.outputs.sha }}
+      signing-mode: ${{ steps.signing.outputs.mode }}
     defaults:
       run:
         shell: bash
@@ -55,12 +56,42 @@ jobs:
           fi
           printf 'sha=%s\n' "$source_sha" >> "$GITHUB_OUTPUT"
 
+      - name: Select signing mode
+        id: signing
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          required=(APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY
+                    APPLE_API_PRIVATE_KEY APPLE_API_KEY APPLE_API_ISSUER)
+          missing=()
+          for name in "${required[@]}"; do
+            if [[ -z "${!name}" ]]; then
+              missing+=("$name")
+            fi
+          done
+
+          if (( ${#missing[@]} == ${#required[@]} )); then
+            mode=ad-hoc
+          elif (( ${#missing[@]} == 0 )); then
+            mode=developer-id
+          else
+            echo "::error::Incomplete Apple signing configuration. Missing: ${missing[*]}"
+            exit 1
+          fi
+          printf 'mode=%s\n' "$mode" >> "$GITHUB_OUTPUT"
+
       - name: Format and test
         run: |
           cargo fmt --all -- --check
           cargo test --release --locked --workspace
 
       - name: Import Developer ID certificate
+        if: steps.signing.outputs.mode == 'developer-id'
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -103,6 +134,7 @@ jobs:
           hdiutil verify -quiet "$DMG"
 
       - name: Notarize and staple the DMG
+        if: steps.signing.outputs.mode == 'developer-id'
         env:
           APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
@@ -161,6 +193,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ needs.build.outputs.source-sha }}
+          SIGNING_MODE: ${{ needs.build.outputs.signing-mode }}
         run: bash scripts/publish-macos.sh "$DMG"
 
       - name: Preserve the release manifest

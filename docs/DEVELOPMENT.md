@@ -41,7 +41,9 @@ xcrun stapler validate target/distribution/MusicX-release.dmg
 
 The macOS CI workflow runs formatting and workspace tests on pull requests and pushes to `main`. Download the Apple Silicon DMG and its SHA-256 checksum from the successful run's **Artifacts** section. These builds use ad hoc signing for testing. [macOS CI](../.github/workflows/ci-macos.yml)
 
-The release workflow runs when a stable version tag is pushed. GitHub Actions supplies the repository token for publishing. Set these repository Actions secrets for Apple signing and notarization. [Release workflow](../.github/workflows/release-macos.yml)
+The release workflow runs when a stable version tag is pushed. GitHub Actions supplies the repository token for publishing. [Release workflow](../.github/workflows/release-macos.yml)
+
+With all six Apple secrets unset, the workflow builds an ad hoc signed DMG and publishes it as a GitHub prerelease. macOS may block this preview on first launch because it lacks notarization. Configure all six repository Actions secrets to sign and notarize future tagged releases with Developer ID. A partial configuration fails before the build.
 
 | Secret | Value |
 | --- | --- |
@@ -59,9 +61,9 @@ git tag -a v0.2.0 -m "MusicX 0.2.0"
 git push origin v0.2.0
 ```
 
-The macOS job validates the tagged commit and both package versions, then signs, notarizes, and staples the DMG. The publish job verifies the checksum and uploads the installer, checksum, and `release-manifest.json` to a draft. It checks the GitHub asset digests before publishing and retains a copy of the manifest for 90 days.
+The macOS job validates the tagged commit and both package versions, then builds the DMG for the selected signing mode. For Developer ID builds it signs, notarizes, and staples the installer. The publish job verifies the checksum and uploads the installer, checksum, and `release-manifest.json` to a draft. It checks the GitHub asset digests before publishing and retains a copy of the manifest for 90 days. The manifest records the signing mode.
 
-If publication fails after a successful build, rerun the failed jobs to reuse the same signed installer. The build artifact is retained for seven days. The publisher reuses matching uploads and stops if the draft contains conflicting assets.
+If publication fails after a successful build, rerun the failed jobs to reuse the same installer. The build artifact is retained for seven days. The publisher reuses matching uploads and stops if the draft contains conflicting assets. After configuring Apple credentials, use the next version tag for the signed release.
 
 ## Repository layout
 
