@@ -10,6 +10,7 @@ permissions:
 concurrency:
   group: release-macos
   cancel-in-progress: false
+  queue: max
 
 env:
   CARGO_INCREMENTAL: '0'
