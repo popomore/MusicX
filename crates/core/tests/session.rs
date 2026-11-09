@@ -21,6 +21,7 @@ use std::{
 static MESSAGES: OnceLock<mpsc::Sender<Message>> = OnceLock::new();
 static LOADS: AtomicUsize = AtomicUsize::new(0);
 static FAIL_RESOLVE: AtomicBool = AtomicBool::new(false);
+static FAIL_LOAD: AtomicBool = AtomicBool::new(false);
 
 fn dispatch(message: Message) {
     MESSAGES.get().unwrap().send(message).unwrap();
@@ -54,6 +55,9 @@ struct Audio {
 impl AudioOutput for Audio {
     fn load(output: &mut Option<Self>, _: &Media, play: bool, volume: f32) -> Result<()> {
         LOADS.fetch_add(1, Ordering::Relaxed);
+        if FAIL_LOAD.load(Ordering::Relaxed) {
+            bail!("audio load failed");
+        }
         *output = Some(Self {
             position: Cell::new(0.0),
             playing: Cell::new(play),
@@ -153,6 +157,28 @@ fn run_worker(directory: &std::path::Path, phase: &str) {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+fn run_scenario(phases: &[&str]) {
+    let directory = std::env::temp_dir().join(format!(
+        "musicx-regression-{}",
+        musicx_core::storage::random_hex::<12>()
+    ));
+    std::fs::create_dir(&directory).unwrap();
+    for phase in phases {
+        run_worker(&directory, phase);
+    }
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn empty_handoff_clears_the_old_checkpoint_position() {
+    run_scenario(&["save", "handoff_empty", "verify_empty"]);
+}
+
+#[test]
+fn failed_handoff_preserves_checkpoint_volume_and_can_retry() {
+    run_scenario(&["save", "handoff_load_failure", "retry_failed_handoff"]);
 }
 
 #[test]
@@ -436,6 +462,74 @@ fn session_worker() {
             );
             assert!(player.status().state == state);
             assert_eq!(player.status().position, 95.5);
+        }
+        "handoff_empty" => {
+            let (send, reply) = tokio::sync::oneshot::channel();
+            player.handle(Message::Action(
+                Action::Restore {
+                    snapshot: Box::new(Status {
+                        state: State::Idle,
+                        volume: 0.8,
+                        ..Status::default()
+                    }),
+                    media: None,
+                },
+                Some(send),
+            ));
+            let status = reply.blocking_recv().unwrap().unwrap();
+            assert!(
+                status.state == State::Idle && status.track.is_none() && status.queue.is_empty()
+            );
+            assert_eq!(
+                status.position, 0.0,
+                "empty handoff must clear deferred position"
+            );
+            let saved: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(
+                    musicx_core::protocol::data_dir()
+                        .unwrap()
+                        .join("playback-session.json"),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(saved["position"], 0.0);
+        }
+        "verify_empty" => {
+            let status = player.status();
+            assert!(status.state == State::Idle && status.queue.is_empty());
+            assert_eq!(status.position, 0.0);
+            assert_eq!(status.volume, 0.8);
+        }
+        "handoff_load_failure" | "retry_failed_handoff" => {
+            if phase == "handoff_load_failure" {
+                FAIL_LOAD.store(true, Ordering::Relaxed);
+                assert!(handoff(&mut player, State::Playing).is_err());
+            }
+            let status = player.status();
+            assert!(status.state == State::Paused);
+            assert_eq!(status.track.as_ref().map(|track| track.id), Some(2));
+            assert_eq!(status.position, 73.25);
+            assert_eq!(
+                status.volume, 0.37,
+                "failed handoff must preserve checkpoint volume"
+            );
+            let saved: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(
+                    musicx_core::protocol::data_dir()
+                        .unwrap()
+                        .join("playback-session.json"),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            assert!((saved["volume"].as_f64().unwrap() - 0.37).abs() < 0.0001);
+            if phase == "retry_failed_handoff" {
+                FAIL_LOAD.store(true, Ordering::Relaxed);
+                assert!(handoff(&mut player, State::Playing).is_err());
+                FAIL_LOAD.store(false, Ordering::Relaxed);
+                assert!(handoff(&mut player, State::Playing).unwrap().state == State::Playing);
+            }
         }
         "handoff_after_seek" => {
             action(

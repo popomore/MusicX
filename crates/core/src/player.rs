@@ -311,18 +311,19 @@ impl<A: AudioOutput> Player<A> {
                     "只能向尚未操作的播放器交接会话"
                 );
                 crate::audio_quality::set_preferred(snapshot.preferred_quality)?;
-                self.volume = 0.0;
                 if let Some(media) = media {
-                    self.load(&media)?;
-                    self.audio().pause();
+                    // Load paused without changing the checkpoint volume on failure.
+                    self.load_with_play(&media, false)?;
                 }
                 self.queue = snapshot.queue;
                 self.queue_revision = snapshot.queue_revision;
                 self.queue_context = snapshot.queue_context;
                 self.index = snapshot.index;
-                if self.audio.is_none() && self.index.is_some() {
-                    self.deferred_position = Some(snapshot.position);
-                }
+                self.deferred_position = if self.audio.is_none() {
+                    self.index.map(|_| snapshot.position)
+                } else {
+                    None
+                };
                 self.volume = snapshot.volume;
                 self.history_recorded = self.index.is_some_and(|index| {
                     history::restore(&self.queue[index]).unwrap_or_else(|error| {
