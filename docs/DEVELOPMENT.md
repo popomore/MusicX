@@ -39,26 +39,32 @@ xcrun stapler validate target/distribution/MusicX-release.dmg
 
 ## Build and publish with GitHub Actions
 
-The macOS workflow runs formatting and workspace tests on pull requests and pushes to `main`. Download the Apple Silicon DMG and its SHA-256 checksum from the successful run's **Artifacts** section. These builds use ad hoc signing for testing. [Workflow](../.github/workflows/macos.yml)
+The macOS CI workflow runs formatting and workspace tests on pull requests and pushes to `main`. Download the Apple Silicon DMG and its SHA-256 checksum from the successful run's **Artifacts** section. These builds use ad hoc signing for testing. [macOS CI](../.github/workflows/ci-macos.yml)
 
-Set these repository Actions secrets before publishing a release.
+The release workflow uses the shared Meta source and asset Actions. The release unit defines the source branch, tag prefix, and version file. GitHub's private Action sharing is limited to eligible repositories, so MusicX checks out the pinned Meta Actions with a read-only token in the tag workflow. [Release workflow](../.github/workflows/release-macos.yml) · [Release unit](../.release/units/musicx-macos.json)
+
+Set these repository Actions secrets before publishing a release. The Apple secret names match Mokisu Desktop's Developer ID workflow.
 
 | Secret | Value |
 | --- | --- |
-| `APPLE_DEVELOPER_ID_P12_BASE64` | Base64-encoded Developer ID Application certificate and private key exported as a `.p12` |
-| `APPLE_DEVELOPER_ID_P12_PASSWORD` | Password used to export the `.p12` |
-| `APPLE_NOTARY_KEY_BASE64` | Base64-encoded App Store Connect team API private key `.p8` |
-| `APPLE_NOTARY_KEY_ID` | App Store Connect API key ID |
-| `APPLE_NOTARY_ISSUER_ID` | App Store Connect API issuer ID |
+| `META_RELEASE_READ_TOKEN` | Token with Contents read access scoped to `popomore-org/meta` |
+| `APPLE_CERTIFICATE` | Base64-encoded Developer ID Application certificate and private key exported as a `.p12` |
+| `APPLE_CERTIFICATE_PASSWORD` | Password used to export the `.p12` |
+| `APPLE_SIGNING_IDENTITY` | Full Developer ID Application signing identity |
+| `APPLE_API_PRIVATE_KEY` | Contents of the App Store Connect team API private key `.p8` |
+| `APPLE_API_KEY` | App Store Connect API key ID |
+| `APPLE_API_ISSUER` | App Store Connect API issuer ID |
 
-Tag a commit on `main` with a version that matches `apps/macos/helper/Cargo.toml`. For version 0.2.0, push `v0.2.0`.
+MusicX uses manual stable tags. Tag a commit on `main` with a version that matches `apps/macos/helper/Cargo.toml` and `crates/platform-apple/Cargo.toml`. For version 0.2.0, push `v0.2.0`.
 
 ```sh
 git tag -a v0.2.0 -m "MusicX 0.2.0"
 git push origin v0.2.0
 ```
 
-The tag run signs the DMG, submits it to Apple, and staples the accepted notarization ticket. The publish job verifies the checksum before attaching both files to the GitHub Release.
+Meta validates the tag against the release unit and resolves its source commit. The macOS job signs and notarizes the DMG. Meta then verifies the uploaded assets and publishes them with `release-manifest.json`. The workflow retains source and asset receipts for 90 days.
+
+If publication fails after a successful build, rerun the failed jobs to reuse the validated installer from that run. The build artifact is retained for seven days.
 
 ## Repository layout
 

@@ -1,0 +1,255 @@
+name: Release macOS
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-macos
+  cancel-in-progress: false
+
+env:
+  META_RELEASE_SHA: faf63d3b5b289a15615c35c669d4a77cb6e2884f
+  CARGO_INCREMENTAL: '0'
+  MACOSX_DEPLOYMENT_TARGET: '14.0'
+  DMG: target/distribution/MusicX-macos-arm64.dmg
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      source-sha: ${{ steps.source.outputs.source-sha }}
+      version: ${{ steps.source.outputs.version }}
+      plan: ${{ steps.source.outputs.plan }}
+      complete: ${{ steps.existing.outputs.complete }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check out Meta release actions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: popomore-org/meta
+          ref: ${{ env.META_RELEASE_SHA }}
+          token: ${{ secrets.META_RELEASE_READ_TOKEN }}
+          path: .meta-release
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /.github/actions/_lib/
+            /.github/actions/release-source/
+            /.github/actions/release-assets/
+          persist-credentials: false
+
+      - id: source
+        uses: ./.meta-release/.github/actions/release-source
+        with:
+          manifest: .release/units/musicx-macos.json
+          tag: ${{ github.ref_name }}
+          dry-run: 'false'
+          implementation-ref: popomore-org/meta@${{ env.META_RELEASE_SHA }}
+
+      - name: Require a stable release
+        env:
+          RELEASE_CHANNEL: ${{ steps.source.outputs.channel }}
+        run: |
+          if [ "$RELEASE_CHANNEL" != stable ]; then
+            echo "::error::MusicX publishes manual vMAJOR.MINOR.PATCH tags."
+            exit 1
+          fi
+
+      - id: existing
+        uses: ./.meta-release/.github/actions/release-assets
+        with:
+          unit: musicx-macos
+          plan: ${{ steps.source.outputs.plan }}
+          check-existing: 'true'
+          implementation-ref: popomore-org/meta@${{ env.META_RELEASE_SHA }}
+
+      - name: Preserve release receipts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-source-macos-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-*.json
+          if-no-files-found: ignore
+          retention-days: 90
+
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.complete != 'true'
+    runs-on: macos-15
+    timeout-minutes: 45
+    outputs:
+      artifact-id: ${{ steps.artifacts.outputs.artifact-id }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.source-sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install 1.97.0 --profile minimal --component rustfmt
+          rustup override set 1.97.0
+
+      - name: Format and test
+        run: |
+          cargo fmt --all -- --check
+          cargo test --release --locked --workspace
+
+      - name: Check the packaged app version
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          bundle_version=$(cargo metadata --locked --no-deps --format-version 1 |
+            jq -er '.packages[] | select(.name == "musicx-platform-apple") | .version')
+          if [ "$bundle_version" != "$RELEASE_VERSION" ]; then
+            echo "::error::The app bundle version must match the Meta release plan."
+            exit 1
+          fi
+
+      - name: Import Developer ID certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          : "${APPLE_CERTIFICATE:?Configure the Developer ID certificate secret}"
+          : "${APPLE_CERTIFICATE_PASSWORD:?Configure the Developer ID certificate password secret}"
+          : "${APPLE_SIGNING_IDENTITY:?Configure the Developer ID Application identity}"
+          if [[ "$APPLE_SIGNING_IDENTITY" != "Developer ID Application: "* ]]; then
+            echo "::error::APPLE_SIGNING_IDENTITY must be a Developer ID Application identity."
+            exit 1
+          fi
+          umask 077
+          certificate=$(mktemp "$RUNNER_TEMP/musicx-certificate.XXXXXX")
+          trap 'rm -f "$certificate"' EXIT
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$certificate"
+
+          keychain="$RUNNER_TEMP/musicx-signing.keychain-db"
+          password=$(openssl rand -hex 24)
+          echo "::add-mask::$password"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$certificate" -f pkcs12 -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain"
+          security list-keychains -d user -s "$keychain"
+
+          identity=$(security find-identity -v -p codesigning "$keychain" |
+            awk -v name="\"$APPLE_SIGNING_IDENTITY\"" 'index($0, name) { print $2 }')
+          if [[ ! "$identity" =~ ^[0-9A-Fa-f]{40}$ ]]; then
+            echo "::error::The certificate must match the configured Developer ID Application identity."
+            exit 1
+          fi
+          printf 'MUSICX_CODESIGN_IDENTITY=%s\n' "$identity" >> "$GITHUB_ENV"
+
+      - name: Package Apple Silicon DMG
+        run: |
+          test "$(uname -m)" = arm64
+          sh scripts/package-macos.sh "$DMG"
+          hdiutil verify -quiet "$DMG"
+
+      - name: Notarize and staple the DMG
+        env:
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          : "${APPLE_API_PRIVATE_KEY:?Configure the notarization API private key}"
+          : "${APPLE_API_KEY:?Configure the notarization API key ID}"
+          : "${APPLE_API_ISSUER:?Configure the notarization API issuer ID}"
+          umask 077
+          notary_dir=$(mktemp -d "$RUNNER_TEMP/musicx-notary.XXXXXX")
+          trap 'rm -rf "$notary_dir"' EXIT
+          printf '%s\n' "$APPLE_API_PRIVATE_KEY" > "$notary_dir/key.p8"
+          xcrun notarytool submit "$DMG" \
+            --key "$notary_dir/key.p8" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER" \
+            --wait --timeout 20m --output-format json > "$notary_dir/result.json"
+          jq -er '.status' "$notary_dir/result.json"
+          jq -e '.status == "Accepted"' "$notary_dir/result.json" > /dev/null
+          xcrun stapler staple "$DMG"
+          xcrun stapler validate "$DMG"
+
+      - name: Write checksum
+        run: |
+          cd "$(dirname "$DMG")"
+          name=$(basename "$DMG")
+          shasum -a 256 "$name" > "$name.sha256"
+
+      - id: artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: musicx-macos-validated-${{ github.run_attempt }}
+          path: |
+            ${{ env.DMG }}
+            ${{ env.DMG }}.sha256
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.source-sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check out Meta release actions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: popomore-org/meta
+          ref: ${{ env.META_RELEASE_SHA }}
+          token: ${{ secrets.META_RELEASE_READ_TOKEN }}
+          path: .meta-release
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /.github/actions/_lib/
+            /.github/actions/release-source/
+            /.github/actions/release-assets/
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact-id }}
+          path: target/distribution
+
+      - name: Verify assets and prepare public notes
+        working-directory: target/distribution
+        run: |
+          sha256sum --check MusicX-macos-arm64.dmg.sha256
+          printf '%s\n' 'Download MusicX for Apple Silicon and drag the app to Applications. Requires macOS 14 or later.' > "$RUNNER_TEMP/musicx-release-notes.md"
+
+      - uses: ./.meta-release/.github/actions/release-assets
+        with:
+          unit: musicx-macos
+          plan: ${{ needs.prepare.outputs.plan }}
+          files: '["target/distribution/MusicX-macos-arm64.dmg","target/distribution/MusicX-macos-arm64.dmg.sha256"]'
+          notes-file: ${{ runner.temp }}/musicx-release-notes.md
+          dry-run: 'false'
+          implementation-ref: popomore-org/meta@${{ env.META_RELEASE_SHA }}
+
+      - name: Preserve release receipts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-assets-macos-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-*.json
+          if-no-files-found: ignore
+          retention-days: 90
