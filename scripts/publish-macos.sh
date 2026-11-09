@@ -28,11 +28,15 @@ case "$signing_mode" in
 esac
 
 sha256sum --check "$checksum"
-tag_sha=$(gh api "repos/$repo/commits/refs/tags/$tag" --jq .sha)
-if [[ "$tag_sha" != "$source_sha" ]]; then
-    echo "::error::The release tag no longer points to the packaged build."
-    exit 1
-fi
+verify_tag() {
+    local tag_sha
+    tag_sha=$(gh api "repos/$repo/commits/refs/tags/$tag" --jq .sha)
+    if [[ "$tag_sha" != "$source_sha" ]]; then
+        echo "::error::The release tag no longer points to the packaged build."
+        exit 1
+    fi
+}
+verify_tag
 
 file_digests() {
     sha256sum "$@" | jq -Rn '
@@ -91,6 +95,7 @@ if jq -e '.draft' <<< "$release" > /dev/null; then
         fi
     done
     if (( ${#missing[@]} )); then
+        verify_tag
         gh release upload "$tag" --repo "$repo" "${missing[@]}"
         actual=$(release_assets)
     fi
@@ -101,6 +106,7 @@ if ! jq -e --argjson expected "$expected" '. == $expected' <<< "$actual" > /dev/
     exit 1
 fi
 
+verify_tag
 if jq -e '.draft' <<< "$release" > /dev/null; then
     gh api --method PATCH "repos/$repo/releases/$release_id" -F draft=false --jq .html_url
 else
