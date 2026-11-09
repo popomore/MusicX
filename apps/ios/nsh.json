@@ -1,0 +1,9 @@
+{
+  "name": "迷你云音乐",
+  "id": "local.mini-cloudmusic.iphone",
+  "version": "0.2.0",
+  "build": 1,
+  "rust": ".",
+  "root": "App",
+  "theme": "../../assets/theme.json"
+}

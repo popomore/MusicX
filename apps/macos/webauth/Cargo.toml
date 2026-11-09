@@ -1,0 +1,16 @@
+[package]
+name = "mini-cloudmusic-webauth"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+url = "2"
+objc2 = "0.6"
+block2 = "=0.6.2"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSDate", "NSError", "NSGeometry", "NSHTTPCookie", "NSNotification", "NSObject", "NSRunLoop", "NSString", "NSTimer", "NSURL", "NSURLRequest"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSRunningApplication", "NSWindow", "NSView", "NSMenu", "NSMenuItem", "NSEvent", "NSGraphics", "NSScreen"] }
+objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "block2", "objc2-app-kit", "objc2-core-foundation", "WKWebView", "WKWebViewConfiguration", "WKWebsiteDataStore", "WKHTTPCookieStore", "WKNavigation", "WKNavigationAction", "WKNavigationDelegate", "WKUIDelegate", "WKWindowFeatures", "WKFrameInfo"] }

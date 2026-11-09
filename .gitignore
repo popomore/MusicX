@@ -1,0 +1,10 @@
+target/
+.tools/
+.build/
+.nsh/
+node_modules/
+__pycache__/
+.DS_Store
+.env
+.env.*
+mcp-token

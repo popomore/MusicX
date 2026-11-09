@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 128 128" role="img" aria-labelledby="title">
+  <title id="title">MusicX</title>
+  <rect x="11" y="11" width="106" height="106" rx="24" fill="#233d37"/>
+  <g fill="none" stroke-width="9.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M37 84h8c6 0 10-2 14-7l2-3m10-20 4-5c4-5 8-7 14-7h2" stroke="#b8d5a4"/>
+    <path d="M37 42h8c6 0 10 2 14 7l17 27c4 6 8 8 14 8h1" stroke="#f5e7cf"/>
+  </g>
+</svg>

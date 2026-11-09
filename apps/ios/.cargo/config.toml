@@ -1,0 +1,5 @@
+[env]
+IPHONEOS_DEPLOYMENT_TARGET = "15.0"
+
+[patch.crates-io]
+nsh-platform-ios = { path = "../../vendor/nsh-platform-ios" }

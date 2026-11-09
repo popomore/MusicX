@@ -1,0 +1,20 @@
+{
+  "cssVars": {
+    "light": {
+      "background": "oklch(0.977 0.006 85)",
+      "foreground": "oklch(0.24 0.008 85)",
+      "muted": "oklch(0.91 0.008 85)",
+      "muted-foreground": "oklch(0.51 0.009 85)",
+      "primary": "oklch(0.24 0.008 85)",
+      "primary-foreground": "oklch(0.977 0.006 85)"
+    },
+    "dark": {
+      "background": "oklch(0.21 0.006 85)",
+      "foreground": "oklch(0.94 0.006 85)",
+      "muted": "oklch(0.30 0.008 85)",
+      "muted-foreground": "oklch(0.70 0.009 85)",
+      "primary": "oklch(0.94 0.006 85)",
+      "primary-foreground": "oklch(0.21 0.006 85)"
+    }
+  }
+}

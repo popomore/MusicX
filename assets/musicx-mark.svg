@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="25 24 78 78">
+  <g fill="none" stroke="#1b2421" stroke-width="9.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M37 84h8c6 0 10-2 14-7l2-3m10-20 4-5c4-5 8-7 14-7h2"/>
+    <path d="M37 42h8c6 0 10 2 14 7l17 27c4 6 8 8 14 8h1"/>
+  </g>
+  <circle id="playing-indicator" cx="89" cy="63" r="5.5" fill="#1b2421"/>
+</svg>

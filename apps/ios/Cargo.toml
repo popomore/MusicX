@@ -1,0 +1,27 @@
+[package]
+name = "mini-cloudmusic-iphone"
+version = "0.1.0"
+edition = "2024"
+publish = false
+autobins = false
+
+[workspace]
+
+[dependencies]
+nsh-core = "=0.4.0"
+nsh-base = { version = "=0.4.0", default-features = false }
+mini-cloudmusic = { path = "../../crates/core" }
+anyhow = "1"
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = "1"
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "json"] }
+tokio = { version = "1", features = ["sync"] }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+nsh-platform-ios = { version = "=0.4.0", default-features = false }
+
+[profile.release]
+opt-level = "s"
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

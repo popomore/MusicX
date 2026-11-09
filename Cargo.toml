@@ -1,0 +1,22 @@
+[workspace]
+members = [
+    "crates/core",
+    "crates/protocol",
+    "apps/macos/panel",
+    "apps/macos/webauth",
+]
+default-members = ["crates/core"]
+exclude = ["apps/ios", "vendor/nsh-platform-macos", "vendor/nsh-platform-ios"]
+resolver = "3"
+
+[profile.release]
+opt-level = "z"
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+[profile.release.package.mini-cloudmusic-panel]
+opt-level = "s"
+
+[profile.release.package.mini-cloudmusic-webauth]
+opt-level = "s"
