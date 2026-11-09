@@ -42,3 +42,10 @@ Mac 日常在明亮桌面中短暂打开面板，确认当前歌曲后继续工�
 - 列表统一带小封面：队列、历史、专辑与本地歌单曲目36点，歌单概览和来源歌单40点，5点圆角。队列保留序号、当前标记与时长；缺图/加载失败使用音乐符号占位。本地歌单预览来自首个可用曲目封面，来源歌单使用插件imageUrl，不为补封面单独取流或逐首查询。网易云请求72–80像素缩略图，沿用4MiB缓存及虚拟列表，关窗释放。
 
 - Mac来源账号按能力提供“网页登录”和“扫码登录”。网页登录使用独立临时浏览器进程与非持久会话，标题显示网站域名，账号和验证码输入由网站承载。主面板不常驻浏览器，登录终止后返回来源详情，取消/关面板结束任务。
+
+## 实现与存储
+
+- `crates/core` 管理播放状态、队列、历史、本地歌单和文件存储。`crates/protocol` 定义界面、播放核心与服务共享的数据类型。
+- `crates/platform-apple` 通过 `AudioOutput` 接入 AVPlayer，负责系统「正在播放」和 macOS 菜单栏。`apps/macos/panel` 管理按需启动的 NSH 窗口和 Dock，网页登录使用独立的临时组件。
+- `crates/plugin-api` 定义搜索、取流、歌曲信息与专辑接口。`crates/plugins` 实现 MyGo 适配和音乐来源管理。`crates/mcp` 通过 Streamable HTTP 暴露播放能力，并提供面板使用的本机路由。MusicX Helper 在启动时装配这些组件。
+- macOS 的数据根目录是 `~/Library/Application Support/MusicX/`。签名应用包放在 `runtime/`，已安装的 MyGo 插件放在 `mygo-plugins/`。iPhone 在应用沙箱内使用自己的 `Library/Application Support/MusicX/`。[启动和迁移说明](../README.md)
