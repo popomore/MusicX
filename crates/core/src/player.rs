@@ -105,6 +105,7 @@ pub struct Player<A: AudioOutput> {
     end_handled: bool,
     requested_play: bool,
     history_recorded: bool,
+    preserve_restored_history: bool,
     saved_session: Option<crate::session::Session>,
     session_saved_at: Instant,
     // A disk checkpoint is provisional until a startup handoff or user control.
@@ -131,6 +132,7 @@ impl<A: AudioOutput> Player<A> {
             end_handled: false,
             requested_play: false,
             history_recorded: false,
+            preserve_restored_history: false,
             saved_session: None,
             session_saved_at: Instant::now(),
             startup_handoff_available: true,
@@ -148,6 +150,7 @@ impl<A: AudioOutput> Player<A> {
                         false
                     })
                 });
+                player.preserve_restored_history = player.history_recorded;
                 player.saved_session = Some(session);
             }
             Ok(None) => {}
@@ -271,6 +274,7 @@ impl<A: AudioOutput> Player<A> {
         self.deferred_position = None;
         self.end_handled = false;
         self.history_recorded = false;
+        self.preserve_restored_history = false;
         self.requested_play = true;
         Ok(())
     }
@@ -326,6 +330,7 @@ impl<A: AudioOutput> Player<A> {
                         false
                     })
                 });
+                self.preserve_restored_history = self.audio.is_none() && self.history_recorded;
                 self.end_handled = snapshot.state == State::Ended;
                 self.requested_play = matches!(
                     snapshot.state,
@@ -421,6 +426,9 @@ impl<A: AudioOutput> Player<A> {
                     self.end_handled = false;
                 }
                 if self.deferred_position.is_some() {
+                    if self.deferred_position != Some(position) {
+                        self.preserve_restored_history = false;
+                    }
                     self.deferred_position = Some(position);
                 } else {
                     self.seek(position);
@@ -458,7 +466,10 @@ impl<A: AudioOutput> Player<A> {
 
     fn capture_history(&mut self, status: &Status, flush: bool) {
         let Some(track) = &status.track else { return };
-        if self.pending_seek.is_some()
+        // Metadata duration can differ from the actual duration in history.
+        // Passive startup must not rewrite that progress before a seek or load.
+        if self.preserve_restored_history
+            || self.pending_seek.is_some()
             || !matches!(status.state, State::Playing | State::Paused | State::Ended)
         {
             return;

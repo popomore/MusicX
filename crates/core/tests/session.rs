@@ -2,7 +2,9 @@ use anyhow::{Result, bail};
 use musicx_core::{
     audio::{AudioOutput, AudioSnapshot, AudioState},
     player::{Action, Message, Player, State},
-    protocol::{AlbumPage, AudioQuality, Quality, QueueContext, Status, Track, TrackInfo},
+    protocol::{
+        AlbumPage, AudioQuality, HistoryProgress, Quality, QueueContext, Status, Track, TrackInfo,
+    },
 };
 use musicx_plugin_api::{DataSource, Media};
 use std::{
@@ -138,6 +140,35 @@ fn handoff(player: &mut Player<Audio>, state: State) -> Result<Status> {
     reply.blocking_recv().unwrap()
 }
 
+fn run_worker(directory: &std::path::Path, phase: &str) {
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "session_worker", "--nocapture"])
+        .env("MINI_CLOUDMUSIC_DATA_DIR", directory)
+        .env("MUSICX_SESSION_TEST_PHASE", phase)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{phase}: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn passive_restore_preserves_completed_history() {
+    let directory = std::env::temp_dir().join(format!(
+        "musicx-history-{}",
+        musicx_core::storage::random_hex::<12>()
+    ));
+    std::fs::create_dir(&directory).unwrap();
+    for phase in ["completed_history_unknown", "completed_history_long"] {
+        run_worker(&directory, "save");
+        run_worker(&directory, phase);
+    }
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
 #[test]
 fn startup_session_allows_upgrade_handoff_until_user_control() {
     let directory = std::env::temp_dir().join(format!(
@@ -239,6 +270,31 @@ fn session_worker() {
     };
     let (send, receive) = mpsc::channel();
     MESSAGES.set(send).ok().unwrap();
+    let completed = HistoryProgress {
+        position: 180.0,
+        duration: 180.0,
+        completed: true,
+    };
+    if phase.starts_with("completed_history_") {
+        let path = musicx_core::protocol::data_dir()
+            .unwrap()
+            .join("playback-session.json");
+        let mut saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        saved["queue"][1]["duration"] = if phase.ends_with("unknown") {
+            0.0
+        } else {
+            240.0
+        }
+        .into();
+        saved["position"] = 180.0.into();
+        musicx_core::history::record(
+            serde_json::from_value(saved["queue"][1].clone()).unwrap(),
+            completed,
+        )
+        .unwrap();
+        std::fs::write(path, saved.to_string()).unwrap();
+    }
     let mut player = Player::<Audio>::new(dispatch, &SOURCE);
     let action = |player: &mut Player<Audio>, action| player.handle(Message::Action(action, None));
     match phase.as_str() {
@@ -307,6 +363,35 @@ fn session_worker() {
             assert!(player.status().state == State::Idle);
             action(&mut player, Action::Play(media(track(1))));
             assert!(player.status().state == State::Playing);
+        }
+        "completed_history_unknown" | "completed_history_long" => {
+            player.tick();
+            action(&mut player, Action::DisplayStatus);
+            action(&mut player, Action::Volume(0.25));
+            action(&mut player, Action::Pause);
+            player.shutdown();
+            assert!(
+                musicx_core::history::recent(1).unwrap()[0].progress == Some(completed),
+                "passive restoration must preserve the completed history progress"
+            );
+            if phase.ends_with("long") {
+                action(
+                    &mut player,
+                    Action::Seek {
+                        seconds: 60.0,
+                        track_key: None,
+                    },
+                );
+                player.tick();
+                let progress = musicx_core::history::recent(1).unwrap()[0]
+                    .progress
+                    .unwrap();
+                assert_eq!(progress.position, 60.0);
+                assert!(
+                    !progress.completed,
+                    "an explicit rewind must update completion"
+                );
+            }
         }
         "handoff_playing" | "handoff_paused" => {
             assert_eq!(
