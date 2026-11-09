@@ -1,0 +1,12 @@
+[package]
+name = "mini-cloudmusic"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.97"
+publish = false
+
+[dependencies]
+musicx-mcp = { path = "../../../crates/mcp" }
+musicx-platform-apple = { path = "../../../crates/platform-apple" }
+musicx-plugins = { path = "../../../crates/plugins" }
+anyhow = "1"

@@ -1,0 +1,29 @@
+[package]
+name = "musicx-platform-apple"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.97"
+publish = false
+
+[dependencies]
+musicx-core = { path = "../core" }
+musicx-plugin-api = { path = "../plugin-api" }
+anyhow = "1"
+objc2 = "0.6"
+objc2-av-foundation = { version = "0.3", default-features = false, features = ["std", "AVPlayer", "AVPlayerItem", "AVAsset", "objc2-core-media", "block2"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSData", "NSDictionary", "NSError", "NSGeometry", "NSObject", "NSObjCRuntime", "NSRunLoop", "NSString", "NSTimer", "NSURL", "NSValue", "objc2-core-foundation"] }
+objc2-core-media = { version = "0.3", default-features = false, features = ["std", "CMTime"] }
+objc2-media-player = { version = "0.3", default-features = false, features = ["std", "MPMediaItem", "MPMediaEntity", "MPNowPlayingInfoCenter", "MPRemoteCommandCenter", "MPRemoteCommand", "MPRemoteCommandEvent"] }
+block2 = "=0.6.2"
+dispatch2 = "0.3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-media-player = { version = "0.3", default-features = false, features = ["block2", "objc2-app-kit", "objc2-core-foundation"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSRunningApplication", "NSStatusBar", "NSStatusItem", "NSStatusBarButton", "NSButton", "NSCell", "NSControl", "NSImage", "NSMenu", "NSMenuItem", "NSView", "NSResponder", "NSEvent", "NSWorkspace", "NSAccessibility", "NSAccessibilityProtocols", "NSGraphicsContext", "objc2-core-foundation", "objc2-core-graphics"] }
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["CFData", "CFDictionary", "CFNumber", "CFString"] }
+objc2-core-graphics = { version = "0.3", default-features = false, features = ["CGImage"] }
+objc2-image-io = { version = "0.3", default-features = false, features = ["CGImageSource", "objc2-core-graphics"] }
+reqwest = { version = "0.13", features = ["blocking", "form", "json", "query"] }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2-avf-audio = { version = "0.3", default-features = false, features = ["std", "AVAudioSession", "AVAudioSessionTypes"] }

@@ -1,11 +1,16 @@
 [workspace]
 members = [
     "crates/core",
+    "crates/plugin-api",
+    "crates/plugins",
+    "crates/mcp",
+    "crates/platform-apple",
+    "apps/macos/helper",
     "crates/protocol",
     "apps/macos/panel",
     "apps/macos/webauth",
 ]
-default-members = ["crates/core"]
+default-members = ["apps/macos/helper"]
 exclude = ["apps/ios", "vendor/nsh-platform-macos", "vendor/nsh-platform-ios"]
 resolver = "3"
 

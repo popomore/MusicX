@@ -1,7 +1,7 @@
 //! Sources adapt a bounded subset of the MyGo contract; local playlists stay ours.
-use crate::{mygo, netease, protocol::*};
+use crate::{mygo, protocol::*};
 use anyhow::{Context, Result, ensure};
-use axum::{Json, Router, http::StatusCode, routing::get};
+use musicx_core::{metadata, storage};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
@@ -263,7 +263,7 @@ fn source_descriptor(
         .into_iter()
         .take(64)
         .map(|mut field| {
-            field.link = field.link.and_then(|url| netease::public_url(&url));
+            field.link = field.link.and_then(|url| metadata::public_url(&url));
             let private = secret(&field.key);
             let value = values.get(&field.key).cloned();
             let configured = value.as_ref().is_some_and(|v| !v.is_empty());
@@ -386,7 +386,7 @@ fn save_settings(id: &str, values: &BTreeMap<String, String>) -> Result<()> {
     let bytes = serde_json::to_vec(values)?;
     ensure!(bytes.len() <= 65536, "数据源配置超过64KiB");
     let dir = mygo::plugin_root()?.join(id);
-    let temp = dir.join(format!(".settings-{}", netease::random_hex::<8>()));
+    let temp = dir.join(format!(".settings-{}", storage::random_hex::<8>()));
     let result = (|| -> Result<()> {
         let mut f = fs::OpenOptions::new()
             .create_new(true)
@@ -505,7 +505,7 @@ pub fn install(repository: &str) -> Result<MusicSource> {
     );
     m.repository = Some(format!("https://github.com/{repo}"));
     m.metadata.insert("sourceCommit".into(), json!(row.commit));
-    let staging = mygo::plugin_root()?.join(format!(".source-{}", netease::random_hex::<8>()));
+    let staging = mygo::plugin_root()?.join(format!(".source-{}", storage::random_hex::<8>()));
     fs::create_dir(&staging)?;
     let result = (|| -> Result<String> {
         m.main = "index.js".into();
@@ -548,7 +548,7 @@ pub fn playlists(source: &str) -> Result<Vec<SourcePlaylist>> {
                 .map(str::to_owned)
                 .or_else(|| v["id"].as_u64().map(|v| v.to_string()))?;
             Some(SourcePlaylist {
-                cover_url: v["imageUrl"].as_str().and_then(netease::artwork_url),
+                cover_url: v["imageUrl"].as_str().and_then(metadata::artwork_url),
                 id,
                 name: v["name"].as_str().unwrap_or("未命名歌单").into(),
                 track_count: v["trackCount"].as_u64().unwrap_or(0) as usize,
@@ -695,7 +695,7 @@ pub fn begin_sign_in_method(
         },
         "此来源的关联方式暂未接入，请检查来源配置项"
     );
-    let request = requested.unwrap_or_else(netease::random_hex::<12>);
+    let request = requested.unwrap_or_else(storage::random_hex::<12>);
     ensure!(valid_job(&request), "无效的关联任务");
     let mut registry = LOGIN
         .lock()
@@ -817,37 +817,12 @@ pub fn execute(input: MusicSourceAction) -> Result<Value> {
         MusicSourceAction::ImportPlaylist {
             source,
             playlist_id,
-        } => crate::local_library::change(LocalLibraryAction::ImportSource {
+        } => crate::change_library(LocalLibraryAction::ImportSource {
             source,
             playlist_id,
         })?,
     })
 }
-type Failure = (StatusCode, Json<Value>);
-fn error(e: impl std::fmt::Display) -> Failure {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(json!({"error":e.to_string()})),
-    )
-}
-pub fn routes() -> Router {
-    Router::new().route("/ui/music-sources", get(source_list).post(source_action))
-}
-async fn source_list() -> Result<Json<Vec<MusicSource>>, Failure> {
-    tokio::task::spawn_blocking(list)
-        .await
-        .map_err(error)?
-        .map(Json)
-        .map_err(error)
-}
-async fn source_action(Json(input): Json<MusicSourceAction>) -> Result<Json<Value>, Failure> {
-    tokio::task::spawn_blocking(move || execute(input))
-        .await
-        .map_err(error)?
-        .map(Json)
-        .map_err(error)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

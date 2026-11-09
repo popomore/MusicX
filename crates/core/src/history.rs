@@ -9,8 +9,8 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use crate::netease::{Track, state_dir};
 use crate::protocol::{HistoryProgress, track_key};
+use crate::{protocol::Track, storage::state_dir};
 
 const CHECKPOINT_INTERVAL: Duration = Duration::from_secs(60);
 const FILE: &str = "playback-history.jsonl";

@@ -5,9 +5,6 @@ use crate::{
 };
 use anyhow::{Context, Result, ensure};
 
-pub fn resolve(track: Track) -> Result<netease::Media> {
-    resolve_with_quality(track, crate::audio_quality::preferred())
-}
 pub fn resolve_with_quality(
     track: Track,
     quality: crate::protocol::Quality,

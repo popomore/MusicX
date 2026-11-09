@@ -1,4 +1,6 @@
-use mini_cloudmusic::{desktop, mcp, mygo, netease};
+use musicx_mcp as mcp;
+use musicx_platform_apple::{desktop, player};
+use musicx_plugins::{MYGO, WEB_AUTH_APP_NAME, mygo, netease};
 
 use anyhow::{Result, bail};
 use std::process::ExitCode;
@@ -24,8 +26,13 @@ fn run() -> Result<ExitCode> {
     }
     match command.as_deref() {
         None | Some("start") => {
-            desktop::bundle_if_needed()?;
-            mcp::start()?;
+            desktop::bundle_if_needed(WEB_AUTH_APP_NAME)?;
+            player::configure(&MYGO)?;
+            mcp::start(mcp::Services {
+                submit: player::submit,
+                quit: desktop::quit,
+                sources: &MYGO,
+            })?;
             return Ok(desktop::run());
         }
         Some("login") => netease::login()?,

@@ -147,7 +147,7 @@ fn package(
 
 fn runtime_dir() -> anyhow::Result<std::path::PathBuf> {
     use std::os::unix::fs::DirBuilderExt;
-    let path = crate::netease::state_dir()?.join("runtime");
+    let path = musicx_core::storage::state_dir()?.join("runtime");
     std::fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
@@ -155,7 +155,7 @@ fn runtime_dir() -> anyhow::Result<std::path::PathBuf> {
     Ok(path)
 }
 
-pub fn bundle_if_needed() -> anyhow::Result<()> {
+pub fn bundle_if_needed(web_auth_name: &str) -> anyhow::Result<()> {
     use std::{os::unix::process::CommandExt, process::Command};
     let executable = std::env::current_exe()?;
     let base = runtime_dir()?;
@@ -187,8 +187,8 @@ pub fn bundle_if_needed() -> anyhow::Result<()> {
         anyhow::ensure!(webauth.is_file(), "请先运行./run准备网页登录组件");
         package(
             &webauth,
-            &base.join(format!("{}.app", crate::web_auth::APP_NAME)),
-            crate::web_auth::APP_NAME,
+            &base.join(format!("{web_auth_name}.app")),
+            web_auth_name,
             "local.mini-cloudmusic.webauth",
             "mini-cloudmusic-webauth",
             true,
@@ -377,7 +377,7 @@ pub fn refresh() {
     });
 }
 
-pub(crate) fn quit() {
+pub fn quit() {
     dispatch2::DispatchQueue::main().exec_async(|| {
         DESKTOP.with_borrow_mut(|desktop| {
             if let Some(mut desktop) = desktop.take() {

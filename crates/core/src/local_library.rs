@@ -1,7 +1,6 @@
 //! On-demand local playlists. No background sync, audio cache or resident library copy.
-use crate::{netease, protocol::*};
+use crate::{metadata, protocol::*, storage};
 use anyhow::{Context, Result, ensure};
-use axum::{Json, Router, extract::Query, http::StatusCode, routing::get};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -29,7 +28,7 @@ struct Library {
 }
 
 fn read() -> Result<Library> {
-    let path = netease::state_dir()?.join("local-playlists.json");
+    let path = storage::state_dir()?.join("local-playlists.json");
     match fs::File::open(&path) {
         Ok(file) => {
             ensure!(file.metadata()?.len() <= MAX_BYTES, "本地歌单文件过大");
@@ -57,7 +56,7 @@ fn save(library: &Library) -> Result<()> {
     );
     let value = serde_json::to_string(library)?;
     ensure!(value.len() as u64 <= MAX_BYTES, "本地歌单文件过大");
-    netease::save_private("local-playlists.json", &value)?;
+    storage::save_private("local-playlists.json", &value)?;
     REVISION.fetch_add(1, Ordering::Relaxed);
     Ok(())
 }
@@ -164,7 +163,7 @@ impl Library {
             let list = LocalPlaylist {
                 favorite: false,
                 pinned: false,
-                id: netease::random_hex::<12>(),
+                id: storage::random_hex::<12>(),
                 name: name(title)?,
                 revision: 1,
                 tracks: Vec::new(),
@@ -229,7 +228,7 @@ pub fn lists() -> Result<Vec<LocalPlaylistSummary>> {
             cover_url: p
                 .tracks
                 .iter()
-                .find_map(|t| t.cover_url.as_deref().and_then(netease::artwork_url)),
+                .find_map(|t| t.cover_url.as_deref().and_then(metadata::artwork_url)),
             favorite: p.favorite,
             pinned: p.pinned,
             id: p.id,
@@ -244,31 +243,26 @@ pub fn playlist(id: &str) -> Result<LocalPlaylist> {
     Ok(read()?.get(id)?.clone())
 }
 
-pub fn change(action: LocalLibraryAction) -> Result<Value> {
-    // Network preparation happens outside the writer lock. Imports are independent copies.
-    let imported = match &action {
-        LocalLibraryAction::ImportNetease { id } => Some(crate::music_sources::playlist_snapshot(
-            "netease",
-            &id.to_string(),
-        )?),
-        LocalLibraryAction::ImportSource {
-            source,
-            playlist_id,
-        } => Some(crate::music_sources::playlist_snapshot(
-            source,
-            playlist_id,
-        )?),
-        _ => None,
-    };
+fn update(edit: impl FnOnce(&mut Library) -> Result<Value>) -> Result<Value> {
     let _guard = WRITER
         .lock()
         .map_err(|_| anyhow::anyhow!("本地歌单暂时不可用"))?;
     let mut library = read()?;
-    let result = if let Some((origin, tracks)) = imported {
+    let result = edit(&mut library)?;
+    save(&library)?;
+    Ok(result)
+}
+
+pub fn change(action: LocalLibraryAction) -> Result<Value> {
+    update(|library| library.edit(action))
+}
+
+pub fn import(origin: PlaylistOrigin, tracks: Vec<Track>) -> Result<Value> {
+    update(|library| {
         let mut list = LocalPlaylist {
             favorite: false,
             pinned: false,
-            id: netease::random_hex::<12>(),
+            id: storage::random_hex::<12>(),
             name: name(origin.name.clone())?,
             revision: 1,
             tracks: Vec::new(),
@@ -277,69 +271,13 @@ pub fn change(action: LocalLibraryAction) -> Result<Value> {
         append(&mut list, tracks)?;
         let result = serde_json::to_value(&list)?;
         library.playlists.push(list);
-        result
-    } else {
-        library.edit(action)?
-    };
-    save(&library)?;
-    Ok(result)
+        Ok(result)
+    })
 }
 
-#[derive(Deserialize)]
-struct Selection {
-    id: Option<String>,
-}
-type Failure = (StatusCode, Json<Value>);
-fn failure(e: impl std::fmt::Display) -> Failure {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(json!({"error":e.to_string()})),
-    )
-}
-#[derive(Deserialize)]
-struct FavoriteSelection {
-    key: String,
-}
-async fn get_favorite(
-    Query(input): Query<FavoriteSelection>,
-) -> Result<Json<FavoriteState>, Failure> {
-    if input.key.is_empty() || input.key.len() > 2048 {
-        return Err(failure("无效的歌曲标识"));
-    }
-    tokio::task::spawn_blocking(move || Ok::<_, anyhow::Error>(read()?.favorite_state(&input.key)))
-        .await
-        .map_err(failure)?
-        .map(Json)
-        .map_err(failure)
-}
-pub fn routes() -> Router {
-    Router::new()
-        .route("/ui/local-playlists", get(get_library).post(edit_library))
-        .route("/ui/sources", get(sources))
-        .route("/ui/favorite", get(get_favorite))
-}
-async fn get_library(Query(input): Query<Selection>) -> Result<Json<Value>, Failure> {
-    tokio::task::spawn_blocking(move || match input.id {
-        Some(id) => playlist(&id).and_then(|p| Ok(serde_json::to_value(p)?)),
-        None => lists().and_then(|p| Ok(serde_json::to_value(p)?)),
-    })
-    .await
-    .map_err(failure)?
-    .map(Json)
-    .map_err(failure)
-}
-async fn edit_library(Json(input): Json<LocalLibraryAction>) -> Result<Json<Value>, Failure> {
-    tokio::task::spawn_blocking(move || change(input))
-        .await
-        .map_err(failure)?
-        .map(Json)
-        .map_err(failure)
-}
-async fn sources() -> Result<Json<Value>, Failure> {
-    tokio::task::spawn_blocking(|| -> Result<Value> {
-        let connected = crate::music_sources::account("mygo:netease")?.connected;
-        Ok(json!({"netease":{"connected":connected,"name":"网易云音乐"},"plugins":crate::mygo::list()?}))
-    }).await.map_err(failure)?.map(Json).map_err(failure)
+pub fn favorite(key: &str) -> Result<FavoriteState> {
+    ensure!(!key.is_empty() && key.len() <= 2048, "无效的歌曲标识");
+    Ok(read()?.favorite_state(key))
 }
 
 #[cfg(test)]

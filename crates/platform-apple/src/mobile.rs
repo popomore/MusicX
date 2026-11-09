@@ -40,7 +40,6 @@ define_class!(
 pub fn start() -> Result<()> {
     static STARTED: OnceLock<std::result::Result<(), String>> = OnceLock::new();
     let result = STARTED.get_or_init(|| {
-        crate::mcp::start().map_err(|e| e.to_string())?;
         dispatch2::DispatchQueue::main().exec_async(|| {
             let mtm = MainThreadMarker::new().expect("UIKit main thread");
             let target: Retained<MobileTick> = unsafe { msg_send![MobileTick::alloc(mtm), init] };

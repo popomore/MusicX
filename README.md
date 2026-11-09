@@ -22,8 +22,13 @@ MusicX 是用 Rust 编写的 macOS 菜单栏音乐播放器。AVPlayer 负责音
 
 | 目录 | 职责 |
 | --- | --- |
-| `crates/core` | 播放核心、MCP、MyGo 插件宿主、本地歌单和历史 |
-| `crates/protocol` | 共享的数据类型、会话和本机接口协议 |
+| `crates/core` | 播放状态、队列、音质偏好、本地歌单、历史和文件存储 |
+| `crates/protocol` | 核心、界面和服务共享的数据类型与会话协议 |
+| `crates/platform-apple` | AVPlayer、系统正在播放、macOS 菜单栏及面板进程 |
+| `crates/plugin-api` | Rust 数据源契约，定义搜索、取流、曲目信息和专辑 |
+| `crates/plugins` | MyGo 适配、插件目录、账号及旧网易云接口 |
+| `crates/mcp` | Streamable HTTP、MCP 工具与本机面板路由 |
+| `apps/macos/helper` | 装配播放核心、Apple 适配、插件和 MCP 的启动程序 |
 | `apps/macos/panel` | macOS 的 NSH 播放器、侧栏和音乐来源管理 |
 | `apps/macos/webauth` | 临时网页登录组件 |
 | `apps/ios` | 独立的 iPhone NSH 工程，复用播放核心和界面模块 |
@@ -31,6 +36,8 @@ MusicX 是用 Rust 编写的 macOS 菜单栏音乐播放器。AVPlayer 负责音
 | `vendor` | 带本地补丁的 NSH 平台源码 |
 
 macOS 组件和共享 crate 使用根 Cargo workspace 与锁文件。iPhone 使用独立 workspace 和锁文件。界面约定和产品范围见 [DESIGN.md](docs/DESIGN.md) 与 [PRODUCT.md](docs/PRODUCT.md)。[iPhone 构建说明](apps/ios/README.md)
+
+播放状态机通过 `AudioOutput` 使用原生音频，通过 `DataSource` 获取媒体。Apple 层把播放请求调度到主线程。MCP 使用启动程序传入的播放与退出接口，数据源兼容工具调用插件适配层。本地歌单存储接收已读取的曲目快照。
 
 ## 连接 Agent
 

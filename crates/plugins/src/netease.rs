@@ -1,85 +1,10 @@
 //! Legacy numeric-ID entry points backed entirely by the MyGo NetEase plugin.
 pub use crate::protocol::Track;
 use anyhow::{Context, Result, bail, ensure};
-use rand::{RngCore, rngs::OsRng};
-use reqwest::Url;
 use serde_json::{Value, json};
-use std::{
-    fs::{self, OpenOptions},
-    io::Write,
-    os::unix::fs::{DirBuilderExt, OpenOptionsExt},
-    path::PathBuf,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
-#[derive(Clone)]
-pub struct Media {
-    pub track: Track,
-    pub url: Url,
-    pub user_agent: Option<String>,
-    pub quality: crate::protocol::AudioQuality,
-}
-pub fn state_dir() -> Result<PathBuf> {
-    let path = crate::protocol::data_dir().context("找不到用户目录")?;
-    fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&path)?;
-    Ok(path)
-}
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-pub fn random_hex<const N: usize>() -> String {
-    let mut bytes = [0; N];
-    OsRng.fill_bytes(&mut bytes);
-    hex::encode(bytes)
-}
-
-pub fn save_private(name: &str, value: &str) -> Result<()> {
-    let dir = state_dir()?;
-    let temporary = dir.join(format!(".{name}.{}", random_hex::<12>()));
-    let result = (|| -> Result<()> {
-        let mut file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .mode(0o600)
-            .open(&temporary)?;
-        file.write_all(value.as_bytes())?;
-        fs::rename(&temporary, dir.join(name))?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(temporary);
-    }
-    result
-}
-
-pub fn public_url(value: &str) -> Option<String> {
-    if value.len() > 2048 {
-        return None;
-    }
-    let mut url = Url::parse(value).ok()?;
-    if url.scheme() == "http" {
-        url.set_scheme("https").ok()?;
-    }
-    if url.scheme() != "https"
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.port_or_known_default() != Some(443)
-        || !url.domain().is_some_and(|host| {
-            host.contains('.') && !host.ends_with(".local") && !host.ends_with(".localhost")
-        })
-    {
-        return None;
-    }
-    Some(url.to_string())
-}
-
-pub fn artwork_url(value: &str) -> Option<String> {
-    let mut url = Url::parse(&public_url(value)?).ok()?;
-    if url.domain().is_some_and(|host| host.ends_with(".126.net")) {
-        url.query_pairs_mut().append_pair("param", "512y512");
-    }
-    Some(url.to_string())
-}
+pub use musicx_plugin_api::Media;
 
 pub fn with_plugin_source(mut track: Track) -> Track {
     if track.source.is_none() {

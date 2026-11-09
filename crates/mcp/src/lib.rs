@@ -1,3 +1,8 @@
+//! Streamable HTTP MCP and authenticated panel routes.
+mod account_ui;
+mod local_library_ui;
+mod source_ui;
+
 use anyhow::{Context, Result};
 use axum::{
     Json, Router,
@@ -20,15 +25,24 @@ use serde::{Deserialize, Serialize};
 use std::{fs, net::TcpListener, sync::Arc, time::Duration};
 use tokio::sync::oneshot;
 
-use crate::{
-    netease,
-    player::{Action, Status, submit},
+use musicx_core::{
+    audio_quality, history, local_library,
+    player::{Action, Reply, Status},
+    protocol::{self, address},
+    storage,
 };
+use musicx_plugin_api::DataSource;
+use musicx_plugins::{music_sources, mygo, netease};
 
-use crate::protocol::address;
+#[derive(Clone, Copy)]
+pub struct Services {
+    pub submit: fn(Action, Reply),
+    pub quit: fn(),
+    pub sources: &'static dyn DataSource,
+}
 
 pub fn read_token() -> Result<String> {
-    fs::read_to_string(netease::state_dir()?.join("mcp-token"))
+    fs::read_to_string(storage::state_dir()?.join("mcp-token"))
         .context("请先启动播放器，再运行 mini-cloudmusic mcp-token")
 }
 
@@ -51,17 +65,17 @@ async fn authorize(State(expected): State<Arc<String>>, request: Request, next: 
     next.run(request).await
 }
 
-pub fn start() -> Result<()> {
+pub fn start(services: Services) -> Result<()> {
     let address = address();
     let listener = TcpListener::bind(address).context("无法监听 MCP，本机可能已启动播放器")?;
-    crate::mygo::ensure_netease()?;
+    mygo::ensure_netease()?;
     listener.set_nonblocking(true)?;
-    let path = netease::state_dir()?.join("mcp-token");
+    let path = storage::state_dir()?.join("mcp-token");
     let token = match fs::read_to_string(&path) {
         Ok(token) => token,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let token = netease::random_hex::<32>();
-            netease::save_private("mcp-token", &token)?;
+            let token = storage::random_hex::<32>();
+            storage::save_private("mcp-token", &token)?;
             token
         }
         Err(error) => return Err(error.into()),
@@ -79,6 +93,7 @@ pub fn start() -> Result<()> {
                 move || {
                     Ok(PlayerTools {
                         tool_router: PlayerTools::tool_router(),
+                        services,
                     })
                 },
                 Arc::new(NeverSessionManager::default()),
@@ -95,9 +110,10 @@ pub fn start() -> Result<()> {
                 .route("/ui/queue", get(ui_queue))
                 .route("/ui/action", post(ui_action))
                 .route("/ui/session/restore", post(ui_restore))
-                .merge(crate::account_ui::routes())
-                .merge(crate::local_library::routes())
-                .merge(crate::music_sources::routes())
+                .with_state(services)
+                .merge(account_ui::routes())
+                .merge(local_library_ui::routes())
+                .merge(source_ui::routes())
                 .layer(middleware::from_fn_with_state(auth, authorize));
             axum::serve(listener, app).await
         });
@@ -118,15 +134,15 @@ fn ui_error(error: impl std::fmt::Display) -> (StatusCode, Json<serde_json::Valu
         Json(serde_json::json!({"error": error.to_string()})),
     )
 }
-async fn ui_player(action: Action) -> UiResult {
-    ui_status(action, false).await
+async fn ui_player(services: Services, action: Action) -> UiResult {
+    ui_status(services, action, false).await
 }
-async fn ui_queue() -> UiResult {
-    ui_status(Action::Status, true).await
+async fn ui_queue(State(services): State<Services>) -> UiResult {
+    ui_status(services, Action::Status, true).await
 }
-async fn ui_status(action: Action, include_queue: bool) -> UiResult {
+async fn ui_status(services: Services, action: Action, include_queue: bool) -> UiResult {
     let (send, receive) = oneshot::channel();
-    submit(action, Some(send));
+    (services.submit)(action, Some(send));
     let status = tokio::time::timeout(Duration::from_secs(28), receive)
         .await
         .map_err(|_| ui_error("播放器响应超时"))?
@@ -138,23 +154,26 @@ async fn ui_status(action: Action, include_queue: bool) -> UiResult {
     }
     Ok(Json(status))
 }
-async fn ui_state() -> UiResult {
-    ui_player(Action::DisplayStatus).await
+async fn ui_state(State(services): State<Services>) -> UiResult {
+    ui_player(services, Action::DisplayStatus).await
 }
-async fn current_track() -> Result<netease::Track, (StatusCode, Json<serde_json::Value>)> {
-    ui_state()
+async fn current_track(
+    services: Services,
+) -> Result<netease::Track, (StatusCode, Json<serde_json::Value>)> {
+    ui_state(State(services))
         .await?
         .0
         .track
         .ok_or_else(|| ui_error("还没有播放歌曲"))
 }
-async fn ui_info() -> Result<Json<crate::protocol::TrackInfo>, (StatusCode, Json<serde_json::Value>)>
-{
-    let track = current_track().await?;
+async fn ui_info(
+    State(services): State<Services>,
+) -> Result<Json<protocol::TrackInfo>, (StatusCode, Json<serde_json::Value>)> {
+    let track = current_track(services).await?;
     let info = tokio::task::spawn_blocking(move || {
-        let info = crate::catalog::info(track.clone());
+        let info = services.sources.info(track.clone());
         if info.track != track {
-            submit(Action::MergeTrackMetadata(info.track.clone()), None);
+            (services.submit)(Action::MergeTrackMetadata(info.track.clone()), None);
         }
         info
     })
@@ -162,27 +181,31 @@ async fn ui_info() -> Result<Json<crate::protocol::TrackInfo>, (StatusCode, Json
     .map_err(ui_error)?;
     Ok(Json(info))
 }
-async fn ui_album()
--> Result<Json<crate::protocol::AlbumPage>, (StatusCode, Json<serde_json::Value>)> {
-    let track = current_track().await?;
+async fn ui_album(
+    State(services): State<Services>,
+) -> Result<Json<protocol::AlbumPage>, (StatusCode, Json<serde_json::Value>)> {
+    let track = current_track(services).await?;
     Ok(Json(
-        tokio::task::spawn_blocking(move || crate::catalog::album(track))
+        tokio::task::spawn_blocking(move || services.sources.album(track))
             .await
             .map_err(ui_error)?
             .map_err(|_| ui_error("当前来源暂时无法提供这张专辑的曲目，可稍后重试"))?,
     ))
 }
 async fn ui_history()
--> Result<Json<Vec<crate::protocol::HistoryEntry>>, (StatusCode, Json<serde_json::Value>)> {
+-> Result<Json<Vec<protocol::HistoryEntry>>, (StatusCode, Json<serde_json::Value>)> {
     Ok(Json(
-        tokio::task::spawn_blocking(|| crate::history::recent(50))
+        tokio::task::spawn_blocking(|| history::recent(50))
             .await
             .map_err(ui_error)?
             .map_err(ui_error)?,
     ))
 }
-async fn ui_action(Json(action): Json<crate::protocol::UiAction>) -> UiResult {
-    use crate::protocol::UiAction;
+async fn ui_action(
+    State(services): State<Services>,
+    Json(action): Json<protocol::UiAction>,
+) -> UiResult {
+    use protocol::UiAction;
     let action = match action {
         UiAction::Play { id } => Action::Play(
             tokio::task::spawn_blocking(move || netease::resolve(id))
@@ -191,10 +214,12 @@ async fn ui_action(Json(action): Json<crate::protocol::UiAction>) -> UiResult {
                 .map_err(ui_error)?,
         ),
         UiAction::PlayTrack { track } => Action::Play(
-            tokio::task::spawn_blocking(move || crate::catalog::resolve(track))
-                .await
-                .map_err(ui_error)?
-                .map_err(ui_error)?,
+            tokio::task::spawn_blocking(move || {
+                services.sources.resolve(track, audio_quality::preferred())
+            })
+            .await
+            .map_err(ui_error)?
+            .map_err(ui_error)?,
         ),
         UiAction::PlayList {
             tracks,
@@ -203,10 +228,12 @@ async fn ui_action(Json(action): Json<crate::protocol::UiAction>) -> UiResult {
         } => {
             validate_list(&tracks, index).map_err(ui_error)?;
             let track = tracks[index].clone();
-            let media = tokio::task::spawn_blocking(move || crate::catalog::resolve(track))
-                .await
-                .map_err(ui_error)?
-                .map_err(ui_error)?;
+            let media = tokio::task::spawn_blocking(move || {
+                services.sources.resolve(track, audio_quality::preferred())
+            })
+            .await
+            .map_err(ui_error)?
+            .map_err(ui_error)?;
             Action::ReplaceQueue {
                 tracks,
                 index,
@@ -222,12 +249,14 @@ async fn ui_action(Json(action): Json<crate::protocol::UiAction>) -> UiResult {
                 .position(|t| t.id == track_id)
                 .ok_or_else(|| anyhow::anyhow!("所选歌曲已不在歌单中，请刷新歌单"))?;
             validate_list(&page.tracks, index)?;
-            let media = crate::catalog::resolve(page.tracks[index].clone())?;
+            let media = services
+                .sources
+                .resolve(page.tracks[index].clone(), audio_quality::preferred())?;
             Ok::<_, anyhow::Error>(Action::ReplaceQueue {
                 tracks: page.tracks,
                 index,
                 media,
-                context: crate::protocol::QueueContext::Playlist {
+                context: protocol::QueueContext::Playlist {
                     id,
                     name: page.name,
                 },
@@ -237,7 +266,7 @@ async fn ui_action(Json(action): Json<crate::protocol::UiAction>) -> UiResult {
         .map_err(ui_error)?
         .map_err(ui_error)?,
         UiAction::PlayLocalPlaylist { id, index } => {
-            tokio::task::spawn_blocking(move || local_queue(id, index))
+            tokio::task::spawn_blocking(move || local_queue(services, id, index))
                 .await
                 .map_err(ui_error)?
                 .map_err(ui_error)?
@@ -252,30 +281,32 @@ async fn ui_action(Json(action): Json<crate::protocol::UiAction>) -> UiResult {
         UiAction::Seek { seconds, track_key } => Action::Seek { seconds, track_key },
         UiAction::Volume { value } => Action::Volume(value),
         UiAction::Quit => {
-            let result = ui_state().await;
-            crate::quit();
+            let result = ui_state(State(services)).await;
+            (services.quit)();
             return result;
         }
     };
-    ui_player(action).await
+    ui_player(services, action).await
 }
 
-fn local_queue(id: String, index: usize) -> Result<Action> {
-    let list = crate::local_library::playlist(&id)?;
+fn local_queue(services: Services, id: String, index: usize) -> Result<Action> {
+    let list = local_library::playlist(&id)?;
     validate_list(&list.tracks, index)?;
-    let media = crate::catalog::resolve(list.tracks[index].clone())?;
+    let media = services
+        .sources
+        .resolve(list.tracks[index].clone(), audio_quality::preferred())?;
     Ok(Action::ReplaceQueue {
         tracks: list.tracks,
         index,
         media,
-        context: crate::protocol::QueueContext::LocalPlaylist {
+        context: protocol::QueueContext::LocalPlaylist {
             id,
             name: list.name,
         },
     })
 }
 
-fn validate_list(tracks: &[crate::protocol::Track], index: usize) -> Result<()> {
+fn validate_list(tracks: &[protocol::Track], index: usize) -> Result<()> {
     anyhow::ensure!(
         !tracks.is_empty() && tracks.len() <= 10000,
         "播放列表应包含1至10000首歌"
@@ -294,26 +325,29 @@ fn validate_list(tracks: &[crate::protocol::Track], index: usize) -> Result<()> 
 
 // Local upgrade handoff: authenticated like all UI routes, and only accepted by
 // an empty player. It carries metadata, never expiring audio URLs or credentials.
-async fn ui_restore(Json(snapshot): Json<Status>) -> UiResult {
+async fn ui_restore(State(services): State<Services>, Json(snapshot): Json<Status>) -> UiResult {
     validate_snapshot(&snapshot).map_err(ui_error)?;
     let track = snapshot.index.map(|index| snapshot.queue[index].clone());
     let quality = snapshot.preferred_quality;
     // A paused upgrade must survive offline/expired plugin authentication.
     // Resolve on explicit resume, retaining queue, seek and volume on failure.
-    let deferred = snapshot.state == crate::protocol::State::Paused;
+    let deferred = snapshot.state == protocol::State::Paused;
     let media = tokio::task::spawn_blocking(move || {
         track
             .filter(|_| !deferred)
-            .map(|t| crate::catalog::resolve_with_quality(t, quality))
+            .map(|t| services.sources.resolve(t, quality))
             .transpose()
     })
     .await
     .map_err(ui_error)?
     .map_err(ui_error)?;
-    ui_player(Action::Restore {
-        snapshot: Box::new(snapshot),
-        media,
-    })
+    ui_player(
+        services,
+        Action::Restore {
+            snapshot: Box::new(snapshot),
+            media,
+        },
+    )
     .await
 }
 
@@ -348,6 +382,7 @@ fn validate_snapshot(snapshot: &Status) -> Result<()> {
 
 #[derive(Clone)]
 struct PlayerTools {
+    services: Services,
     tool_router: ToolRouter<Self>,
 }
 
@@ -486,7 +521,7 @@ async fn blocking<T: Send + 'static>(
 impl PlayerTools {
     async fn player(&self, action: Action) -> Result<CallToolResult, ErrorData> {
         let (send, receive) = oneshot::channel();
-        submit(action, Some(send));
+        (self.services.submit)(action, Some(send));
         let status: Status = tokio::time::timeout(Duration::from_secs(28), receive)
             .await
             .map_err(|_| tool_error("播放器响应超时"))?
@@ -505,10 +540,10 @@ impl PlayerTools {
         &self,
         Parameters(input): Parameters<SourceInput>,
     ) -> Result<CallToolResult, ErrorData> {
-        let action: crate::protocol::MusicSourceAction =
+        let action: protocol::MusicSourceAction =
             serde_json::from_value(serde_json::to_value(input).map_err(tool_error)?)
                 .map_err(|_| tool_error("无效的数据源操作参数"))?;
-        blocking(move || crate::music_sources::execute(action))
+        blocking(move || music_sources::execute(action))
             .await
             .and_then(output)
     }
@@ -520,7 +555,7 @@ impl PlayerTools {
         &self,
         Parameters(input): Parameters<LibraryInput>,
     ) -> Result<CallToolResult, ErrorData> {
-        use crate::protocol::LocalLibraryAction as Edit;
+        use protocol::LocalLibraryAction as Edit;
         let id = || {
             input
                 .playlist_id
@@ -530,19 +565,20 @@ impl PlayerTools {
         };
         let title = || input.name.clone().context("需要name").map_err(tool_error);
         if matches!(input.action, LibraryOperation::List) {
-            return blocking(crate::local_library::lists).await.and_then(output);
+            return blocking(local_library::lists).await.and_then(output);
         }
         if matches!(input.action, LibraryOperation::Get) {
             let id = id()?;
-            return blocking(move || crate::local_library::playlist(&id))
+            return blocking(move || local_library::playlist(&id))
                 .await
                 .and_then(output);
         }
         if matches!(input.action, LibraryOperation::Play) {
             let id = id()?;
             let index = input.index.unwrap_or(0);
+            let services = self.services;
             return self
-                .player(blocking(move || local_queue(id, index)).await?)
+                .player(blocking(move || local_queue(services, id, index)).await?)
                 .await;
         }
         let edit = match input.action {
@@ -568,7 +604,9 @@ impl PlayerTools {
                     .map_err(tool_error)?,
             },
             LibraryOperation::AddCurrent | LibraryOperation::AddQueue => {
-                let Json(snapshot) = ui_queue().await.map_err(|(_, v)| tool_error(v.0))?;
+                let Json(snapshot) = ui_queue(State(self.services))
+                    .await
+                    .map_err(|(_, v)| tool_error(v.0))?;
                 let tracks = if matches!(input.action, LibraryOperation::AddCurrent) {
                     vec![snapshot.track.context("当前没有歌曲").map_err(tool_error)?]
                 } else {
@@ -578,14 +616,14 @@ impl PlayerTools {
             }
             _ => unreachable!(),
         };
-        blocking(move || crate::local_library::change(edit))
+        blocking(move || musicx_plugins::change_library(edit))
             .await
             .and_then(output)
     }
 
     #[tool(description = "列出本机安装的 MyGo Music 插件和目录兼容状态。")]
     async fn list_music_plugins(&self) -> Result<CallToolResult, ErrorData> {
-        blocking(crate::mygo::list).await.and_then(output)
+        blocking(mygo::list).await.and_then(output)
     }
 
     #[tool(description = "用 MyGo Music 插件搜索歌曲。返回插件曲目 ID 和毫秒时长。")]
@@ -600,8 +638,8 @@ impl PlayerTools {
         let args =
             serde_json::json!({"query":query,"kind":"tracks","offset":input.offset.unwrap_or(0)});
         blocking(move || {
-            let result = crate::mygo::invoke(&input.plugin, "search", args)?;
-            crate::mygo::remember_artwork(&input.plugin, &result);
+            let result = mygo::invoke(&input.plugin, "search", args)?;
+            mygo::remember_artwork(&input.plugin, &result);
             Ok(result)
         })
         .await
@@ -634,12 +672,12 @@ impl PlayerTools {
             cover_url: None,
             album: None,
             source_url: None,
-            source: Some(crate::mygo::Source {
+            source: Some(mygo::Source {
                 plugin: input.plugin,
                 id: input.id,
             }),
         };
-        let media = blocking(move || crate::mygo::resolve(track)).await?;
+        let media = blocking(move || mygo::resolve(track)).await?;
         self.player(if input.enqueue.unwrap_or(false) {
             Action::Enqueue(media)
         } else {
@@ -653,8 +691,9 @@ impl PlayerTools {
         &self,
         Parameters(input): Parameters<Search>,
     ) -> Result<CallToolResult, ErrorData> {
+        let sources = self.services.sources;
         let tracks =
-            blocking(move || netease::search(input.query, input.limit.unwrap_or(8))).await?;
+            blocking(move || sources.search(input.query, input.limit.unwrap_or(8))).await?;
         output(tracks)
     }
 
@@ -709,7 +748,7 @@ impl PlayerTools {
         &self,
         Parameters(input): Parameters<HistoryPage>,
     ) -> Result<CallToolResult, ErrorData> {
-        blocking(move || crate::history::recent(input.limit.unwrap_or(20)))
+        blocking(move || history::recent(input.limit.unwrap_or(20)))
             .await
             .and_then(output)
     }

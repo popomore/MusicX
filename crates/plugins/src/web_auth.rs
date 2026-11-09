@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(crate) const APP_NAME: &str = "MusicX 网页登录";
+pub const APP_NAME: &str = "MusicX 网页登录";
 
 pub fn sign_in(
     mut request: Value,

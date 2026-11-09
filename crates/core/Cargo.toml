@@ -1,5 +1,5 @@
 [package]
-name = "mini-cloudmusic"
+name = "musicx-core"
 version = "0.2.0"
 edition = "2024"
 rust-version = "1.97"
@@ -7,39 +7,11 @@ publish = false
 
 [dependencies]
 musicx-protocol = { path = "../protocol" }
-objc2-av-foundation = { version = "0.3", default-features = false, features = ["std", "AVPlayer", "AVPlayerItem", "AVAsset", "objc2-core-media", "block2"] }
-block2 = "=0.6.2"
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSData", "NSDictionary", "NSError", "NSGeometry", "NSObject", "NSObjCRuntime", "NSRunLoop", "NSString", "NSTimer", "NSURL", "NSValue", "objc2-core-foundation"] }
-objc2-core-media = { version = "0.3", default-features = false, features = ["std", "CMTime"] }
-objc2-media-player = { version = "0.3", default-features = false, features = ["std", "MPMediaItem", "MPMediaEntity", "MPNowPlayingInfoCenter", "MPRemoteCommandCenter", "MPRemoteCommand", "MPRemoteCommandEvent"] }
+musicx-plugin-api = { path = "../plugin-api" }
 anyhow = "1"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
-reqwest = { version = "0.13", features = ["blocking", "form", "json", "query"] }
-aes = "0.8"
-cbc = { version = "0.1", features = ["alloc"] }
-base64 = "0.22"
 hex = "0.4"
-rsa = "0.9"
 rand = "0.8"
-md-5 = "0.10"
-sha2 = "0.10"
-qrcode = { version = "0.14", default-features = false, features = ["svg"] }
-rmcp = { version = "1.8", features = ["server", "transport-streamable-http-server"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std"] }
-axum = "0.8"
-objc2 = "0.6"
-dispatch2 = "0.3"
-rquickjs = "=0.14.0"
 url = "2"
-
-[target.'cfg(target_os = "macos")'.dependencies]
-objc2-media-player = { version = "0.3", default-features = false, features = ["block2", "objc2-app-kit", "objc2-core-foundation"] }
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSRunningApplication", "NSStatusBar", "NSStatusItem", "NSStatusBarButton", "NSButton", "NSCell", "NSControl", "NSImage", "NSMenu", "NSMenuItem", "NSView", "NSResponder", "NSEvent", "NSWorkspace", "NSAccessibility", "NSAccessibilityProtocols", "NSGraphicsContext", "objc2-core-foundation", "objc2-core-graphics"] }
-objc2-core-foundation = { version = "0.3", default-features = false, features = ["CFData", "CFDictionary", "CFNumber", "CFString"] }
-objc2-core-graphics = { version = "0.3", default-features = false, features = ["CGImage"] }
-objc2-image-io = { version = "0.3", default-features = false, features = ["CGImageSource", "objc2-core-graphics"] }
-
-[target.'cfg(target_os = "ios")'.dependencies]
-objc2-avf-audio = { version = "0.3", default-features = false, features = ["std", "AVAudioSession", "AVAudioSessionTypes"] }
-rquickjs = { version = "=0.14.0", features = ["bindgen"] }
+tokio = { version = "1", features = ["sync"] }

@@ -1,6 +1,6 @@
 //! Native iPhone player: its own audio engine, queue, history and loopback MCP.
+use musicx_core::protocol;
 use nsh_core::prelude::*;
-use mini_cloudmusic::protocol;
 pub use ui::App;
 
 #[cfg(target_os = "ios")]
@@ -20,7 +20,24 @@ fn native(registry: &mut Registry) {
 #[cfg(target_os = "ios")]
 fn initialize() -> anyhow::Result<()> {
     nsh_core::image::budget().set_limit(4 * 1024 * 1024);
-    mini_cloudmusic::mobile::start().and_then(|_| remote::start())
+    use musicx_platform_apple::{mobile, player};
+    static STARTED: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
+    STARTED
+        .get_or_init(|| {
+            let start = || -> anyhow::Result<()> {
+                player::configure(&musicx_plugins::MYGO)?;
+                musicx_mcp::start(musicx_mcp::Services {
+                    submit: player::submit,
+                    quit: || player::submit(player::Action::Pause, None),
+                    sources: &musicx_plugins::MYGO,
+                })?;
+                mobile::start()
+            };
+            start().map_err(|error| error.to_string())
+        })
+        .as_ref()
+        .map_err(|error| anyhow::anyhow!(error.clone()))?;
+    remote::start()
 }
 
 #[cfg(target_os = "macos")]

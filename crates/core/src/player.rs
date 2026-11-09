@@ -1,16 +1,6 @@
 use anyhow::{Result, anyhow, ensure};
-use objc2::{
-    MainThreadMarker,
-    rc::{Retained, autoreleasepool},
-    runtime::AnyObject,
-};
-use objc2_av_foundation::{
-    AVPlayer, AVPlayerItem, AVPlayerTimeControlStatus, AVURLAsset, AVURLAssetHTTPUserAgentKey,
-};
-use objc2_core_media::CMTime;
-use objc2_foundation::{NSDictionary, NSString, NSURL};
+use musicx_plugin_api::{DataSource, Media};
 use std::{
-    cell::RefCell,
     sync::Arc,
     thread,
     time::{Duration, Instant},
@@ -18,9 +8,9 @@ use std::{
 use tokio::sync::oneshot;
 
 use crate::{
+    audio::{AudioOutput, AudioSnapshot, AudioState},
     history,
-    netease::{self, Media, Track},
-    protocol::HistoryProgress,
+    protocol::{HistoryProgress, Track},
 };
 
 pub use crate::protocol::{State, Status};
@@ -63,14 +53,14 @@ pub type Reply = Option<oneshot::Sender<Result<Status>>>;
 const AUTO_ADVANCE_MAX_ATTEMPTS: usize = 8;
 const AUTO_ADVANCE_RETRY_WINDOW: Duration = Duration::from_secs(20);
 
-struct AutoAdvance {
+pub struct AutoAdvance {
     index: usize,
     attempt: usize,
     seek_serial: u64,
     retry_until: Instant,
 }
 
-enum Message {
+pub enum Message {
     Action(Action, Reply),
     Switched {
         index: usize,
@@ -96,40 +86,11 @@ enum Message {
     },
 }
 
-thread_local! { static PLAYER: RefCell<Player> = RefCell::new(Player::new()); }
-
-pub fn submit(action: Action, reply: Reply) {
-    dispatch(Message::Action(action, reply));
-}
-
-fn dispatch(message: Message) {
-    dispatch2::DispatchQueue::main().exec_async(move || {
-        autoreleasepool(|_| PLAYER.with_borrow_mut(|player| player.handle(message)));
-    });
-}
-
-/// Maintains history and queue progression even when no UI exists.
-pub fn tick() -> Status {
-    PLAYER.with_borrow_mut(|player| {
-        player.handle(Message::Action(Action::Status, None));
-        let mut status = player.status();
-        player.capture_history(&status, false);
-        status.queue = Arc::default();
-        status
-    })
-}
-
-pub fn shutdown() {
-    PLAYER.with_borrow_mut(|player| {
-        player.flush_history();
-        player.audio.take();
-    });
-}
-
-struct Player {
-    audio: Option<Retained<AVPlayer>>,
+pub struct Player<A: AudioOutput> {
+    audio: Option<A>,
+    dispatch: fn(Message),
+    source: &'static dyn DataSource,
     volume: f32,
-    main_thread: MainThreadMarker,
     queue: Arc<Vec<Track>>,
     queue_revision: u64,
     queue_context: Option<crate::protocol::QueueContext>,
@@ -145,13 +106,13 @@ struct Player {
     history_recorded: bool,
 }
 
-impl Player {
-    pub fn new() -> Self {
-        let main_thread = MainThreadMarker::new().expect("AppKit main thread");
+impl<A: AudioOutput> Player<A> {
+    pub fn new(dispatch: fn(Message), source: &'static dyn DataSource) -> Self {
         Self {
             audio: None,
             volume: 1.0,
-            main_thread,
+            dispatch,
+            source,
             queue: Arc::default(),
             queue_revision: 0,
             queue_context: None,
@@ -168,10 +129,24 @@ impl Player {
         }
     }
 
-    fn audio(&self) -> &AVPlayer {
+    fn audio(&self) -> &A {
         self.audio
-            .as_deref()
-            .expect("a loaded track owns its AVPlayer")
+            .as_ref()
+            .expect("a loaded track owns its audio output")
+    }
+
+    /// Maintains history and queue progression even when no UI exists.
+    pub fn tick(&mut self) -> Status {
+        self.handle(Message::Action(Action::Status, None));
+        let mut status = self.status();
+        self.capture_history(&status, false);
+        status.queue = Arc::default();
+        status
+    }
+
+    pub fn shutdown(&mut self) {
+        self.flush_history();
+        self.audio.take();
     }
 
     pub fn status(&self) -> Status {
@@ -202,21 +177,13 @@ impl Player {
             };
         }
         let track = self.index.map(|index| self.queue[index].clone());
-        // All AVFoundation access stays on the application main thread.
-        let (position, duration, control, volume, error) = unsafe {
-            let item = self.audio().currentItem();
-            let duration = item.as_ref().map(|item| item.duration().seconds());
-            let error = item
-                .and_then(|item| item.error())
-                .map(|err| err.localizedDescription().to_string());
-            (
-                self.audio().currentTime().seconds(),
-                duration,
-                self.audio().timeControlStatus(),
-                self.audio().volume(),
-                error,
-            )
-        };
+        let AudioSnapshot {
+            position,
+            duration,
+            state: control,
+            volume,
+            error,
+        } = self.audio().snapshot();
         let duration = duration
             .filter(|n| n.is_finite() && *n > 0.0)
             .or_else(|| track.as_ref().map(|track| track.duration))
@@ -232,7 +199,7 @@ impl Player {
             State::Error
         } else if track.is_none() {
             State::Idle
-        } else if control == AVPlayerTimeControlStatus::Playing {
+        } else if control == AudioState::Playing {
             State::Playing
         } else if self.pending_seek.is_none()
             && self.requested_play
@@ -240,7 +207,7 @@ impl Player {
             && position >= duration - 0.12
         {
             State::Ended
-        } else if control == AVPlayerTimeControlStatus::WaitingToPlayAtSpecifiedRate {
+        } else if control == AudioState::Waiting {
             State::Loading
         } else {
             State::Paused
@@ -268,38 +235,10 @@ impl Player {
         self.load_with_play(media, true)
     }
     fn load_with_play(&mut self, media: &Media, play: bool) -> Result<()> {
-        #[cfg(target_os = "ios")]
-        crate::mobile::activate_audio_session()?;
-        let url = NSURL::URLWithString(&NSString::from_str(media.url.as_str()))
-            .ok_or_else(|| anyhow!("无效的音频地址"))?;
         self.flush_history();
+        A::load(&mut self.audio, media, play, self.volume)?;
         self.seek_serial += 1;
         self.pending_seek = None;
-        if self.audio.is_none() {
-            // AVPlayer and all of its accesses stay on AppKit's main thread.
-            let audio = unsafe { AVPlayer::new(self.main_thread) };
-            unsafe {
-                audio.setVolume(self.volume);
-            }
-            self.audio = Some(audio);
-        }
-        unsafe {
-            let item = if let Some(agent) = &media.user_agent {
-                let value = NSString::from_str(agent);
-                let object: &AnyObject = &value;
-                let options = NSDictionary::from_slices(&[AVURLAssetHTTPUserAgentKey], &[object]);
-                let asset = AVURLAsset::URLAssetWithURL_options(&url, Some(&options));
-                AVPlayerItem::playerItemWithAsset(&asset, self.main_thread)
-            } else {
-                AVPlayerItem::playerItemWithURL(&url, self.main_thread)
-            };
-            self.audio().replaceCurrentItemWithPlayerItem(Some(&item));
-            if play {
-                self.audio().play();
-            } else {
-                self.audio().pause();
-            }
-        }
         self.audio_quality = Some(media.quality.clone());
         self.deferred_position = None;
         self.end_handled = false;
@@ -312,23 +251,11 @@ impl Player {
         self.seek_serial += 1;
         let serial = self.seek_serial;
         self.pending_seek = Some((serial, seconds));
-        // AVPlayer exposes 0 until an asynchronous seek completes. Publish the
-        // requested position until its actual completion, never a guessed delay.
-        let completion = block2::RcBlock::new(move |finished: objc2::runtime::Bool| {
-            dispatch(Message::Seeked {
-                serial,
-                finished: finished.as_bool(),
-            })
+        // Publish the requested position until the native seek completes.
+        let dispatch = self.dispatch;
+        self.audio().seek(seconds, move |finished| {
+            dispatch(Message::Seeked { serial, finished });
         });
-        unsafe {
-            self.audio()
-                .seekToTime_toleranceBefore_toleranceAfter_completionHandler(
-                    CMTime::with_seconds(seconds, 1000),
-                    CMTime::with_seconds(0.0, 1000),
-                    CMTime::with_seconds(0.0, 1000),
-                    &completion,
-                );
-        }
     }
 
     fn apply(&mut self, action: Action) -> Result<()> {
@@ -340,7 +267,7 @@ impl Player {
             Action::MergeTrackMetadata(metadata) => {
                 if let Some(index) = self.index {
                     let mut track = self.queue[index].clone();
-                    if crate::mygo::merge_metadata(&mut track, &metadata) {
+                    if crate::metadata::merge_metadata(&mut track, &metadata) {
                         Arc::make_mut(&mut self.queue)[index] = track;
                         self.queue_revision += 1;
                     }
@@ -355,9 +282,7 @@ impl Player {
                 self.volume = 0.0;
                 if let Some(media) = media {
                     self.load(&media)?;
-                    unsafe {
-                        self.audio().pause();
-                    }
+                    self.audio().pause();
                 }
                 self.queue = snapshot.queue;
                 self.queue_revision = snapshot.queue_revision;
@@ -380,11 +305,9 @@ impl Player {
                 );
                 if self.audio.is_some() {
                     self.seek(snapshot.position);
-                    unsafe {
-                        self.audio().setVolume(self.volume);
-                        if matches!(snapshot.state, State::Playing | State::Loading) {
-                            self.audio().play();
-                        }
+                    self.audio().set_volume(self.volume);
+                    if matches!(snapshot.state, State::Playing | State::Loading) {
+                        self.audio().play();
                     }
                 }
             }
@@ -435,24 +358,19 @@ impl Player {
                 self.flush_history();
                 self.requested_play = false;
                 if let Some(audio) = &self.audio {
-                    unsafe {
-                        audio.pause();
-                    }
+                    audio.pause();
                 }
             }
             Action::Resume => {
                 ensure!(self.index.is_some(), "请先选一首歌");
-                #[cfg(target_os = "ios")]
-                crate::mobile::activate_audio_session()?;
+                self.audio().prepare_resume()?;
                 let status = self.status();
                 if status.duration > 0.0 && status.position >= status.duration - 0.12 {
                     self.seek(0.0);
                     self.end_handled = false;
                 }
                 self.requested_play = true;
-                unsafe {
-                    self.audio().play();
-                }
+                self.audio().play();
             }
             Action::Seek { seconds, track_key } => {
                 if let Some(expected) = track_key {
@@ -483,9 +401,7 @@ impl Player {
                 ensure!((0.0..=1.0).contains(&value), "音量必须在 0 到 1 之间");
                 self.volume = value;
                 if let Some(audio) = &self.audio {
-                    unsafe {
-                        audio.setVolume(value);
-                    }
+                    audio.set_volume(value);
                 }
             }
             Action::Previous | Action::Next | Action::Select { .. } | Action::Quality(_) => {
@@ -551,7 +467,9 @@ impl Player {
         }
     }
 
-    fn handle(&mut self, message: Message) {
+    pub fn handle(&mut self, message: Message) {
+        let dispatch = self.dispatch;
+        let source = self.source;
         match message {
             Message::Action(action @ (Action::Resume | Action::Toggle), reply)
                 if self.deferred_position.is_some() =>
@@ -567,7 +485,7 @@ impl Player {
                     self.error = None;
                     thread::spawn(move || {
                         dispatch(Message::ResumeReady {
-                            media: crate::catalog::resolve(track),
+                            media: source.resolve(track, crate::audio_quality::preferred()),
                             reply,
                         })
                     });
@@ -597,7 +515,7 @@ impl Player {
                     thread::spawn(move || {
                         dispatch(Message::QualityReady {
                             quality,
-                            media: crate::catalog::resolve_with_quality(track, quality),
+                            media: source.resolve(track, quality),
                             reply,
                         })
                     });
@@ -631,11 +549,8 @@ impl Player {
                     thread::spawn(move || {
                         dispatch(Message::Switched {
                             index,
-                            media: if track.source.is_some() {
-                                crate::mygo::resolve(track)
-                            } else {
-                                netease::resolve(track.id)
-                            },
+                            media: source
+                                .resolve_selection(track, crate::audio_quality::preferred()),
                             reply,
                         });
                     });
@@ -717,9 +632,7 @@ impl Player {
                         position
                     });
                     if play {
-                        unsafe {
-                            self.audio().play();
-                        }
+                        self.audio().play();
                     }
                     Ok(())
                 });
@@ -751,10 +664,8 @@ impl Player {
                     self.end_handled = end_handled;
                     self.requested_play = requested_play;
                     self.seek(status.position);
-                    unsafe {
-                        if requested_play && status.state != State::Ended {
-                            self.audio().play();
-                        }
+                    if requested_play && status.state != State::Ended {
+                        self.audio().play();
                     }
                     Ok(())
                 });
@@ -783,8 +694,10 @@ impl Player {
     fn resolve_automatic_next(&mut self, pending: AutoAdvance) {
         let track = self.queue[pending.index].clone();
         self.switching = true;
+        let dispatch = self.dispatch;
+        let source = self.source;
         thread::spawn(move || {
-            let media = crate::catalog::resolve(track);
+            let media = source.resolve(track, crate::audio_quality::preferred());
             dispatch(Message::AutoAdvanceReady { pending, media });
         });
     }

@@ -16,7 +16,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::netease::{Media, Track, state_dir};
+use crate::netease::{Media, Track};
+use musicx_core::{metadata::merge_metadata, storage::state_dir};
 
 pub const NETEASE_REPOSITORY: &str = "sogud/mygo-music-netease";
 const NETEASE_SCRIPT_SHA: &str = "e887ec38987cbbcc66735314019d54a5a0b8cda6544234d232df16f259d8f8b0";
@@ -107,7 +108,7 @@ pub(crate) fn catalog_track(plugin: &str, value: &Value) -> Option<Track> {
         cover_url: [&album["imageUrl"], &value["imageUrl"], &value["coverUrl"]]
             .into_iter()
             .filter_map(Value::as_str)
-            .find_map(crate::netease::artwork_url),
+            .find_map(musicx_core::metadata::artwork_url),
         album: album["id"]
             .as_str()
             .filter(|id| !id.is_empty())
@@ -120,7 +121,9 @@ pub(crate) fn catalog_track(plugin: &str, value: &Value) -> Option<Track> {
                     .take(512)
                     .collect(),
             }),
-        source_url: value["url"].as_str().and_then(crate::netease::public_url),
+        source_url: value["url"]
+            .as_str()
+            .and_then(musicx_core::metadata::public_url),
         source: Some(Source {
             plugin: plugin.to_owned(),
             id,
@@ -130,26 +133,6 @@ pub(crate) fn catalog_track(plugin: &str, value: &Value) -> Option<Track> {
 
 /// Only enrich the same source identity. Older queue and library entries may
 /// have title and artist but lack all three catalog fields.
-pub(crate) fn merge_metadata(track: &mut Track, metadata: &Track) -> bool {
-    if track.source != metadata.source || (track.source.is_none() && track.id != metadata.id) {
-        return false;
-    }
-    let mut changed = false;
-    if track.cover_url.is_none() && metadata.cover_url.is_some() {
-        track.cover_url.clone_from(&metadata.cover_url);
-        changed = true;
-    }
-    if track.album.is_none() && metadata.album.is_some() {
-        track.album.clone_from(&metadata.album);
-        changed = true;
-    }
-    if track.source_url.is_none() && metadata.source_url.is_some() {
-        track.source_url.clone_from(&metadata.source_url);
-        changed = true;
-    }
-    changed
-}
-
 pub(crate) fn fill_artwork(track: &mut Track) {
     let Some(source) = track.source.clone() else {
         return;
@@ -405,7 +388,10 @@ pub fn install(source: &Path) -> Result<String> {
     let root = plugin_root()?;
     let target = root.join(&manifest.id);
     ensure!(!target.exists(), "插件 {} 已存在", manifest.id);
-    let pending = root.join(format!(".install-{}", crate::netease::random_hex::<8>()));
+    let pending = root.join(format!(
+        ".install-{}",
+        musicx_core::storage::random_hex::<8>()
+    ));
     fs::create_dir(&pending)?;
     let result = (|| -> Result<()> {
         let mut installed = manifest;
@@ -697,7 +683,7 @@ export async function __mini_web_signin(){
             Function::new(ctx.clone(), move |text: String| {
                 !storage_job.as_ref().is_some_and(|job| job.cancelled())
                     && text.len() <= 64 * 1024
-                    && crate::netease::save_private(&storage_name, &text).is_ok()
+                    && musicx_core::storage::save_private(&storage_name, &text).is_ok()
             })?,
         )?;
         global.set(
@@ -831,6 +817,6 @@ pub fn resolve_with_quality(mut track: Track, quality: crate::protocol::Quality)
         track,
         url,
         user_agent,
-        quality: crate::audio_quality::metadata(quality.for_plugin(), &stream, true),
+        quality: crate::quality::metadata(quality.for_plugin(), &stream, true),
     })
 }

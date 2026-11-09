@@ -1,0 +1,11 @@
+[package]
+name = "musicx-plugin-api"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.97"
+publish = false
+
+[dependencies]
+musicx-protocol = { path = "../protocol" }
+anyhow = "1"
+url = "2"

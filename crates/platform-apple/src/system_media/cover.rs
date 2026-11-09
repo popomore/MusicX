@@ -68,14 +68,14 @@ impl Cover {
 }
 
 fn fetch(value: &str) -> Option<CFRetained<CGImage>> {
-    let url = crate::netease::public_url(value)?;
+    let url = musicx_core::metadata::public_url(value)?;
     let client = Client::builder()
         .timeout(Duration::from_secs(6))
         .redirect(Policy::custom(|attempt| {
             let next = attempt.url();
             if attempt.previous().len() < 4
                 && next.scheme() == "https"
-                && crate::netease::public_url(next.as_str()).is_some()
+                && musicx_core::metadata::public_url(next.as_str()).is_some()
                 && attempt.previous().first().and_then(Url::host_str) == next.host_str()
             {
                 attempt.follow()
