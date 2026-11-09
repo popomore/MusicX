@@ -154,6 +154,10 @@ define_class!(
         fn quit(&self, _sender: Option<&AnyObject>) { crate::remote::quit_background(); }
     }
     unsafe impl NSApplicationDelegate for PanelDelegate {
+        #[unsafe(method(applicationDidFinishLaunching:))]
+        fn launched(&self, _notification: &NSNotification) {
+            show_panel();
+        }
         #[unsafe(method(applicationShouldTerminateAfterLastWindowClosed:))]
         fn keep_loop(&self, _app: &NSApplication) -> bool { false }
         #[unsafe(method(applicationShouldTerminate:))]
@@ -162,12 +166,7 @@ define_class!(
         }
         #[unsafe(method(applicationShouldHandleReopen:hasVisibleWindows:))]
         fn reopen(&self, _app: &NSApplication, _visible: bool) -> bool {
-            PANEL.with_borrow(|panel| {
-                if let Some(panel) = panel {
-                    if panel.window.isMiniaturized() { panel.window.deminiaturize(None); }
-                    panel.window.makeKeyAndOrderFront(None);
-                }
-            });
+            show_panel();
             false
         }
     }
@@ -178,6 +177,19 @@ define_class!(
         }
     }
 );
+
+fn show_panel() {
+    let app = NSApplication::sharedApplication(MainThreadMarker::new().expect("main thread"));
+    app.activate();
+    PANEL.with_borrow(|panel| {
+        if let Some(panel) = panel {
+            if panel.window.isMiniaturized() {
+                panel.window.deminiaturize(None);
+            }
+            panel.window.makeKeyAndOrderFront(None);
+        }
+    });
+}
 
 pub fn run_panel() -> ExitCode {
     nsh_core::image::budget().set_limit(4 * 1024 * 1024);
@@ -260,7 +272,8 @@ pub fn run_panel() -> ExitCode {
     window.setContentView(Some(&view.view()));
     window.center();
     view.load(nsh_platform_macos::App::Rust(Root::of::<crate::ui::App>()));
-    window.makeKeyAndOrderFront(None);
+    // AppKit must finish launching before it can activate this child process.
+    // The delegate also uses the same presentation path for Dock reopens.
     PANEL.with_borrow_mut(|panel| {
         *panel = Some(Panel {
             window,
@@ -268,7 +281,6 @@ pub fn run_panel() -> ExitCode {
             details_left: std::cell::Cell::new(false),
         })
     });
-    app.activate();
     app.run();
     app.setDelegate(None);
     ExitCode::SUCCESS
