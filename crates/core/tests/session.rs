@@ -12,7 +12,7 @@ use std::{
     process::Command,
     sync::{
         Arc, OnceLock,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         mpsc,
     },
     time::Duration,
@@ -22,6 +22,7 @@ static MESSAGES: OnceLock<mpsc::Sender<Message>> = OnceLock::new();
 static LOADS: AtomicUsize = AtomicUsize::new(0);
 static FAIL_RESOLVE: AtomicBool = AtomicBool::new(false);
 static FAIL_LOAD: AtomicBool = AtomicBool::new(false);
+static PLAYBACK_ELAPSED: AtomicU64 = AtomicU64::new(0);
 
 fn dispatch(message: Message) {
     MESSAGES.get().unwrap().send(message).unwrap();
@@ -58,6 +59,7 @@ impl AudioOutput for Audio {
         if FAIL_LOAD.load(Ordering::Relaxed) {
             bail!("audio load failed");
         }
+        PLAYBACK_ELAPSED.store(0, Ordering::Relaxed);
         *output = Some(Self {
             position: Cell::new(0.0),
             playing: Cell::new(play),
@@ -67,7 +69,8 @@ impl AudioOutput for Audio {
     }
     fn snapshot(&self) -> AudioSnapshot {
         AudioSnapshot {
-            position: self.position.get(),
+            position: self.position.get()
+                + f64::from_bits(PLAYBACK_ELAPSED.load(Ordering::Relaxed)),
             duration: Some(180.0),
             state: if self.playing.get() {
                 AudioState::Playing
@@ -91,6 +94,7 @@ impl AudioOutput for Audio {
         self.volume.set(volume);
     }
     fn seek(&self, seconds: f64, complete: impl Fn(bool) + Send + 'static) {
+        PLAYBACK_ELAPSED.store(0, Ordering::Relaxed);
         self.position.set(seconds);
         complete(true);
     }
@@ -190,6 +194,16 @@ fn failed_handoff_preserves_checkpoint_volume_and_can_retry() {
 #[test]
 fn runtime_queue_limit_keeps_the_session_saveable() {
     run_scenario(&["queue_limit", "verify_queue_limit"]);
+}
+
+#[test]
+fn tick_checkpoints_natural_playback_progress() {
+    run_scenario(&["periodic_tick"]);
+}
+
+#[test]
+fn display_status_checkpoints_natural_playback_progress() {
+    run_scenario(&["periodic_display"]);
 }
 
 #[test]
@@ -573,6 +587,39 @@ fn session_worker() {
             assert_eq!(status.queue.last().unwrap().id, 10_002);
             assert_eq!(status.position, 33.5);
             assert_eq!(status.volume, 0.19);
+        }
+        "periodic_tick" | "periodic_display" => {
+            command(&mut player, Action::Play(media(track(1)))).unwrap();
+            let path = musicx_core::protocol::data_dir()
+                .unwrap()
+                .join("playback-session.json");
+            let saved_position = || {
+                serde_json::from_slice::<serde_json::Value>(&std::fs::read(&path).unwrap()).unwrap()
+                    ["position"]
+                    .as_f64()
+                    .unwrap()
+            };
+            PLAYBACK_ELAPSED.store(42.5_f64.to_bits(), Ordering::Relaxed);
+            let poll = |player: &mut Player<Audio>| {
+                if phase == "periodic_tick" {
+                    player.tick();
+                } else {
+                    command(player, Action::DisplayStatus).unwrap();
+                }
+            };
+            poll(&mut player);
+            assert_eq!(
+                saved_position(),
+                0.0,
+                "polling before the interval should not write progress"
+            );
+            std::thread::sleep(Duration::from_millis(5_100));
+            poll(&mut player);
+            assert_eq!(
+                saved_position(),
+                42.5,
+                "natural progress must be saved before shutdown"
+            );
         }
         "handoff_load_failure" | "retry_failed_handoff" => {
             if phase == "handoff_load_failure" {
