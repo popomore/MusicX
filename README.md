@@ -6,7 +6,12 @@
 
 <p align="center"><strong>Pick a song in chat. Close the window and keep listening.</strong></p>
 
-MusicX is a native macOS menu bar player. Ask an MCP client to find and play a track, then use the media keys or macOS Now Playing to control it. Open the panel when you want the cover, lyrics, or queue.
+MusicX is a native macOS menu bar player with support for media keys and macOS Now Playing.
+
+## Highlights
+
+- **Control playback through MCP.** Ask your agent to find songs, play or queue tracks, pause, skip, or adjust the volume. [Connect an MCP client](#connect-an-mcp-client)
+- **Add music sources with MyGo plugins.** Browse the catalog for compatible sources such as NetEase Cloud Music, Bodian Music, and Kugou Concept. Install them from **Settings → Music Sources**.
 
 > “Play a track by Jay Chou and queue two more.”
 
