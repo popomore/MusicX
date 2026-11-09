@@ -68,6 +68,16 @@ release_assets() {
         jq -cs '[.[][] | {name, digest, state}] | sort_by(.name)'
 }
 
+if jq -e '.draft' <<< "$release" > /dev/null; then
+    gh api --paginate "repos/$repo/releases/$release_id/assets?per_page=100" |
+        jq -rs --argjson expected "$expected" '
+            .[][] | select(.state == "starter")
+            | select(.name as $name | any($expected[]; .name == $name)) | .id' |
+        while IFS= read -r asset_id; do
+            gh api --method DELETE "repos/$repo/releases/assets/$asset_id"
+        done
+fi
+
 actual=$(release_assets)
 if jq -e '.draft' <<< "$release" > /dev/null; then
     if ! jq -e --argjson expected "$expected" '. - $expected == []' <<< "$actual" > /dev/null; then
