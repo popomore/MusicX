@@ -57,6 +57,8 @@ fn run() -> Result<ExitCode> {
         }
         Some("login") => {
             migrate_data_dir()?;
+            let runtime = desktop::prepare_runtime(WEB_AUTH_APP_NAME)?;
+            configure_web_auth(runtime.web_auth_executable)?;
             netease::login()?;
         }
         Some("logout") => {
