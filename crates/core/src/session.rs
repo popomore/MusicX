@@ -1,5 +1,5 @@
 //! A durable listening session contains metadata, never resolved audio URLs.
-use crate::protocol::{QueueContext, Status, Track};
+use crate::protocol::{MAX_QUEUE_TRACKS, QueueContext, Status, Track};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::{io::ErrorKind, sync::Arc};
@@ -31,7 +31,7 @@ impl Session {
     fn validate(&self) -> Result<()> {
         ensure!(self.version == 1, "不支持的播放会话版本");
         ensure!(
-            self.queue.len() <= 10000
+            self.queue.len() <= MAX_QUEUE_TRACKS
                 && self.index.is_none_or(|index| index < self.queue.len())
                 && self.queue.is_empty() == self.index.is_none(),
             "无效的播放队列"

@@ -308,7 +308,7 @@ fn local_queue(services: Services, id: String, index: usize) -> Result<Action> {
 
 fn validate_list(tracks: &[protocol::Track], index: usize) -> Result<()> {
     anyhow::ensure!(
-        !tracks.is_empty() && tracks.len() <= 10000,
+        !tracks.is_empty() && tracks.len() <= protocol::MAX_QUEUE_TRACKS,
         "播放列表应包含1至10000首歌"
     );
     anyhow::ensure!(index < tracks.len(), "无效的播放位置");
@@ -353,7 +353,10 @@ async fn ui_restore(State(services): State<Services>, Json(snapshot): Json<Statu
 }
 
 fn validate_snapshot(snapshot: &Status) -> Result<()> {
-    anyhow::ensure!(snapshot.queue.len() <= 10000, "队列过长");
+    anyhow::ensure!(
+        snapshot.queue.len() <= protocol::MAX_QUEUE_TRACKS,
+        "队列过长"
+    );
     anyhow::ensure!(
         snapshot
             .index

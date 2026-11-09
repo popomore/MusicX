@@ -2,6 +2,9 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+/// Maximum size of a playback queue that can be persisted and restored.
+pub const MAX_QUEUE_TRACKS: usize = 10_000;
+
 #[cfg(not(target_os = "ios"))]
 pub const ADDRESS: &str = "127.0.0.1:45967";
 #[cfg(target_os = "ios")]

@@ -144,6 +144,12 @@ fn handoff(player: &mut Player<Audio>, state: State) -> Result<Status> {
     reply.blocking_recv().unwrap()
 }
 
+fn command(player: &mut Player<Audio>, action: Action) -> Result<Status> {
+    let (send, reply) = tokio::sync::oneshot::channel();
+    player.handle(Message::Action(action, Some(send)));
+    reply.blocking_recv().unwrap()
+}
+
 fn run_worker(directory: &std::path::Path, phase: &str) {
     let output = Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "session_worker", "--nocapture"])
@@ -179,6 +185,11 @@ fn empty_handoff_clears_the_old_checkpoint_position() {
 #[test]
 fn failed_handoff_preserves_checkpoint_volume_and_can_retry() {
     run_scenario(&["save", "handoff_load_failure", "retry_failed_handoff"]);
+}
+
+#[test]
+fn runtime_queue_limit_keeps_the_session_saveable() {
+    run_scenario(&["queue_limit", "verify_queue_limit"]);
 }
 
 #[test]
@@ -500,6 +511,68 @@ fn session_worker() {
             assert!(status.state == State::Idle && status.queue.is_empty());
             assert_eq!(status.position, 0.0);
             assert_eq!(status.volume, 0.8);
+        }
+        "queue_limit" => {
+            command(
+                &mut player,
+                Action::ReplaceQueue {
+                    tracks: (1..=9_998).map(track).collect(),
+                    index: 0,
+                    context: QueueContext::History,
+                    media: media(track(1)),
+                },
+            )
+            .unwrap();
+            command(&mut player, Action::Play(media(track(10_001)))).unwrap();
+            command(&mut player, Action::Enqueue(media(track(10_002)))).unwrap();
+            command(
+                &mut player,
+                Action::Seek {
+                    seconds: 33.5,
+                    track_key: None,
+                },
+            )
+            .unwrap();
+            player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+            let loads = LOADS.load(Ordering::Relaxed);
+            assert!(
+                command(&mut player, Action::Play(media(track(10_003)))).is_err(),
+                "Play must reject an oversized queue"
+            );
+            assert!(
+                command(&mut player, Action::Enqueue(media(track(10_004)))).is_err(),
+                "Enqueue must reject an oversized queue"
+            );
+            assert_eq!(
+                LOADS.load(Ordering::Relaxed),
+                loads,
+                "rejected actions must not replace audio"
+            );
+            assert_eq!(player.status().queue.len(), 10_000);
+            assert_eq!(player.status().position, 33.5);
+            command(&mut player, Action::Volume(0.19)).unwrap();
+            let saved: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(
+                    musicx_core::protocol::data_dir()
+                        .unwrap()
+                        .join("playback-session.json"),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(saved["queue"].as_array().unwrap().len(), 10_000);
+            assert!((saved["volume"].as_f64().unwrap() - 0.19).abs() < 0.0001);
+            assert_eq!(saved["position"], 33.5);
+        }
+        "verify_queue_limit" => {
+            let status = player.status();
+            assert!(status.state == State::Paused);
+            assert_eq!(status.queue.len(), 10_000);
+            assert_eq!(status.track.as_ref().map(|track| track.id), Some(10_001));
+            assert_eq!(status.index, Some(1));
+            assert_eq!(status.queue.last().unwrap().id, 10_002);
+            assert_eq!(status.position, 33.5);
+            assert_eq!(status.volume, 0.19);
         }
         "handoff_load_failure" | "retry_failed_handoff" => {
             if phase == "handoff_load_failure" {

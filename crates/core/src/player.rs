@@ -10,7 +10,7 @@ use tokio::sync::oneshot;
 use crate::{
     audio::{AudioOutput, AudioSnapshot, AudioState},
     history,
-    protocol::{HistoryProgress, Track},
+    protocol::{HistoryProgress, MAX_QUEUE_TRACKS, Track},
 };
 
 pub use crate::protocol::{State, Status};
@@ -348,6 +348,10 @@ impl<A: AudioOutput> Player<A> {
             }
             Action::Play(media) => {
                 ensure!(!self.switching, "正在切换曲目");
+                ensure!(
+                    self.queue.len() < MAX_QUEUE_TRACKS,
+                    "播放队列最多支持{MAX_QUEUE_TRACKS}首歌"
+                );
                 self.load(&media)?;
                 let target = self.index.map_or(0, |index| index + 1);
                 Arc::make_mut(&mut self.queue).insert(target, media.track);
@@ -355,6 +359,10 @@ impl<A: AudioOutput> Player<A> {
                 self.queue_revision += 1;
             }
             Action::Enqueue(media) => {
+                ensure!(
+                    self.queue.len() < MAX_QUEUE_TRACKS,
+                    "播放队列最多支持{MAX_QUEUE_TRACKS}首歌"
+                );
                 if self.index.is_none() {
                     self.load(&media)?;
                     self.index = Some(0);
@@ -370,7 +378,7 @@ impl<A: AudioOutput> Player<A> {
             } => {
                 ensure!(!self.switching, "正在切换曲目");
                 ensure!(
-                    index < tracks.len() && tracks.len() <= 10000,
+                    index < tracks.len() && tracks.len() <= MAX_QUEUE_TRACKS,
                     "无效的播放列表"
                 );
                 self.load(&media)?;
