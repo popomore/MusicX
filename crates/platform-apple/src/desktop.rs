@@ -9,7 +9,12 @@ use objc2_foundation::{
     NSData, NSObject, NSObjectProtocol, NSPoint, NSRunLoop, NSRunLoopCommonModes, NSSize, NSString,
     NSTimer, NSURL, ns_string,
 };
-use std::{cell::RefCell, process::ExitCode};
+use std::{
+    cell::RefCell,
+    ffi::OsStr,
+    path::{Path, PathBuf},
+    process::ExitCode,
+};
 
 use crate::{
     player::{self, State},
@@ -19,6 +24,10 @@ use crate::{
 const APP_NAME: &str = "MusicX";
 const BACKGROUND_NAME: &str = "MusicX Helper";
 const APP_BUNDLE_VERSION: &str = "6";
+const PANEL_APP: &str = "Panel.app";
+const WEB_AUTH_APP: &str = "WebAuth.app";
+const PANEL_BIN: &str = "mini-cloudmusic-panel";
+const WEB_AUTH_BIN: &str = "mini-cloudmusic-webauth";
 
 thread_local! {
     static DESKTOP: RefCell<Option<Desktop>> = const { RefCell::new(None) };
@@ -30,6 +39,8 @@ struct PanelProcess {
 }
 
 struct Desktop {
+    working_dir: PathBuf,
+    panel_bundle: PathBuf,
     _delegate: Retained<Delegate>,
     status_item: Retained<NSStatusItem>,
     status_icon: Option<Retained<NSImage>>,
@@ -92,14 +103,15 @@ define_class!(
 
 );
 
-/// Each process has an application identity without desktop installation.
+/// Each process has its own macOS application identity.
 fn package(
-    executable: &std::path::Path,
-    bundle: &std::path::Path,
+    executable: &Path,
+    bundle: &Path,
     name: &str,
     id: &str,
     binary: &str,
     agent: bool,
+    signing_identity: Option<&OsStr>,
 ) -> anyhow::Result<()> {
     use std::fs;
     let contents = bundle.join("Contents");
@@ -127,16 +139,24 @@ fn package(
 <key>CFBundleDisplayName</key><string>{name}</string>
 <key>CFBundleIconFile</key><string>musicx.icns</string>
 <key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleShortVersionString</key><string>{version}</string>
 <key>CFBundleVersion</key><string>{APP_BUNDLE_VERSION}</string>
 <key>LSUIElement</key><{ui_element}/>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
-</dict></plist>"#
+</dict></plist>"#,
+            version = env!("CARGO_PKG_VERSION"),
         ),
     )?;
-    let signature = std::process::Command::new("/usr/bin/codesign")
-        .args(["--force", "--sign", "-"])
-        .arg(bundle)
-        .output()?;
+    let mut codesign = std::process::Command::new("/usr/bin/codesign");
+    codesign.args(["--force", "--sign"]);
+    if let Some(identity) = signing_identity {
+        codesign
+            .arg(identity)
+            .args(["--options", "runtime", "--timestamp"]);
+    } else {
+        codesign.arg("-");
+    }
+    let signature = codesign.arg(bundle).output()?;
     anyhow::ensure!(
         signature.status.success(),
         "无法签名 {name}：{}",
@@ -145,24 +165,104 @@ fn package(
     Ok(())
 }
 
-fn runtime_dir() -> anyhow::Result<std::path::PathBuf> {
+fn runtime_dir() -> anyhow::Result<PathBuf> {
     use std::os::unix::fs::DirBuilderExt;
     let path = musicx_core::storage::state_dir()?.join("runtime");
     std::fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
         .create(&path)?;
-    Ok(path)
+    Ok(path.canonicalize()?)
 }
 
-pub fn bundle_if_needed(web_auth_name: &str) -> anyhow::Result<()> {
+pub struct DesktopRuntime {
+    working_dir: PathBuf,
+    panel_bundle: PathBuf,
+    pub web_auth_executable: PathBuf,
+    open_panel: bool,
+}
+
+fn app_executable(bundle: &Path, name: &str) -> PathBuf {
+    bundle.join("Contents/MacOS").join(name)
+}
+
+fn build_component(executable: &Path, name: &str) -> anyhow::Result<PathBuf> {
+    let component = executable.with_file_name(name);
+    anyhow::ensure!(component.is_file(), "缺少构建产物 {name}，请先运行 ./run");
+    Ok(component)
+}
+
+pub fn package_app(bundle: &Path, web_auth_name: &str) -> anyhow::Result<()> {
+    anyhow::ensure!(!bundle.exists(), "目标应用包已存在：{}", bundle.display());
+    let executable = std::env::current_exe()?;
+    let panel = build_component(&executable, PANEL_BIN)?;
+    let webauth = build_component(&executable, WEB_AUTH_BIN)?;
+    let helpers = bundle.join("Contents/Helpers");
+    let signing = std::env::var_os("MUSICX_CODESIGN_IDENTITY").filter(|id| !id.is_empty());
+    let signing = signing.as_deref();
+    package(
+        &panel,
+        &helpers.join(PANEL_APP),
+        APP_NAME,
+        "local.mini-cloudmusic.panel",
+        PANEL_BIN,
+        false,
+        signing,
+    )?;
+    package(
+        &webauth,
+        &helpers.join(WEB_AUTH_APP),
+        web_auth_name,
+        "local.mini-cloudmusic.webauth",
+        WEB_AUTH_BIN,
+        true,
+        signing,
+    )?;
+    package(
+        &executable,
+        bundle,
+        BACKGROUND_NAME,
+        "local.musicx.playback",
+        "mini-cloudmusic",
+        true,
+        signing,
+    )
+}
+
+pub fn prepare_runtime(web_auth_name: &str) -> anyhow::Result<DesktopRuntime> {
     use std::{os::unix::process::CommandExt, process::Command};
     let executable = std::env::current_exe()?;
+    if let Some(contents) = executable.parent().and_then(Path::parent)
+        && contents.file_name() == Some(OsStr::new("Contents"))
+    {
+        let helpers = contents.join("Helpers");
+        if helpers.is_dir() {
+            let panel_bundle = helpers.join(PANEL_APP);
+            let web_auth_executable = app_executable(&helpers.join(WEB_AUTH_APP), WEB_AUTH_BIN);
+            anyhow::ensure!(
+                app_executable(&panel_bundle, PANEL_BIN).is_file() && web_auth_executable.is_file(),
+                "MusicX 应用包不完整"
+            );
+            return Ok(DesktopRuntime {
+                working_dir: musicx_core::storage::state_dir()?,
+                panel_bundle,
+                web_auth_executable,
+                open_panel: true,
+            });
+        }
+    }
     let base = runtime_dir()?;
     let core_bundle = base.join(format!("{APP_NAME}.app"));
-    let private_executable = core_bundle.join("Contents/MacOS/mini-cloudmusic");
+    let private_executable = app_executable(&core_bundle, "mini-cloudmusic");
+    let panel_bundle = base.join("panel").join(format!("{APP_NAME}.app"));
+    let web_auth_bundle = base.join(format!("{web_auth_name}.app"));
     if executable == private_executable {
-        return Ok(());
+        return Ok(DesktopRuntime {
+            panel_bundle,
+            web_auth_executable: app_executable(&web_auth_bundle, WEB_AUTH_BIN),
+            working_dir: base,
+            open_panel: false,
+        });
     }
     if executable
         .parent()
@@ -175,33 +275,27 @@ pub fn bundle_if_needed(web_auth_name: &str) -> anyhow::Result<()> {
             "请先在项目中运行 ./run 准备私有运行文件"
         );
     } else {
-        let panel = executable
-            .parent()
-            .ok_or_else(|| anyhow::anyhow!("找不到构建目录"))?
-            .join("mini-cloudmusic-panel");
-        anyhow::ensure!(panel.is_file(), "请先运行 ./run 完成面板构建");
-        let webauth = executable
-            .parent()
-            .expect("build directory")
-            .join("mini-cloudmusic-webauth");
-        anyhow::ensure!(webauth.is_file(), "请先运行./run准备网页登录组件");
+        let panel = build_component(&executable, PANEL_BIN)?;
+        let webauth = build_component(&executable, WEB_AUTH_BIN)?;
         package(
             &webauth,
-            &base.join(format!("{web_auth_name}.app")),
+            &web_auth_bundle,
             web_auth_name,
             "local.mini-cloudmusic.webauth",
-            "mini-cloudmusic-webauth",
+            WEB_AUTH_BIN,
             true,
+            None,
         )?;
         // Stage both executables before starting AppKit. Opening the panel later
         // only launches this prepared bundle, with no project-file I/O on main.
         package(
             &panel,
-            &base.join(format!("panel/{APP_NAME}.app")),
+            &panel_bundle,
             APP_NAME,
             "local.mini-cloudmusic.panel",
-            "mini-cloudmusic-panel",
+            PANEL_BIN,
             false,
+            None,
         )?;
         package(
             &executable,
@@ -210,10 +304,15 @@ pub fn bundle_if_needed(web_auth_name: &str) -> anyhow::Result<()> {
             "local.musicx.playback",
             "mini-cloudmusic",
             true,
+            None,
         )?;
     }
     Err(Command::new(private_executable)
         .current_dir(&base)
+        .env(
+            "MINI_CLOUDMUSIC_DATA_DIR",
+            base.parent().expect("runtime parent"),
+        )
         .args(std::env::args().skip(1))
         .exec()
         .into())
@@ -227,7 +326,7 @@ fn load_status_icon(png: &[u8]) -> Option<Retained<NSImage>> {
     Some(icon)
 }
 
-pub fn run() -> ExitCode {
+pub fn run(runtime: DesktopRuntime) -> ExitCode {
     let mtm = MainThreadMarker::new().expect("AppKit main thread");
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
@@ -259,8 +358,16 @@ pub fn run() -> ExitCode {
     unsafe {
         NSRunLoop::mainRunLoop().addTimer_forMode(&timer, NSRunLoopCommonModes);
     }
+    let DesktopRuntime {
+        working_dir,
+        panel_bundle,
+        open_panel,
+        ..
+    } = runtime;
     DESKTOP.with_borrow_mut(|desktop| {
         *desktop = Some(Desktop {
+            working_dir,
+            panel_bundle,
             _delegate: delegate.clone(),
             status_item,
             status_icon,
@@ -274,6 +381,9 @@ pub fn run() -> ExitCode {
         })
     });
     refresh();
+    if open_panel {
+        dispatch2::DispatchQueue::main().exec_async(show_panel);
+    }
     app.run();
     app.setDelegate(None);
     ExitCode::SUCCESS
@@ -291,15 +401,11 @@ fn show_panel() {
             NSWorkspace::sharedWorkspace().openURL(&url);
             return Ok(());
         }
-        let base = runtime_dir()?;
-        let bundle = base.join("panel").join(format!("{APP_NAME}.app"));
-        let panel_executable = bundle.join("Contents/MacOS/mini-cloudmusic-panel");
-        anyhow::ensure!(
-            panel_executable.is_file(),
-            "缺少选歌面板，请先运行项目的 ./run 完成构建"
-        );
+        let bundle = desktop.panel_bundle.clone();
+        let panel_executable = app_executable(&bundle, PANEL_BIN);
+        anyhow::ensure!(panel_executable.is_file(), "缺少 MusicX 播放面板");
         let child = std::process::Command::new(panel_executable)
-            .current_dir(base)
+            .current_dir(&desktop.working_dir)
             .arg("panel")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())

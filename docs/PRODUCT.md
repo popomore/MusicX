@@ -8,7 +8,7 @@ The menu bar icon shows playback state and opens the compact player. Closing the
 
 The player shows the cover, track title, artist, album, audio quality badge, progress, and basic controls. The quality popover separates the reported stream quality from the listener's preference. The optional one-line lyric preview opens full lyrics, which follow playback and support seeking when the source provides timestamps. Track information links back to its source and album. Queue, history, playlists, and settings open beside the player so playback controls remain available.
 
-Search and discovery are exposed through MCP. The panel focuses on the current session and music already available in albums, playlists, and history.
+Search and discovery are exposed through MCP. Use MCP Connection in settings to copy the endpoint configuration and connect a client. The player panel focuses on the current session and music already available in albums, playlists, and history.
 
 ## Queue, library, and history
 
@@ -29,7 +29,7 @@ Connect accounts with QR sign-in or, where supported on macOS, an embedded web s
 
 ## Local data and upgrades
 
-Accounts, playlists, history, preferences, and the MCP token are stored in `~/Library/Application Support/MusicX/`. Installed plugins live in `mygo-plugins/`. The launcher prepares generated application bundles in `runtime/`.
+Install the macOS app by dragging MusicX from its disk image to Applications. Accounts, playlists, history, preferences, and the MCP token live in `~/Library/Application Support/MusicX/`. Installed plugins live in `mygo-plugins/`.
 
 On upgrade, the old `Mini Cloud Music` directory is moved into place when the new path is absent and the old helper has stopped. When both directories exist, MusicX uses the new path and preserves the legacy directory. [Startup and migration details](../README.md#local-data-and-upgrades)
 

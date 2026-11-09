@@ -1,0 +1,206 @@
+name: Release macOS
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-macos
+  cancel-in-progress: false
+  queue: max
+
+env:
+  CARGO_INCREMENTAL: '0'
+  MACOSX_DEPLOYMENT_TARGET: '14.0'
+  DMG: target/distribution/MusicX-macos-arm64.dmg
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 45
+    outputs:
+      artifact-id: ${{ steps.artifacts.outputs.artifact-id }}
+      source-sha: ${{ steps.source.outputs.sha }}
+      signing-mode: ${{ steps.signing.outputs.mode }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install 1.97.0 --profile minimal --component rustfmt
+          rustup override set 1.97.0
+
+      - name: Validate release source
+        id: source
+        run: |
+          source_sha=$(git rev-parse HEAD)
+          if ! git merge-base --is-ancestor "$source_sha" origin/main; then
+            echo "::error::The tagged commit must be on main."
+            exit 1
+          fi
+          metadata=$(cargo metadata --locked --no-deps --format-version 1)
+          version=$(jq -er '.packages[] | select(.name == "mini-cloudmusic") | .version' <<< "$metadata")
+          bundle_version=$(jq -er '.packages[] | select(.name == "musicx-platform-apple") | .version' <<< "$metadata")
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ||
+                "$GITHUB_REF_NAME" != "v$version" || "$version" != "$bundle_version" ]]; then
+            echo "::error::Use a stable version tag matching both MusicX Cargo manifests."
+            exit 1
+          fi
+          printf 'sha=%s\n' "$source_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Select signing mode
+        id: signing
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          required=(APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY
+                    APPLE_API_PRIVATE_KEY APPLE_API_KEY APPLE_API_ISSUER)
+          missing=()
+          for name in "${required[@]}"; do
+            if [[ -z "${!name}" ]]; then
+              missing+=("$name")
+            fi
+          done
+
+          if (( ${#missing[@]} == ${#required[@]} )); then
+            mode=ad-hoc
+          elif (( ${#missing[@]} == 0 )); then
+            mode=developer-id
+          else
+            echo "::error::Incomplete Apple signing configuration. Missing: ${missing[*]}"
+            exit 1
+          fi
+          printf 'mode=%s\n' "$mode" >> "$GITHUB_OUTPUT"
+
+      - name: Format and test
+        run: |
+          cargo fmt --all -- --check
+          cargo test --release --locked --workspace
+
+      - name: Import Developer ID certificate
+        if: steps.signing.outputs.mode == 'developer-id'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          : "${APPLE_CERTIFICATE:?Configure the Developer ID certificate secret}"
+          : "${APPLE_CERTIFICATE_PASSWORD:?Configure the Developer ID certificate password secret}"
+          : "${APPLE_SIGNING_IDENTITY:?Configure the Developer ID Application identity}"
+          if [[ "$APPLE_SIGNING_IDENTITY" != "Developer ID Application: "* ]]; then
+            echo "::error::APPLE_SIGNING_IDENTITY must be a Developer ID Application identity."
+            exit 1
+          fi
+          umask 077
+          certificate=$(mktemp "$RUNNER_TEMP/musicx-certificate.XXXXXX")
+          trap 'rm -f "$certificate"' EXIT
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$certificate"
+
+          keychain="$RUNNER_TEMP/musicx-signing.keychain-db"
+          password=$(openssl rand -hex 24)
+          echo "::add-mask::$password"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$certificate" -f pkcs12 -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain"
+          security list-keychains -d user -s "$keychain"
+
+          identity=$(security find-identity -v -p codesigning "$keychain" |
+            awk -v name="\"$APPLE_SIGNING_IDENTITY\"" 'index($0, name) { print $2 }')
+          if [[ ! "$identity" =~ ^[0-9A-Fa-f]{40}$ ]]; then
+            echo "::error::The certificate must match the configured Developer ID Application identity."
+            exit 1
+          fi
+          printf 'MUSICX_CODESIGN_IDENTITY=%s\n' "$identity" >> "$GITHUB_ENV"
+
+      - name: Package Apple Silicon DMG
+        run: |
+          test "$(uname -m)" = arm64
+          sh scripts/package-macos.sh "$DMG"
+          hdiutil verify -quiet "$DMG"
+
+      - name: Notarize and staple the DMG
+        if: steps.signing.outputs.mode == 'developer-id'
+        env:
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          : "${APPLE_API_PRIVATE_KEY:?Configure the notarization API private key}"
+          : "${APPLE_API_KEY:?Configure the notarization API key ID}"
+          : "${APPLE_API_ISSUER:?Configure the notarization API issuer ID}"
+          umask 077
+          notary_dir=$(mktemp -d "$RUNNER_TEMP/musicx-notary.XXXXXX")
+          trap 'rm -rf "$notary_dir"' EXIT
+          printf '%s\n' "$APPLE_API_PRIVATE_KEY" > "$notary_dir/key.p8"
+          xcrun notarytool submit "$DMG" \
+            --key "$notary_dir/key.p8" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER" \
+            --wait --timeout 20m --output-format json > "$notary_dir/result.json"
+          jq -er '.status' "$notary_dir/result.json"
+          jq -e '.status == "Accepted"' "$notary_dir/result.json" > /dev/null
+          xcrun stapler staple "$DMG"
+          xcrun stapler validate "$DMG"
+
+      - name: Write checksum
+        run: |
+          cd "$(dirname "$DMG")"
+          name=$(basename "$DMG")
+          shasum -a 256 "$name" > "$name.sha256"
+
+      - id: artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: musicx-macos-validated-${{ github.run_attempt }}
+          path: |
+            ${{ env.DMG }}
+            ${{ env.DMG }}.sha256
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.build.outputs.source-sha }}
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact-id }}
+          path: target/distribution
+
+      - name: Verify and publish the installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.build.outputs.source-sha }}
+          SIGNING_MODE: ${{ needs.build.outputs.signing-mode }}
+        run: bash scripts/publish-macos.sh "$DMG"
+
+      - name: Preserve the release manifest
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-manifest-macos-${{ github.run_attempt }}
+          path: target/distribution/release-manifest.json
+          if-no-files-found: error
+          retention-days: 90

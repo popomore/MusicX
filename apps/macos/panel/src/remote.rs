@@ -49,6 +49,16 @@ type Request = (Option<UiAction>, Reply);
 static REQUESTS: OnceLock<mpsc::Sender<Request>> = OnceLock::new();
 static CONNECTION: OnceLock<(Client, String)> = OnceLock::new();
 
+#[cfg(target_os = "macos")]
+pub fn mcp_endpoint() -> String {
+    format!("http://{}/mcp", address())
+}
+
+#[cfg(target_os = "macos")]
+pub fn mcp_token() -> Option<&'static str> {
+    CONNECTION.get().map(|(_, token)| token.as_str())
+}
+
 fn client() -> Result<Client> {
     Ok(Client::builder()
         .no_proxy()

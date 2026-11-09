@@ -32,7 +32,7 @@ Use full-row buttons with a title and secondary metadata for track lists. Use sm
 
 My Playlists opens in browse mode. Show the name, track count, and common play or add actions. Put rename, remove, and delete in management mode, with a clear way to finish. Show an inline name field when creating a playlist. The heart beside the track title toggles Liked Songs and remains in sync with edits to that playlist.
 
-Settings groups controls under Playback and Music Sources. Source details show configuration fields, account actions, and import options according to capabilities. The add-source catalog shows compatibility and reasons an action is unavailable. Use secure fields for credentials and offer replacement controls for saved secrets. Cancel an unfinished sign-in when its view closes. Web sign-in runs in a temporary WebKit process and shows the website's domain.
+Settings groups controls under Playback, MCP Connection, and Music Sources. MCP Connection shows the local endpoint and lets users copy a client configuration or bearer token. Source details show configuration fields, account actions, and import options according to capabilities. The add-source catalog shows compatibility and reasons an action is unavailable. Use secure fields for credentials and offer replacement controls for saved secrets. Cancel an unfinished sign-in when its view closes. Web sign-in runs in a temporary WebKit process and shows the website's domain.
 
 ## Runtime boundaries
 
@@ -40,4 +40,4 @@ Settings groups controls under Playback and Music Sources. Source details show c
 - `crates/platform-apple` adapts playback to AVPlayer and publishes system Now Playing metadata. The macOS helper assembles the platform, plugin bridge, and MCP service.
 - `crates/plugin-api` defines the Rust source contract. `crates/plugins` adapts MyGo plugins and handles source configuration and accounts. `crates/mcp` exposes player actions and the panel's local routes.
 - Fetch the full queue when its version changes and render only visible rows in long lists. Share playback progress with lyrics and run the lyric display timer only when needed. Limit the panel's artwork cache to 4 MiB and release its resources on close.
-- On macOS, generated bundles live under `runtime/` and installed plugins under `mygo-plugins/` in `~/Library/Application Support/MusicX/`. The iPhone app uses its own sandbox. [Local data and upgrades](../README.md#local-data-and-upgrades)
+- The distributed macOS app ships the panel and web sign-in components inside its bundle. Source builds stage their app bundles under `runtime/` in `~/Library/Application Support/MusicX/`. Installed plugins live under `mygo-plugins/` in the same data directory. The iPhone app uses its own sandbox. [Local data and upgrades](../README.md#local-data-and-upgrades)

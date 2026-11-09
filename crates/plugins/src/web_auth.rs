@@ -4,12 +4,20 @@ use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 use std::{
     io::{Read, Write},
+    path::PathBuf,
     process::{Command, Stdio},
-    sync::Arc,
+    sync::{Arc, OnceLock},
     time::{Duration, Instant},
 };
 
 pub const APP_NAME: &str = "MusicX 网页登录";
+static EXECUTABLE: OnceLock<PathBuf> = OnceLock::new();
+
+pub fn configure(executable: PathBuf) -> Result<()> {
+    EXECUTABLE
+        .set(executable)
+        .map_err(|_| anyhow::anyhow!("网页登录组件已经配置"))
+}
 
 pub fn sign_in(
     mut request: Value,
@@ -22,15 +30,10 @@ pub fn sign_in(
     validate(&request, grants)?;
     request["name"] = json!(name.chars().take(80).collect::<String>());
     let executable = std::env::var_os("MINI_CLOUDMUSIC_WEB_AUTH")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| {
-            crate::protocol::data_dir()
-                .unwrap_or_default()
-                .join(format!(
-                    "runtime/{APP_NAME}.app/Contents/MacOS/mini-cloudmusic-webauth"
-                ))
-        });
-    ensure!(executable.is_file(), "请运行./run准备网页登录组件");
+        .map(PathBuf::from)
+        .or_else(|| EXECUTABLE.get().cloned())
+        .context("缺少 MusicX 网页登录组件")?;
+    ensure!(executable.is_file(), "缺少 MusicX 网页登录组件");
     let mut child = Command::new(executable)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
