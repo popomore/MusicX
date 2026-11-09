@@ -41,13 +41,10 @@ xcrun stapler validate target/distribution/MusicX-release.dmg
 
 The macOS CI workflow runs formatting and workspace tests on pull requests and pushes to `main`. Download the Apple Silicon DMG and its SHA-256 checksum from the successful run's **Artifacts** section. These builds use ad hoc signing for testing. [macOS CI](../.github/workflows/ci-macos.yml)
 
-The release workflow uses the shared Meta source and asset Actions. The release unit defines the source branch, tag prefix, and version file. GitHub's private Action sharing is limited to eligible repositories, so MusicX checks out the pinned Meta Actions with a read-only token in the tag workflow. [Release workflow](../.github/workflows/release-macos.yml) · [Release unit](../.release/units/musicx-macos.json)
-
-Set these repository Actions secrets before publishing a release. The Apple secret names match Mokisu Desktop's Developer ID workflow.
+The release workflow runs when a stable version tag is pushed. GitHub Actions supplies the repository token for publishing. Set these repository Actions secrets for Apple signing and notarization. [Release workflow](../.github/workflows/release-macos.yml)
 
 | Secret | Value |
 | --- | --- |
-| `META_RELEASE_READ_TOKEN` | Token with Contents read access scoped to `popomore-org/meta` |
 | `APPLE_CERTIFICATE` | Base64-encoded Developer ID Application certificate and private key exported as a `.p12` |
 | `APPLE_CERTIFICATE_PASSWORD` | Password used to export the `.p12` |
 | `APPLE_SIGNING_IDENTITY` | Full Developer ID Application signing identity |
@@ -62,9 +59,9 @@ git tag -a v0.2.0 -m "MusicX 0.2.0"
 git push origin v0.2.0
 ```
 
-Meta validates the tag against the release unit and resolves its source commit. The macOS job signs and notarizes the DMG. Meta then verifies the uploaded assets and publishes them with `release-manifest.json`. The workflow retains source and asset receipts for 90 days.
+The macOS job validates the tagged commit and both package versions, then signs, notarizes, and staples the DMG. The publish job verifies the checksum and uploads the installer, checksum, and `release-manifest.json` to a draft. It checks the GitHub asset digests before publishing and retains a copy of the manifest for 90 days.
 
-If publication fails after a successful build, rerun the failed jobs to reuse the validated installer from that run. The build artifact is retained for seven days.
+If publication fails after a successful build, rerun the failed jobs to reuse the same signed installer. The build artifact is retained for seven days. The publisher reuses matching uploads and stops if the draft contains conflicting assets.
 
 ## Repository layout
 

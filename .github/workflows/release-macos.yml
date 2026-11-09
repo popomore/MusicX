@@ -12,88 +12,23 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  META_RELEASE_SHA: faf63d3b5b289a15615c35c669d4a77cb6e2884f
   CARGO_INCREMENTAL: '0'
   MACOSX_DEPLOYMENT_TARGET: '14.0'
   DMG: target/distribution/MusicX-macos-arm64.dmg
 
 jobs:
-  prepare:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      source-sha: ${{ steps.source.outputs.source-sha }}
-      version: ${{ steps.source.outputs.version }}
-      plan: ${{ steps.source.outputs.plan }}
-      complete: ${{ steps.existing.outputs.complete }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Check out Meta release actions
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: popomore-org/meta
-          ref: ${{ env.META_RELEASE_SHA }}
-          token: ${{ secrets.META_RELEASE_READ_TOKEN }}
-          path: .meta-release
-          sparse-checkout-cone-mode: false
-          sparse-checkout: |
-            /.github/actions/_lib/
-            /.github/actions/release-source/
-            /.github/actions/release-assets/
-          persist-credentials: false
-
-      - id: source
-        uses: ./.meta-release/.github/actions/release-source
-        with:
-          manifest: .release/units/musicx-macos.json
-          tag: ${{ github.ref_name }}
-          dry-run: 'false'
-          implementation-ref: popomore-org/meta@${{ env.META_RELEASE_SHA }}
-
-      - name: Require a stable release
-        env:
-          RELEASE_CHANNEL: ${{ steps.source.outputs.channel }}
-        run: |
-          if [ "$RELEASE_CHANNEL" != stable ]; then
-            echo "::error::MusicX publishes manual vMAJOR.MINOR.PATCH tags."
-            exit 1
-          fi
-
-      - id: existing
-        uses: ./.meta-release/.github/actions/release-assets
-        with:
-          unit: musicx-macos
-          plan: ${{ steps.source.outputs.plan }}
-          check-existing: 'true'
-          implementation-ref: popomore-org/meta@${{ env.META_RELEASE_SHA }}
-
-      - name: Preserve release receipts
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: release-source-macos-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/release-*.json
-          if-no-files-found: ignore
-          retention-days: 90
-
   build:
-    needs: prepare
-    if: needs.prepare.outputs.complete != 'true'
     runs-on: macos-15
     timeout-minutes: 45
     outputs:
       artifact-id: ${{ steps.artifacts.outputs.artifact-id }}
+      source-sha: ${{ steps.source.outputs.sha }}
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.prepare.outputs.source-sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -102,21 +37,28 @@ jobs:
           rustup toolchain install 1.97.0 --profile minimal --component rustfmt
           rustup override set 1.97.0
 
+      - name: Validate release source
+        id: source
+        run: |
+          source_sha=$(git rev-parse HEAD)
+          if ! git merge-base --is-ancestor "$source_sha" origin/main; then
+            echo "::error::The tagged commit must be on main."
+            exit 1
+          fi
+          metadata=$(cargo metadata --locked --no-deps --format-version 1)
+          version=$(jq -er '.packages[] | select(.name == "mini-cloudmusic") | .version' <<< "$metadata")
+          bundle_version=$(jq -er '.packages[] | select(.name == "musicx-platform-apple") | .version' <<< "$metadata")
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ||
+                "$GITHUB_REF_NAME" != "v$version" || "$version" != "$bundle_version" ]]; then
+            echo "::error::Use a stable version tag matching both MusicX Cargo manifests."
+            exit 1
+          fi
+          printf 'sha=%s\n' "$source_sha" >> "$GITHUB_OUTPUT"
+
       - name: Format and test
         run: |
           cargo fmt --all -- --check
           cargo test --release --locked --workspace
-
-      - name: Check the packaged app version
-        env:
-          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
-        run: |
-          bundle_version=$(cargo metadata --locked --no-deps --format-version 1 |
-            jq -er '.packages[] | select(.name == "musicx-platform-apple") | .version')
-          if [ "$bundle_version" != "$RELEASE_VERSION" ]; then
-            echo "::error::The app bundle version must match the Meta release plan."
-            exit 1
-          fi
 
       - name: Import Developer ID certificate
         env:
@@ -199,7 +141,7 @@ jobs:
           retention-days: 7
 
   publish:
-    needs: [prepare, build]
+    needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -207,22 +149,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.prepare.outputs.source-sha }}
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Check out Meta release actions
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: popomore-org/meta
-          ref: ${{ env.META_RELEASE_SHA }}
-          token: ${{ secrets.META_RELEASE_READ_TOKEN }}
-          path: .meta-release
-          sparse-checkout-cone-mode: false
-          sparse-checkout: |
-            /.github/actions/_lib/
-            /.github/actions/release-source/
-            /.github/actions/release-assets/
+          ref: ${{ needs.build.outputs.source-sha }}
           persist-credentials: false
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
@@ -230,26 +157,16 @@ jobs:
           artifact-ids: ${{ needs.build.outputs.artifact-id }}
           path: target/distribution
 
-      - name: Verify assets and prepare public notes
-        working-directory: target/distribution
-        run: |
-          sha256sum --check MusicX-macos-arm64.dmg.sha256
-          printf '%s\n' 'Download MusicX for Apple Silicon and drag the app to Applications. Requires macOS 14 or later.' > "$RUNNER_TEMP/musicx-release-notes.md"
+      - name: Verify and publish the installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.build.outputs.source-sha }}
+        run: bash scripts/publish-macos.sh "$DMG"
 
-      - uses: ./.meta-release/.github/actions/release-assets
-        with:
-          unit: musicx-macos
-          plan: ${{ needs.prepare.outputs.plan }}
-          files: '["target/distribution/MusicX-macos-arm64.dmg","target/distribution/MusicX-macos-arm64.dmg.sha256"]'
-          notes-file: ${{ runner.temp }}/musicx-release-notes.md
-          dry-run: 'false'
-          implementation-ref: popomore-org/meta@${{ env.META_RELEASE_SHA }}
-
-      - name: Preserve release receipts
-        if: always()
+      - name: Preserve the release manifest
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: release-assets-macos-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/release-*.json
-          if-no-files-found: ignore
+          name: release-manifest-macos-${{ github.run_attempt }}
+          path: target/distribution/release-manifest.json
+          if-no-files-found: error
           retention-days: 90
