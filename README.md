@@ -12,6 +12,7 @@ MusicX is a native macOS menu bar player with support for media keys and macOS N
 
 - **Control playback through MCP.** Ask your agent to find songs, play or queue tracks, pause, skip, or adjust the volume. [Connect an MCP client](#connect-an-mcp-client)
 - **Add music sources with MyGo plugins.** Browse the catalog for compatible sources such as NetEase Cloud Music, Bodian Music, and Kugou Concept. Install them from **Settings → Music Sources**.
+- **Low memory usage.** Closing the player window frees its UI memory while a lightweight helper keeps playback and MCP available.
 
 > “Play a track by Jay Chou and queue two more.”
 
