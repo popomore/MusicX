@@ -52,6 +52,7 @@ pub type Reply = Option<oneshot::Sender<Result<Status>>>;
 
 const AUTO_ADVANCE_MAX_ATTEMPTS: usize = 8;
 const AUTO_ADVANCE_RETRY_WINDOW: Duration = Duration::from_secs(20);
+const SESSION_CHECKPOINT_INTERVAL: Duration = Duration::from_secs(5);
 
 pub struct AutoAdvance {
     index: usize,
@@ -104,11 +105,13 @@ pub struct Player<A: AudioOutput> {
     end_handled: bool,
     requested_play: bool,
     history_recorded: bool,
+    saved_session: Option<crate::session::Session>,
+    session_saved_at: Instant,
 }
 
 impl<A: AudioOutput> Player<A> {
     pub fn new(dispatch: fn(Message), source: &'static dyn DataSource) -> Self {
-        Self {
+        let mut player = Self {
             audio: None,
             volume: 1.0,
             dispatch,
@@ -126,7 +129,28 @@ impl<A: AudioOutput> Player<A> {
             end_handled: false,
             requested_play: false,
             history_recorded: false,
+            saved_session: None,
+            session_saved_at: Instant::now(),
+        };
+        match crate::session::Session::load() {
+            Ok(Some(session)) => {
+                player.queue = session.queue.clone();
+                player.queue_context = session.queue_context.clone();
+                player.index = session.index;
+                player.volume = session.volume;
+                player.deferred_position = session.index.map(|_| session.position);
+                player.history_recorded = session.index.is_some_and(|index| {
+                    history::restore(&session.queue[index]).unwrap_or_else(|error| {
+                        eprintln!("恢复播放历史失败：{error:#}");
+                        false
+                    })
+                });
+                player.saved_session = Some(session);
+            }
+            Ok(None) => {}
+            Err(error) => eprintln!("恢复播放会话失败：{error:#}"),
         }
+        player
     }
 
     fn audio(&self) -> &A {
@@ -146,6 +170,7 @@ impl<A: AudioOutput> Player<A> {
 
     pub fn shutdown(&mut self) {
         self.flush_history();
+        self.save_session(true);
         self.audio.take();
     }
 
@@ -467,7 +492,26 @@ impl<A: AudioOutput> Player<A> {
         }
     }
 
+    fn save_session(&mut self, force: bool) {
+        if !force && self.session_saved_at.elapsed() < SESSION_CHECKPOINT_INTERVAL {
+            return;
+        }
+        self.session_saved_at = Instant::now();
+        let session = crate::session::Session::capture(&self.status());
+        if self.saved_session.as_ref() == Some(&session) {
+            return;
+        }
+        match session.save() {
+            Ok(()) => self.saved_session = Some(session),
+            Err(error) => eprintln!("保存播放会话失败：{error:#}"),
+        }
+    }
+
     pub fn handle(&mut self, message: Message) {
+        let checkpoint = !matches!(
+            &message,
+            Message::Action(Action::Status | Action::DisplayStatus, _)
+        );
         let dispatch = self.dispatch;
         let source = self.source;
         match message {
@@ -626,11 +670,13 @@ impl<A: AudioOutput> Player<A> {
                     self.load_with_play(&media, false)?;
                     self.requested_play = play;
                     self.history_recorded = recorded;
-                    self.seek(if position >= media.track.duration - 0.12 {
-                        0.0
-                    } else {
-                        position
-                    });
+                    self.seek(
+                        if media.track.duration > 0.0 && position >= media.track.duration - 0.12 {
+                            0.0
+                        } else {
+                            position
+                        },
+                    );
                     if play {
                         self.audio().play();
                     }
@@ -672,6 +718,7 @@ impl<A: AudioOutput> Player<A> {
                 self.respond(result, reply);
             }
         }
+        self.save_session(checkpoint);
     }
 
     fn advance_on_end(&mut self) {
