@@ -104,11 +104,11 @@ The settings panel copies a configuration for clients that use the `mcpServers` 
 
 ## Work with music sources
 
-Use the terminal to test NetEase QR sign-in and sign-out.
+Use the launcher to build all required components and test NetEase QR sign-in and sign-out.
 
 ```sh
-cargo run --release --locked -- login
-cargo run --release --locked -- logout
+./run login
+./run logout
 ```
 
 Install a compatible single-file JavaScript plugin from a local directory.

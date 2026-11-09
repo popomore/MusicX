@@ -172,7 +172,7 @@ fn runtime_dir() -> anyhow::Result<PathBuf> {
         .recursive(true)
         .mode(0o700)
         .create(&path)?;
-    Ok(path)
+    Ok(path.canonicalize()?)
 }
 
 pub struct DesktopRuntime {
@@ -309,6 +309,10 @@ pub fn prepare_runtime(web_auth_name: &str) -> anyhow::Result<DesktopRuntime> {
     }
     Err(Command::new(private_executable)
         .current_dir(&base)
+        .env(
+            "MINI_CLOUDMUSIC_DATA_DIR",
+            base.parent().expect("runtime parent"),
+        )
         .args(std::env::args().skip(1))
         .exec()
         .into())
