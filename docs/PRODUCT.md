@@ -1,65 +1,38 @@
-# Product
+# MusicX Product Overview
 
-## Register
+MusicX is a compact native player for people who choose music with an agent and listen while working on a Mac. It connects music sources to a single playback session shared by the agent, the player window, and macOS media controls. The iPhone app is a standalone player with its own session and local data.
 
-product
+## Playback on macOS
 
-## Users
+The menu bar icon shows playback state and opens the compact player. Closing the window releases its resources while MusicX Helper keeps playing and recording history. The system's Now Playing controls and media keys remain available. To end the session and stop the helper, use Quit MusicX.
 
-在 macOS 桌面使用 Agent 选歌、日常后台听歌，以及在 iPhone 上独立播放的个人用户。需求来自本项目 README、GOAL.md 中已确认的约束，以及连续迭代中明确提出的纯 Rust、nsh.dev、低内存与简洁界面要求。iPhone 原生独立播放已由用户明确选择，不做 Mac 遥控端。
+The player shows the cover, track title, artist, album, audio quality badge, progress, and basic controls. The quality popover separates the reported stream quality from the listener's preference. The optional one-line lyric preview opens full lyrics, which follow playback and support seeking when the source provides timestamps. Track information links back to its source and album. Queue, history, playlists, and settings open beside the player so playback controls remain available.
 
-## Product Purpose
+Search and discovery are exposed through MCP. The panel focuses on the current session and music already available in albums, playlists, and history.
 
-用系统音频与正在播放控制承担日常播放，Agent通过Streamable HTTP MCP搜索和选歌。Mac菜单栏仅显示状态，点击打开按需原生面板。主屏展示封面、曲名、同一行的演唱者/专辑、音质、单行同步歌词、进度和播放操作，不提供搜索。歌名打开独立歌曲信息，封面/专辑名称打开专辑；可点击文字使用悬停底色，不附导航箭头。主窗顶栏只保留当前歌曲小封面入口，默认打开外侧「正在播放」。在外侧详情顶栏切换正在播放、播放历史、我的歌单和设置。点击单行歌词可打开完整歌词。音质从主屏锚定弹层选择，不切换详情页。iPhone此前采用独立音频会话与触屏导航，本轮明确暂停，不构建/启动/验收。
+## Queue, library, and history
 
-iPhone 提供歌曲链接/ID 与个人歌单选歌，扫码登录保存在手机自己的沙箱；歌单与曲目按 50 条分页。手机不自动使用 Mac 的授权和插件，跨设备 MCP 配对不在当前已验收能力中。
+| Collection | Behavior |
+| --- | --- |
+| Current queue | Tracks added individually or captured from an album, playlist, or history snapshot. Previous, next, and automatic advance follow the queue order. |
+| My Playlists | Saved local collections. Create, rename, pin, or delete playlists and add or remove tracks. Editing a saved playlist leaves the current queue intact. |
+| Playback history | A chronological log with separate progress for each play and a completion indicator. |
+| Liked Songs | A local playlist managed by the heart button. Track edits persist across launches. The playlist name and collection are protected. |
 
-## Brand Personality
+Changing sources, liking a track, and editing a playlist are independent of queue progression. A failed track selection preserves the existing queue. Quality changes keep the current track and playback position while requesting a new stream.
 
-简洁、专注播放、低负担。界面服从当前曲目，不增加与听歌无关的信息。
+## Music sources and accounts
 
-Mac 使用浅暖实色主屏与外侧详情，让封面成为视觉焦点。两块面板的圆角外侧和中缝保持透明。歌词连续排版，当前句有轻柔的底色提示。
+MusicX supports compatible MyGo Music plugins, including NetEase Cloud Music. A source can offer search, playback, lyrics, album information, account sign-in, or playlist import depending on its capabilities. The settings view surfaces the available actions for each source.
 
-## Anti-references
+Connect accounts with QR sign-in or, where supported on macOS, an embedded web sign-in window. Credentials belong to the source's local account session. Imported playlists are local snapshots that remain available after signing out. Playback of their tracks still depends on the source and its account requirements.
 
-不做完整音乐门户、推荐流、广告或搜索结果页。不增加常驻 WebView、装饰动画与持续渲染的效果。用户已经明确要求去掉搜索，保留播放相关功能。
+## Local data and upgrades
 
-## Design Principles
+Accounts, playlists, history, preferences, and the MCP token are stored in `~/Library/Application Support/MusicX/`. Installed plugins live in `mygo-plugins/`. The launcher prepares generated application bundles in `runtime/`.
 
-- 打开就能辨认当前曲目与播放状态，封面是主要视觉。
-- 选择歌曲由 Agent 完成，系统控制与面板操作同一个会话。
-- 面板可关闭，关闭后其进程与图片资源随之释放，后台继续播放和记录历史。
-- 面板按需解码和缓存封面，后台为系统「正在播放」保留当前曲目的缩略图。
-- 保留网易云账号、歌单、MyGo 插件与播放历史能力。
+On upgrade, the old `Mini Cloud Music` directory is moved into place when the new path is absent and the old helper has stopped. When both directories exist, MusicX uses the new path and preserves the legacy directory. [Startup and migration details](../README.md#local-data-and-upgrades)
 
-## Accessibility & Inclusion
+## iPhone
 
-保留现有按钮与进度条的无障碍标签、禁用状态和键盘关闭/退出操作。标题与艺人应清晰可读；错误、缓冲和缺失封面具有文字或图形回退。不增加装饰运动。用户未提出额外标准或特定辅助技术要求。
-
-Mac 歌词在来源提供原始 LRC 时按播放进度逐行同步、高亮并跟随，支持译文；没有时轴时保留普通文字。暂停、跳转和切歌与同一后台会话同步，手动阅读可通过跟随开关暂停和恢复。
-
-用户最新澄清：Mac详情在播放器外侧展开，保留完整播放主屏的可见与操作；关闭详情恢复迷你尺寸。已完成原生打开/关闭、快速取消、主控件与最小化恢复验收，正式已运行。
-
-当前播放列表、播放历史与播放器自己保存的本地歌单分离。从专辑、历史或“我的歌单”选歌时，用对应的完整列表快照替换当前列表，从所选位置开始；自动下一首和前后切歌均沿用此列表。“我的歌单”可创建、重命名、加入当前歌曲/播放列表和移除歌曲；仅保存歌曲信息及来源ID。队列与「我的歌单」使用外侧面板各自的标签，浏览和编辑不改动进行中的队列，播放失败保留原队列。历史继续独立记录，新增记录不会改变当前历史快照的播放顺序。静音后台完整公开歌单及原生历史/专辑快照已验证并正式运行；私人账号歌单保持独立未验收。
-
-Mac音质在主面板以小标记展示，点击在当前播放页的锚定弹层中选择，保持默认界面简洁。偏好与来源实际返回的档位/格式/码率等参数明确区分，缺失不臆测；切换保留曲目、最新进度/播放状态、列表和历史，偏好用于后续歌曲并持久保存。本项后台流程、可见原生选择和进度保持通过并正式运行，观察到96kHz FLAC，iPhone继续暂停。
-
-macOS 的账号、MCP 令牌、歌单、播放历史和偏好保存在 `~/Library/Application Support/MusicX/`。已安装的 MyGo 插件在 `mygo-plugins/`。CLI 在启动 AppKit 前将后台、面板和网页登录组件的应用包准备到该目录的 `runtime/`。
-
-升级时先退出旧后台。若新目录尚未创建，首次启动会把旧的 `Mini Cloud Music` 目录整体迁入，原账号、令牌、歌单、历史和插件随目录保留。若两个目录都存在，程序使用 `MusicX` 并保留旧目录。[启动和迁移说明](../README.md)
-
-2026-11-08当前设计：歌词是独立详情页，歌曲信息仅含曲目、专辑、来源链接和加入歌单入口。主屏默认显示一行随播放进度更新的歌词，设置中可关闭并持久保存；未提供时轴时给出明确提示，独立页仍保留普通歌词。
-
-“我的歌单”是播放器本地功能，不直接浏览第三方账号。设置关联网易云账号并浏览/导入个人歌单，也可输入网易云歌单链接或ID导入可访问的歌单。每次导入创建独立本地副本，不自动同步、不回写来源；断开来源账号保留本地歌单，来源身份仍用于播放时按需取流。插件数据源展示本机已安装项，保留既有宿主兼容边界。
-
-侧栏每次打开都比较当前屏幕两侧可用空间，向更宽的一侧展开，空间相同时向右。空间足够时维持主播放器位置。单个原生窗口/运行时，所有详情和计时器随临时面板关闭释放。
-
-MyGo插件按音乐数据源配置：设置中按需添加/编辑来源、查看能力和限制、扫码关联及导入来源歌单。本地歌单、当前播放列表和第三方来源库继续独立。内置目录固定提交及内容校验，未逐项实测的来源明确保留可用性限制，不为插件启用任意进程或局域网权限。扫码界面关闭时结束临时任务，不增加常驻JS运行时。
-
-当前Mac交互：播放队列、我的歌单、音乐来源各有单一职责。队列仅展示来源/顺序/时长，首次打开定位当前，并可手动定位；我的歌单以收藏浏览为默认，点击新建才出现表单，管理中才显示重命名/移除/删除，提供明确完成与取消。导入在歌单中直接选择来源，完成后一步返回本地歌单；网易云直接使用MyGo插件，与其他来源共用列表、账号、导入、配置和更多选项。
-
-Mac播放页在曲名右侧提供爱心，空心表示未收藏、实心表示已加入本地“我喜欢”，再点取消。首次喜欢创建收藏歌单，已有同名本地歌单沿用ID；该歌单可播放/添加/移除，名称和整张删除受保护。歌曲按插件命名空间及ID隔离；旧网易云记录与canonical网易云插件为兼容别名。收藏不改变当前播放，从歌单移除时同步播放页爱心，重启保留。
-
-网易云不再维护独立网络实现或专用账号界面。旧登录文件保留，不自动交给插件，重新扫码后按插件账号权限读取歌单与取流。Mac统一标准、高音质、无损三档，旧Hi-Res偏好按无损请求并说明。暂停升级不强制取流，恢复失败保留队列和进度；未取流时不冒用旧的实际音质。
-
-Mac增加网页登录选择，采用独立临时浏览器会话，由网站提供账号/验证码输入，成功后插件验证账号并关联，扫码仍保留。普通播放与面板不常驻WebKit；网页登录终止即结束临时组件。外部浏览器登录回调未由当前网易云插件提供，不能把打开官网当作完成关联。
+The iPhone app has touch navigation and independent background playback. It supports track selection by link or ID and browsing personal playlists with the device's own sign-in. Its MCP listener is local to the phone, and its account data and plugins live in the app sandbox. [iPhone build guide](../apps/ios/README.md)
