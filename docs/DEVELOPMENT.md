@@ -15,7 +15,7 @@ MUSICX_DATA_DIR="$test_data" MUSICX_PORT=45969 ./run
 
 Use the same data directory and port when connecting to the test session. To read its token, pass `MUSICX_DATA_DIR` to the `mcp-token` command. The test session starts with no plugins; add test sources explicitly.
 
-The current environment variables are `MUSICX_DATA_DIR`, `MUSICX_PORT`, and `MUSICX_WEB_AUTH`. Previous names remain accepted as upgrade aliases; a current name always takes precedence.
+The environment variables are `MUSICX_DATA_DIR`, `MUSICX_PORT`, and `MUSICX_WEB_AUTH`. Only these current names are supported; previous names are ignored, and previous data directories are not migrated.
 
 ## Package the macOS app
 

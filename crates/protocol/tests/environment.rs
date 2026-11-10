@@ -1,5 +1,5 @@
-//! Exercise current names and upgrade aliases in isolated processes.
-use musicx_protocol::{ADDRESS, address, data_dir, env_var, legacy_data_dir};
+//! Current configuration only; obsolete environment names must have no effect.
+use musicx_protocol::{ADDRESS, address, data_dir};
 use std::{path::PathBuf, process::Command};
 
 fn check(case: &str, values: &[(&str, &str)]) {
@@ -19,51 +19,47 @@ fn check(case: &str, values: &[(&str, &str)]) {
 }
 
 #[test]
-fn current_environment_names_configure_every_component() {
+fn current_environment_names_configure_data_and_port() {
     check(
         "current",
         &[
             ("MUSICX_DATA_DIR", "/tmp/musicx-current-data"),
             ("MUSICX_PORT", "45970"),
-            ("MUSICX_WEB_AUTH", "/tmp/musicx-current-webauth"),
         ],
     );
 }
 
 #[test]
-fn legacy_environment_names_remain_upgrade_aliases() {
+fn obsolete_environment_names_are_ignored() {
     check(
-        "legacy",
+        "defaults",
         &[
-            ("MINI_CLOUDMUSIC_DATA_DIR", "/tmp/musicx-legacy-data"),
+            ("MINI_CLOUDMUSIC_DATA_DIR", "/tmp/musicx-obsolete-data"),
             ("MINI_CLOUDMUSIC_PORT", "45971"),
-            ("MINI_CLOUDMUSIC_WEB_AUTH", "/tmp/musicx-legacy-webauth"),
         ],
     );
 }
 
 #[test]
-fn current_environment_names_take_precedence() {
+fn current_configuration_is_unaffected_by_obsolete_names() {
     check(
         "current",
         &[
             ("MUSICX_DATA_DIR", "/tmp/musicx-current-data"),
             ("MUSICX_PORT", "45970"),
-            ("MUSICX_WEB_AUTH", "/tmp/musicx-current-webauth"),
-            ("MINI_CLOUDMUSIC_DATA_DIR", "/tmp/musicx-legacy-data"),
+            ("MINI_CLOUDMUSIC_DATA_DIR", "/tmp/musicx-obsolete-data"),
             ("MINI_CLOUDMUSIC_PORT", "45971"),
-            ("MINI_CLOUDMUSIC_WEB_AUTH", "/tmp/musicx-legacy-webauth"),
         ],
     );
 }
 
 #[test]
-fn default_paths_retain_the_historical_migration_source() {
+fn default_configuration_uses_only_musicx_paths() {
     check("defaults", &[]);
 }
 
 #[test]
-fn invalid_current_port_does_not_reactivate_a_legacy_override() {
+fn invalid_current_port_uses_the_default() {
     check(
         "invalid-port",
         &[("MUSICX_PORT", "0"), ("MINI_CLOUDMUSIC_PORT", "45971")],
@@ -76,37 +72,17 @@ fn environment_child() {
         return;
     };
     match case.as_str() {
-        "current" | "legacy" => {
-            let (directory, port, webauth) = if case == "current" {
-                (
-                    "/tmp/musicx-current-data",
-                    45970,
-                    "/tmp/musicx-current-webauth",
-                )
-            } else {
-                (
-                    "/tmp/musicx-legacy-data",
-                    45971,
-                    "/tmp/musicx-legacy-webauth",
-                )
-            };
-            assert_eq!(data_dir(), Some(PathBuf::from(directory)));
-            assert_eq!(address().port(), port);
-            assert_eq!(env_var("MUSICX_WEB_AUTH"), Some(webauth.into()));
-            assert!(
-                legacy_data_dir().is_none(),
-                "custom data paths must never migrate default user data"
-            );
+        "current" => {
+            assert_eq!(data_dir(), Some(PathBuf::from("/tmp/musicx-current-data")));
+            assert_eq!(address().port(), 45970);
         }
         "defaults" => {
-            let current = data_dir().unwrap();
-            assert!(current.ends_with("Library/Application Support/MusicX"));
-            assert_eq!(
-                legacy_data_dir(),
-                Some(current.with_file_name("Mini Cloud Music"))
+            assert!(
+                data_dir()
+                    .unwrap()
+                    .ends_with("Library/Application Support/MusicX")
             );
             assert_eq!(address(), ADDRESS.parse().unwrap());
-            assert!(env_var("MUSICX_WEB_AUTH").is_none());
         }
         "invalid-port" => assert_eq!(address(), ADDRESS.parse().unwrap()),
         _ => panic!("unexpected environment fixture"),

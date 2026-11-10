@@ -1696,7 +1696,6 @@ name = "musicx"
 version = "0.2.0"
 dependencies = [
  "anyhow",
- "musicx-core",
  "musicx-mcp",
  "musicx-platform-apple",
  "musicx-plugins",

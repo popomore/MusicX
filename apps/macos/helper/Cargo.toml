@@ -6,7 +6,6 @@ rust-version = "1.97"
 publish = false
 
 [dependencies]
-musicx-core = { path = "../../../crates/core" }
 musicx-mcp = { path = "../../../crates/mcp" }
 musicx-platform-apple = { path = "../../../crates/platform-apple" }
 musicx-plugins = { path = "../../../crates/plugins" }

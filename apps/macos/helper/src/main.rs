@@ -1,16 +1,9 @@
-use musicx_core::{protocol, storage};
 use musicx_mcp as mcp;
 use musicx_platform_apple::{desktop, player};
 use musicx_plugins::{MYGO, WEB_AUTH_APP_NAME, configure_web_auth, mygo};
 
 use anyhow::{Context, Result, bail};
-use std::{net::TcpListener, process::ExitCode};
-
-fn migrate_data_dir() -> Result<()> {
-    storage::migrate_legacy_data(|| {
-        TcpListener::bind(protocol::address()).context("请退出旧版播放器后再迁移 MusicX 数据")
-    })
-}
+use std::process::ExitCode;
 
 fn run() -> Result<ExitCode> {
     let mut args = std::env::args().skip(1);
@@ -30,7 +23,6 @@ fn run() -> Result<ExitCode> {
         if args.next().is_some() {
             bail!("只接受一个插件目录");
         }
-        migrate_data_dir()?;
         println!(
             "已安装 MyGo 插件 {}",
             mygo::install(std::path::Path::new(&directory))?
@@ -42,7 +34,6 @@ fn run() -> Result<ExitCode> {
     }
     match command.as_deref() {
         None | Some("start") => {
-            migrate_data_dir()?;
             let runtime = desktop::prepare_runtime(WEB_AUTH_APP_NAME)?;
             configure_web_auth(runtime.web_auth_executable.clone())?;
             player::configure(&MYGO)?;
@@ -54,7 +45,6 @@ fn run() -> Result<ExitCode> {
             return Ok(desktop::run(runtime));
         }
         Some("mcp-token") => {
-            migrate_data_dir()?;
             println!("{}", mcp::read_token()?);
         }
         Some("--help" | "-h") => {

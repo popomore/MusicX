@@ -38,11 +38,11 @@ Open **Settings → MCP Connection** in MusicX and choose **Copy MCP Configurati
 
 The client can search, play, queue, seek, and work with sources, local playlists, and playback history. [MCP tool reference](docs/DEVELOPMENT.md#mcp-tools)
 
-## Local data and upgrades
+## Local data
 
 MusicX saves accounts, preferences, playlists, history, and the MCP token in `~/Library/Application Support/MusicX/`. Installed plugins live in `mygo-plugins/`.
 
-Quit the old helper before upgrading. On startup, MusicX moves the legacy `Mini Cloud Music` directory into place if the new path is absent. When both directories exist, it uses the new path and preserves the old directory.
+MusicX uses only its current data directory and application identity. Previous application identities, environment names, and data directories are not imported or migrated. Existing files elsewhere are left untouched.
 
 ## Project guides
 

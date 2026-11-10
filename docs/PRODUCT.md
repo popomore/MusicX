@@ -29,11 +29,11 @@ MusicX starts without a default source. Users explicitly add compatible MyGo Mus
 
 Connect accounts with QR sign-in or, where supported on macOS, an embedded web sign-in window. Credentials belong to the source's local account session. Imported playlists are local snapshots that remain available after signing out. Playback of their tracks still depends on the source and its account requirements.
 
-## Local data and upgrades
+## Local data
 
 Install the macOS app by dragging MusicX from its disk image to Applications. Accounts, playlists, history, preferences, and the MCP token live in `~/Library/Application Support/MusicX/`. Installed plugins live in `mygo-plugins/`.
 
-On upgrade, the old `Mini Cloud Music` directory is moved into place when the new path is absent and the old helper has stopped. When both directories exist, MusicX uses the new path and preserves the legacy directory. [Startup and migration details](../README.md#local-data-and-upgrades)
+MusicX uses its current application identity and data directory without importing previous versions. Existing files elsewhere are left untouched. [Local data details](../README.md#local-data)
 
 ## iPhone
 
