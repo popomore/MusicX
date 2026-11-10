@@ -871,7 +871,11 @@ fn download(
     notify: Notify,
     access: std::sync::Arc<nsh_engine::Access>,
 ) -> DownloadTask {
-    if let Some(transport) = TRANSPORT.get() {
+    // The native resolver already mapped dev-server assets to `url`.
+    // Keep that path: the core context below has no asset base.
+    let asset = uri.starts_with("asset:/");
+    let cache = if asset { None } else { cache };
+    if let Some(transport) = TRANSPORT.get().filter(|_| !asset) {
         use nsh_core::image::loader::{Context, Priority, loader};
         let context = Context {
             asset_base: None,
