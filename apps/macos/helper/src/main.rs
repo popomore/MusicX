@@ -1,11 +1,12 @@
 use musicx_mcp as mcp;
 use musicx_platform_apple::{desktop, player};
-use musicx_plugins::{MYGO, WEB_AUTH_APP_NAME, configure_web_auth, mygo};
+use musicx_plugins::{MYGO, configure_web_auth, mygo};
 
 use anyhow::{Context, Result, bail};
 use std::process::ExitCode;
 
 fn run() -> Result<ExitCode> {
+    let web_auth_name = format!("{} 网页登录", desktop::APP_NAME);
     let mut args = std::env::args().skip(1);
     let command = args.next();
     if command.as_deref() == Some("package-app") {
@@ -13,7 +14,7 @@ fn run() -> Result<ExitCode> {
         if args.next().is_some() {
             bail!("Expected one app bundle path");
         }
-        desktop::package_app(std::path::Path::new(&destination), WEB_AUTH_APP_NAME)?;
+        desktop::package_app(std::path::Path::new(&destination), &web_auth_name)?;
         return Ok(ExitCode::SUCCESS);
     }
     if matches!(command.as_deref(), Some("plugin-install" | "plugin-update")) {
@@ -38,7 +39,7 @@ fn run() -> Result<ExitCode> {
     }
     match command.as_deref() {
         None | Some("start") => {
-            let runtime = desktop::prepare_runtime(WEB_AUTH_APP_NAME)?;
+            let runtime = desktop::prepare_runtime(&web_auth_name)?;
             configure_web_auth(runtime.web_auth_executable.clone())?;
             player::configure(&MYGO)?;
             mcp::start(mcp::Services {

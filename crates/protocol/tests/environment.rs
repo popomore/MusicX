@@ -1,5 +1,5 @@
 //! Current configuration only; obsolete environment names must have no effect.
-use musicx_protocol::{ADDRESS, address, data_dir};
+use musicx_protocol::{ADDRESS, APP_NAME, address, data_dir};
 use std::{path::PathBuf, process::Command};
 
 fn check(case: &str, values: &[(&str, &str)]) {
@@ -80,7 +80,7 @@ fn environment_child() {
             assert!(
                 data_dir()
                     .unwrap()
-                    .ends_with("Library/Application Support/MusicX")
+                    .ends_with(PathBuf::from("Library/Application Support").join(APP_NAME))
             );
             assert_eq!(address(), ADDRESS.parse().unwrap());
         }

@@ -192,6 +192,33 @@ fn show_panel() {
     });
 }
 
+fn panel_options() -> AppOptions {
+    let data_dir = crate::protocol::data_dir();
+    let cache = data_dir
+        .as_ref()
+        .map_or_else(nsh_platform_macos::CacheOptions::off, |directory| {
+            nsh_platform_macos::CacheOptions::at(nsh_platform_macos::CacheLocation::Dir(
+                directory.join("cache"),
+            ))
+        });
+    AppOptions {
+        title: crate::protocol::APP_NAME.into(),
+        app_id: crate::protocol::component_app_id("panel"),
+        data_dir: data_dir.map(|directory| directory.join("panel")),
+        size: (320, 512),
+        appearance: nsh_platform_macos::Appearance::Light,
+        transparent: true,
+        cache: cache.with_images(nsh_platform_macos::CachePolicy::MaxSize(
+            nsh_platform_macos::ByteSize::mib(4),
+        )),
+        ..Default::default()
+    }
+}
+
+fn panel_root() -> Root {
+    Root::of::<crate::ui::App>().app_id(crate::protocol::component_app_id("panel"))
+}
+
 pub fn run_panel() -> ExitCode {
     nsh_core::image::budget().set_limit(4 * 1024 * 1024);
     let mtm = MainThreadMarker::new().expect("main thread");
@@ -242,17 +269,7 @@ pub fn run_panel() -> ExitCode {
                 .register::<nsh_base::Popover>();
         }) as nsh_base::parts::Part,
     ])]);
-    let options = AppOptions {
-        title: "MusicX".into(),
-        app_id: "local.musicx.panel".into(),
-        size: (320, 512),
-        appearance: nsh_platform_macos::Appearance::Light,
-        transparent: true,
-        cache: nsh_platform_macos::CacheOptions::default().with_images(
-            nsh_platform_macos::CachePolicy::MaxSize(nsh_platform_macos::ByteSize::mib(4)),
-        ),
-        ..Default::default()
-    };
+    let options = panel_options();
     let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(320.0, 512.0));
     let window: Retained<PanelWindow> = unsafe {
         msg_send![PanelWindow::alloc(mtm), initWithContentRect: frame,
@@ -262,7 +279,7 @@ pub fn run_panel() -> ExitCode {
     unsafe {
         window.setReleasedWhenClosed(false);
     }
-    window.setTitle(ns_string!("MusicX"));
+    window.setTitle(&NSString::from_str(crate::protocol::APP_NAME));
     window.setOpaque(false);
     window.setBackgroundColor(Some(&NSColor::clearColor()));
     window.setHasShadow(true);
@@ -272,7 +289,7 @@ pub fn run_panel() -> ExitCode {
         .expect("valid player palette");
     window.setContentView(Some(&view.view()));
     window.center();
-    view.load(nsh_platform_macos::App::Rust(Root::of::<crate::ui::App>()));
+    view.load(nsh_platform_macos::App::Rust(panel_root()));
     // AppKit must finish launching before it can activate this child process.
     // The delegate also uses the same presentation path for Dock reopens.
     PANEL.with_borrow_mut(|panel| {
@@ -283,7 +300,7 @@ pub fn run_panel() -> ExitCode {
         })
     });
     let notifications = NSDistributedNotificationCenter::defaultCenter();
-    let reopen = NSString::from_str(crate::protocol::PANEL_REOPEN_NOTIFICATION);
+    let reopen = NSString::from_str(&crate::protocol::panel_reopen_notification());
     let process_id = NSString::from_str(&std::process::id().to_string());
     // Observe only our own PID so installed, mounted and QA copies cannot
     // reopen one another. Register on the AppKit thread before launch completes.
@@ -317,8 +334,24 @@ pub fn stop_panel() {
 }
 
 #[cfg(test)]
-mod geometry_tests {
+mod tests {
     use super::*;
+
+    #[test]
+    fn loaded_panel_identity_and_storage_are_scoped_to_the_instance() {
+        let app = nsh_platform_macos::App::Rust(panel_root());
+        let expected_id = crate::protocol::component_app_id("panel");
+        assert_eq!(app.app_id(), Some(expected_id.as_str()));
+        let options = panel_options();
+        assert_eq!(options.app_id, expected_id);
+        let data_dir = crate::protocol::data_dir().expect("test data directory");
+        assert!(options.data_dir.unwrap().starts_with(&data_dir));
+        let nsh_platform_macos::CacheLocation::Dir(cache_dir) = options.cache.location else {
+            panic!("panel cache must have an explicit instance directory");
+        };
+        assert!(cache_dir.starts_with(data_dir));
+    }
+
     fn rect(x: f64, width: f64) -> NSRect {
         NSRect::new(NSPoint::new(x, 100.0), NSSize::new(width, 512.0))
     }

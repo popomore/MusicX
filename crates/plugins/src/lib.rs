@@ -20,7 +20,7 @@ use musicx_plugin_api::{DataSource, Media};
 use protocol::{AlbumPage, LocalLibraryAction, Quality, Track, TrackInfo};
 use serde_json::Value;
 
-pub use web_auth::{APP_NAME as WEB_AUTH_APP_NAME, configure as configure_web_auth};
+pub use web_auth::configure as configure_web_auth;
 
 pub struct MyGo;
 pub static MYGO: MyGo = MyGo;
