@@ -52,6 +52,8 @@ MusicX uses only its current data directory and application identity. Previous a
 
 [Development guide](docs/DEVELOPMENT.md) · [Design guide](docs/DESIGN.md) · [Product overview](docs/PRODUCT.md) · [iPhone build guide](apps/ios/README.md)
 
+[Plugin capabilities and MyGo differences](docs/PLUGINS.md)
+
 ## Acknowledgments
 
 Thank you to [MyGo Music](https://github.com/egoist/mygo-music), its authors, and the plugin contributors for the plugin APIs and ecosystem that MusicX supports. Browse [MyGo music plugins](https://github.com/topics/mygo-music-plugin) or read the [MyGo plugin development guide](https://github.com/egoist/mygo-music#plugins).

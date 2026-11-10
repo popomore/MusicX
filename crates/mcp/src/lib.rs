@@ -240,6 +240,7 @@ async fn ui_action(
         }
         UiAction::PlayQueue { index, revision } => Action::Select { index, revision },
         UiAction::Quality { quality } => Action::Quality(quality),
+        UiAction::Normalization { enabled } => Action::Normalization(enabled),
         UiAction::Pause => Action::Pause,
         UiAction::Resume => Action::Resume,
         UiAction::Toggle => Action::Toggle,
@@ -362,6 +363,7 @@ struct PluginSearch {
     plugin: String,
     query: String,
     offset: Option<u64>,
+    kind: Option<String>,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -442,6 +444,10 @@ struct SourceInput {
     playlist_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     method: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    offset: Option<u64>,
 }
 
 fn tool_error(error: impl std::fmt::Display) -> ErrorData {
@@ -458,7 +464,12 @@ async fn blocking<T: Send + 'static>(
     tokio::task::spawn_blocking(work)
         .await
         .map_err(tool_error)?
-        .map_err(tool_error)
+        .map_err(|error| {
+            ErrorData::internal_error(
+                error.to_string(),
+                mygo::error_code(&error).map(|code| serde_json::json!({"plugin_code":code})),
+            )
+        })
 }
 
 impl PlayerTools {
@@ -494,7 +505,7 @@ impl PlayerTools {
 #[tool_router]
 impl PlayerTools {
     #[tool(
-        description = "管理音乐数据源。action=list/catalog/catalog_view/refresh_catalog/get/install/configure/account/sign_in/poll/cancel/sign_out/playlists/import_playlist。catalog_view/refresh_catalog返回sources、refreshing和warning，旧缓存立即可读；install可直接用owner/repo或GitHub仓库URL，无需在目录中。插件source为mygo:ID。configure的values按声明字段保存，敏感值不回显；sign_in返回扫码任务，poll/cancel用job。导入仅建本地副本，不回写来源歌单。"
+        description = "管理音乐数据源。action=list/catalog/catalog_view/refresh_catalog/get/install/check_update/update/uninstall/configure/account/sign_in/poll/cancel/sign_out/playlists/import_playlist/import_liked/import_recent/artist/album/shows/show。artist/album/show需要id，show可用offset分页。catalog_view/refresh_catalog返回sources、refreshing和warning，旧缓存立即可读；install可直接用owner/repo或GitHub仓库URL，无需在目录中。插件source为mygo:ID。configure的values按声明字段保存，敏感值不回显；sign_in返回扫码任务，poll/cancel用job。导入仅建本地副本，不回写来源歌单。"
     )]
     async fn manage_music_sources(
         &self,
@@ -588,15 +599,22 @@ impl PlayerTools {
     }
 
     #[tool(
-        description = "通过指定 MyGo 插件搜索歌曲。tracks 返回统一 Track，duration 单位为秒，含完整来源和元数据，可直接传给 play_song/enqueue_song。"
+        description = "通过指定 MyGo 插件搜索。kind=tracks(默认)/albums/artists/playlists/shows，offset 分页。歌曲 tracks 返回统一 Track，duration 单位为秒，可直接传给 play_song/enqueue_song。歌手/专辑/播客 ID 可用于 manage_music_sources 的 artist/album/show。"
     )]
     async fn plugin_search(
         &self,
         Parameters(input): Parameters<PluginSearch>,
     ) -> Result<CallToolResult, ErrorData> {
-        blocking(move || mygo::search(&input.plugin, &input.query, input.offset.unwrap_or(0)))
-            .await
-            .and_then(output)
+        blocking(move || {
+            mygo::search_kind(
+                &input.plugin,
+                &input.query,
+                input.kind.as_deref().unwrap_or("tracks"),
+                input.offset.unwrap_or(0),
+            )
+        })
+        .await
+        .and_then(output)
     }
 
     #[tool(
@@ -773,6 +791,9 @@ mod tests {
             self.seen.lock().unwrap().push(track.clone());
             anyhow::ensure!(!self.fail, "fixture source unavailable");
             Ok(Media {
+                lease: None,
+                gain_db: None,
+                peak: None,
                 track,
                 url: "https://example.com/resolved.mp3".parse().unwrap(),
                 user_agent: Some("Independent source fixture".into()),

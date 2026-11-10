@@ -384,6 +384,7 @@ pub(super) fn shell(model: Model) -> impl IntoElement {
                             move || model.page.get() == Page::Sources,
                             move || {
                                 crate::source_browser::sources_view(
+                                    model,
                                     move || model.open(Page::Player),
                                     move || model.open(Page::Library),
                                     None,
@@ -394,6 +395,10 @@ pub(super) fn shell(model: Model) -> impl IntoElement {
                         .child(when(
                             move || model.page.get() == Page::Info,
                             move || super::info(model),
+                        ))
+                        .child(when(
+                            move || model.page.get() == Page::Discovery,
+                            move || crate::discovery_ui::browse(model),
                         ))
                         .child(when(
                             move || model.page.get() == Page::History,
@@ -922,6 +927,9 @@ fn queue(model: Model) -> impl IntoElement {
                     }
                     Some(QueueContext::Playlist { name, .. }) => (name.clone(), Some("来源歌单")),
                     Some(QueueContext::History) => ("播放历史".into(), None),
+                    Some(QueueContext::SourceCollection { name, .. }) => {
+                        (name.clone(), Some("来源曲目"))
+                    }
                     None => ("临时队列".into(), None),
                 };
                 let count = queue.queue.len();
@@ -1223,6 +1231,8 @@ pub(super) fn song_info(model: Model) -> impl IntoElement {
         view()
             .pt(px(16.0))
             .gap(px(10.0))
+            .child(crate::discovery_ui::artist_links(model))
+            .child(crate::discovery_ui::episode_details(model))
             .child(
                 text(move || {
                     model.status.with(|s| {

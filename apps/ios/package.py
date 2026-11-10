@@ -13,6 +13,7 @@ app = destination / 'MusicX.app'
 path = app / 'Info.plist'
 info = plistlib.loads(path.read_bytes())
 info['UIBackgroundModes'] = ['audio']
+info.setdefault('NSAppTransportSecurity', {})['NSAllowsLocalNetworking'] = True
 info['UISupportedInterfaceOrientations'] = ['UIInterfaceOrientationPortrait']
 for key in ['NSMicrophoneUsageDescription', 'NSSpeechRecognitionUsageDescription']:
     info.pop(key, None)

@@ -47,6 +47,17 @@ static METADATA: Mutex<VecDeque<(String, String, Track)>> = Mutex::new(VecDeque:
 
 /// Normalize source results at the adapter boundary so players receive one Track type.
 pub fn search(plugin: &str, query: &str, offset: u64) -> Result<Value> {
+    search_kind(plugin, query, "tracks", offset)
+}
+
+pub fn search_kind(plugin: &str, query: &str, kind: &str, offset: u64) -> Result<Value> {
+    ensure!(
+        matches!(
+            kind,
+            "tracks" | "albums" | "artists" | "playlists" | "shows"
+        ),
+        "不支持此搜索类型"
+    );
     let query = query.trim();
     ensure!(
         !query.is_empty() && query.chars().count() <= 120,
@@ -55,8 +66,11 @@ pub fn search(plugin: &str, query: &str, offset: u64) -> Result<Value> {
     let mut result = invoke(
         plugin,
         "search",
-        json!({"query":query,"kind":"tracks","offset":offset}),
+        json!({"query":query,"kind":kind,"offset":offset}),
     )?;
+    if kind != "tracks" {
+        return Ok(result);
+    }
     let rows = result["tracks"].as_array().context("来源未返回歌曲列表")?;
     let tracks: Vec<_> = rows
         .iter()
@@ -107,11 +121,44 @@ pub(crate) fn catalog_track(plugin: &str, value: &Value) -> Option<Track> {
             .chars()
             .take(1024)
             .collect(),
+        artists: value["artists"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .take(64)
+            .filter_map(|a| {
+                Some(crate::protocol::Artist {
+                    id: a["id"].as_str()?.chars().take(512).collect(),
+                    name: a["name"].as_str()?.chars().take(512).collect(),
+                    cover_url: a["imageUrl"]
+                        .as_str()
+                        .and_then(|url| crate::assets::artwork(plugin, url)),
+                })
+            })
+            .collect(),
+        episode: value["showId"]
+            .as_str()
+            .filter(|id| !id.is_empty())
+            .map(|id| crate::protocol::Episode {
+                show_id: id.chars().take(512).collect(),
+                description: value["description"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .chars()
+                    .take(8000)
+                    .collect(),
+                published: value["published"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .chars()
+                    .take(100)
+                    .collect(),
+            }),
         duration: value["duration"].as_f64().unwrap_or(0.0) / 1000.0,
         cover_url: [&album["imageUrl"], &value["imageUrl"], &value["coverUrl"]]
             .into_iter()
             .filter_map(Value::as_str)
-            .find_map(musicx_core::metadata::artwork_url),
+            .find_map(|url| crate::assets::artwork(plugin, url)),
         album: album["id"]
             .as_str()
             .filter(|id| !id.is_empty())
@@ -199,7 +246,15 @@ pub fn source_name(plugin: &str) -> String {
     }
     plugin_root()
         .and_then(|root| manifest(&root.join(plugin)))
-        .map_or_else(|_| plugin.to_owned(), |manifest| manifest.name)
+        .map_or_else(
+            |_| plugin.to_owned(),
+            |manifest| {
+                crate::localization::translations(plugin)
+                    .get(&manifest.name)
+                    .cloned()
+                    .unwrap_or(manifest.name)
+            },
+        )
 }
 
 pub(crate) fn source_repository(plugin: &str) -> Option<String> {
@@ -214,7 +269,12 @@ pub fn album(track: &Track) -> Result<crate::protocol::AlbumPage> {
     let source = track.source.as_ref().context("缺少来源")?;
     let mut album = track.album.clone().context("当前来源没有专辑信息")?;
     let result = invoke(&source.plugin, "album", json!({"id":album.id}))?;
-    if let Some(name) = result["name"].as_str().filter(|v| !v.is_empty()) {
+    let descriptor = if result["album"].is_object() {
+        &result["album"]
+    } else {
+        &result
+    };
+    if let Some(name) = descriptor["name"].as_str().filter(|v| !v.is_empty()) {
         album.name = name.chars().take(512).collect();
     }
     remember_artwork(&source.plugin, &result);
@@ -265,6 +325,49 @@ fn parse_lyrics(result: &Value) -> crate::protocol::Lyrics {
         })
         .unwrap_or_default();
     crate::protocol::Lyrics {
+        lines: lines
+            .into_iter()
+            .flatten()
+            .take(2048)
+            .filter_map(|line| {
+                let start = line["start"].as_u64()?;
+                let words: Vec<_> = line["words"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .take(1024)
+                    .filter_map(|word| {
+                        let start = word["start"].as_u64()?;
+                        let end = word["end"].as_u64()?;
+                        (end >= start).then(|| crate::protocol::LyricWord {
+                            start,
+                            end,
+                            text: word["text"]
+                                .as_str()
+                                .unwrap_or_default()
+                                .chars()
+                                .take(512)
+                                .collect(),
+                        })
+                    })
+                    .collect();
+                Some(crate::protocol::LyricLine {
+                    start,
+                    end: line["end"].as_u64().filter(|end| *end >= start),
+                    text: line["text"]
+                        .as_str()
+                        .map(|s| s.chars().take(4000).collect())
+                        .unwrap_or_else(|| words.iter().map(|w| w.text.as_str()).collect()),
+                    translation: line["translation"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .chars()
+                        .take(4000)
+                        .collect(),
+                    words,
+                })
+            })
+            .collect(),
         text: if original.is_empty() {
             result["lrc"].as_str().unwrap_or_default()
         } else {
@@ -301,7 +404,7 @@ mod catalog_tests {
         let rt = Runtime::new().unwrap();
         let context = JsContext::full(&rt).unwrap();
         context.with(|ctx| {
-            ctx.eval::<(),_>(r#"globalThis.__storage='{}';globalThis.__settings='{}';globalThis.__platform='darwin';globalThis.__arch='arm64';globalThis.__fetch=()=>JSON.stringify({status:200,body:'{}',headers:[['set-cookie','a=1; Expires=Thu, 01 Jan 2037 00:00:00 GMT'],['set-cookie','b=2']]});"#).unwrap();
+            ctx.eval::<(),_>(r#"globalThis.__translations='{}';globalThis.__language='zh-CN';globalThis.__storage='{}';globalThis.__settings='{}';globalThis.__platform='darwin';globalThis.__arch='arm64';globalThis.__fetch=()=>JSON.stringify({status:200,body:'{}',headers:[['set-cookie','a=1; Expires=Thu, 01 Jan 2037 00:00:00 GMT'],['set-cookie','b=2']]});"#).unwrap();
             ctx.eval::<(),_>(include_str!("mygo_host.js")).unwrap();
             ctx.eval::<(),_>("globalThis.checked='';fetch('https://example.com').then(r=>checked=JSON.stringify(r.headers.getSetCookie()));").unwrap();
             while ctx.execute_pending_job() {}
@@ -331,9 +434,13 @@ mod catalog_tests {
 #[derive(Serialize, Deserialize)]
 pub(crate) struct Manifest {
     pub id: String,
+    #[serde(default)]
     pub name: String,
+    #[serde(default)]
     pub version: String,
+    #[serde(default = "default_main")]
     pub main: String,
+    #[serde(default = "default_playback")]
     pub playback: String,
     #[serde(default)]
     pub settings: Vec<crate::protocol::SourceSettingDefinition>,
@@ -343,6 +450,13 @@ pub(crate) struct Manifest {
     pub metadata: std::collections::BTreeMap<String, Value>,
     #[serde(default)]
     pub permissions: Permissions,
+}
+
+fn default_main() -> String {
+    "index.js".into()
+}
+fn default_playback() -> String {
+    "stream".into()
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -381,27 +495,54 @@ pub(crate) fn valid_id(id: &str) -> bool {
 }
 
 pub(crate) fn manifest(dir: &Path) -> Result<Manifest> {
-    let value: Manifest = serde_json::from_str(&fs::read_to_string(dir.join("plugin.json"))?)?;
+    let mut value: Manifest = serde_json::from_str(&fs::read_to_string(dir.join("plugin.json"))?)?;
     ensure!(valid_id(&value.id), "无效的 MyGo 插件 ID");
+    if value.name.is_empty() {
+        value.name = value.id.clone();
+    }
     Ok(value)
 }
 
 pub(crate) fn entry(dir: &Path, manifest: &Manifest) -> Result<PathBuf> {
     let path = dir.join(&manifest.main).canonicalize()?;
     ensure!(
-        path.starts_with(dir.canonicalize()?) && path.extension().is_some_and(|ext| ext == "js"),
-        "目前只支持插件目录内的 JavaScript 入口"
+        path.starts_with(dir.canonicalize()?)
+            && path
+                .extension()
+                .is_some_and(|ext| ext == "js" || ext == "ts"),
+        "目前只支持插件目录内的 JavaScript 或 TypeScript 入口"
     );
     ensure!(fs::metadata(&path)?.len() <= MAX_BODY, "插件入口超过 2 MiB");
     Ok(path)
 }
 
 pub fn install(source: &Path) -> Result<String> {
+    install_mode(source, false)
+}
+pub fn update_local(source: &Path) -> Result<String> {
+    install_mode(source, true)
+}
+fn install_mode(source: &Path, replace: bool) -> Result<String> {
     let manifest = manifest(source)?;
+    ensure!(
+        crate::music_sources::limitation(&manifest, false, false).is_none(),
+        "来源超出当前宿主支持范围"
+    );
     let script = entry(source, &manifest)?;
     let root = plugin_root()?;
     let target = root.join(&manifest.id);
-    ensure!(!target.exists(), "插件 {} 已存在", manifest.id);
+    ensure!(!replace || target.is_dir(), "请先安装此来源，再更新");
+    let _settings = crate::music_sources::SETTINGS_WRITER
+        .lock()
+        .map_err(|_| anyhow!("配置写入暂不可用"))?;
+    let _guard = PLUGIN_CALL
+        .lock()
+        .map_err(|_| anyhow!("插件运行锁不可用"))?;
+    ensure!(
+        !crate::music_sources::auth_active(&manifest.id),
+        "请先完成或取消此来源的账号关联"
+    );
+    ensure!(replace || !target.exists(), "插件 {} 已存在", manifest.id);
     let pending = root.join(format!(
         ".install-{}",
         musicx_core::storage::random_hex::<8>()
@@ -410,9 +551,49 @@ pub fn install(source: &Path) -> Result<String> {
     let result = (|| -> Result<()> {
         let mut installed = manifest;
         installed.main = "index.js".into();
-        fs::copy(script, pending.join("index.js"))?;
+        let code =
+            crate::script::javascript(&script.to_string_lossy(), &fs::read_to_string(&script)?)?;
+        crate::music_sources::check_single_file_script(&code)?;
+        fs::write(pending.join("index.js"), code)?;
         fs::write(pending.join("plugin.json"), serde_json::to_vec(&installed)?)?;
-        fs::rename(&pending, &target)?;
+        for language in ["en", "zh-CN"] {
+            let path = source.join("locales").join(format!("{language}.json"));
+            if path.exists() {
+                ensure!(
+                    path.canonicalize()?.starts_with(source.canonicalize()?),
+                    "插件语言包路径无效"
+                );
+                ensure!(fs::metadata(&path)?.len() <= 65536, "插件语言包过大");
+                let bytes = fs::read(path)?;
+                serde_json::from_slice::<std::collections::BTreeMap<String, String>>(&bytes)?;
+                fs::create_dir_all(pending.join("locales"))?;
+                fs::write(
+                    pending.join("locales").join(format!("{language}.json")),
+                    bytes,
+                )?;
+            }
+        }
+        if replace && target.exists() {
+            ensure!(
+                !fs::symlink_metadata(&target)?.file_type().is_symlink(),
+                "插件目录类型无效"
+            );
+            if target.join("settings.json").is_file() {
+                fs::copy(target.join("settings.json"), pending.join("settings.json"))?;
+            }
+            let backup = root.join(format!(
+                ".backup-{}",
+                musicx_core::storage::random_hex::<8>()
+            ));
+            fs::rename(&target, &backup)?;
+            if let Err(error) = fs::rename(&pending, &target) {
+                let _ = fs::rename(&backup, &target);
+                return Err(error.into());
+            }
+            let _ = fs::remove_dir_all(backup);
+        } else {
+            fs::rename(&pending, &target)?;
+        }
         Ok(())
     })();
     if result.is_err() {
@@ -420,6 +601,49 @@ pub fn install(source: &Path) -> Result<String> {
     }
     result?;
     Ok(target.file_name().unwrap().to_string_lossy().into_owned())
+}
+
+pub(crate) fn uninstall(id: &str) -> Result<()> {
+    ensure!(valid_id(id), "无效的插件 ID");
+    let _settings = crate::music_sources::SETTINGS_WRITER
+        .lock()
+        .map_err(|_| anyhow!("配置写入暂不可用"))?;
+    let _guard = PLUGIN_CALL
+        .lock()
+        .map_err(|_| anyhow!("插件运行锁不可用"))?;
+    ensure!(
+        !crate::music_sources::auth_active(id),
+        "请先完成或取消此来源的账号关联"
+    );
+    let target = plugin_root()?.join(id);
+    ensure!(
+        target.is_dir() && !fs::symlink_metadata(&target)?.file_type().is_symlink(),
+        "来源未安装或目录类型无效"
+    );
+    fs::remove_dir_all(target)?;
+    let account = state_dir()?.join(format!("mygo-{id}-storage.json"));
+    match fs::remove_file(account) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.into()),
+    }
+    Ok(())
+}
+
+pub(crate) fn minimum_version_limitation(m: &Manifest) -> Option<String> {
+    let version = m.metadata.get("minAppVersion")?;
+    let Some(version) = version.as_str() else {
+        return Some("插件最低版本声明格式无效".into());
+    };
+    if version.is_empty() {
+        return None;
+    }
+    let parsed: Option<Vec<u64>> = version.split('.').map(|v| v.parse().ok()).collect();
+    let Some(parsed) = parsed.filter(|v| v.len() == 3) else {
+        return Some("插件最低版本声明格式无效".into());
+    };
+    (parsed.as_slice() > [0, 1, 22].as_slice())
+        .then(|| format!("此插件要求 MyGo {version} 协议，当前兼容基线为 0.1.22"))
 }
 
 pub fn list() -> Result<Value> {
@@ -564,6 +788,9 @@ fn invoke_inner(
     ensure!(valid_id(id), "无效的插件 ID");
     let dir = plugin_root()?.join(id);
     let manifest = manifest(&dir).context("未安装此 MyGo 插件")?;
+    if let Some(reason) = minimum_version_limitation(&manifest) {
+        anyhow::bail!("{reason}");
+    }
     ensure!(
         id == manifest.id && compatible(&manifest),
         "此插件需要外部进程或远程播放"
@@ -614,6 +841,7 @@ fn invoke_inner(
     let context = JsContext::full(&rt)?;
     context.with(|ctx| {
         let global = ctx.globals();
+        let _oauth = crate::oauth::Bindings::install(&ctx, login.clone(), grants.clone(), deadline)?;
         let web_job=login.clone();let web_grants=grants.clone();let web_name=manifest.name.clone();
         global.set("__webSignIn",Function::new(ctx.clone(),move|text:String|{
             let result=(||->Result<Value>{
@@ -636,6 +864,8 @@ fn invoke_inner(
         })?)?;
         global.set("__storage", storage)?;
         global.set("__settings", settings)?;
+        global.set("__language", crate::localization::language())?;
+        global.set("__translations", serde_json::to_string(&crate::localization::translations(id))?)?;
         let prompt = login.clone();
         global.set(
             "__signInPrompt",
@@ -645,7 +875,7 @@ fn invoke_inner(
                     .is_some_and(|job| job.prompt(&value).is_ok())
             })?,
         )?;
-        global.set("__arch", std::env::consts::ARCH.replace("aarch64", "arm64"))?;
+        global.set("__arch", std::env::consts::ARCH.replace("aarch64", "arm64").replace("x86_64", "amd64"))?;
         global.set(
             "__platform",
             if cfg!(target_os = "ios") {
@@ -721,7 +951,8 @@ fn invoke_inner(
             loading.finish::<()>()?;
             let function: Function = module.namespace()?.get(export)?;
             let args = ctx.json_parse(args.to_string())?;
-            let pending: MaybePromise = function.call((args,))?;
+            let wrapper: Function = global.get("__invoke")?;
+            let pending: MaybePromise = wrapper.call((function, args))?;
             let result: JsValue = loop {
                 if let Some(value) = pending.result() {
                     break value?;
@@ -740,10 +971,34 @@ fn invoke_inner(
         })()
         .catch(&ctx)
         .map_err(|error| anyhow!("插件 {id} 的 {export} 失败：{error}"))?;
-        Ok(serde_json::from_str(
+        let result: Value = serde_json::from_str(
             &result.unwrap_or_else(|| "null".into()),
-        )?)
+        )?;
+        if result["ok"].as_bool() == Some(true) { Ok(result["value"].clone()) }
+        else {
+            let code = result["code"].as_str().unwrap_or_default();
+            let prompt = match code { "signIn" => "请先在音乐来源中关联账号", "setup" => "请检查来源设置", "unavailable" => "来源暂不能播放此项目", "unsupported" => "此来源未实现该能力", _ => "来源调用失败" };
+            Err(anyhow!(PluginFailure { code:code.into(), message: format!("{prompt}：{}", result["message"].as_str().unwrap_or_default().chars().take(512).collect::<String>()) }))
+        }
     })
+}
+
+#[derive(Debug)]
+struct PluginFailure {
+    code: String,
+    message: String,
+}
+impl std::fmt::Display for PluginFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+impl std::error::Error for PluginFailure {}
+pub fn error_code(error: &anyhow::Error) -> Option<&str> {
+    error
+        .downcast_ref::<PluginFailure>()
+        .map(|failure| failure.code.as_str())
+        .filter(|code| !code.is_empty())
 }
 
 pub fn resolve_with_quality(mut track: Track, quality: crate::protocol::Quality) -> Result<Media> {
@@ -768,26 +1023,49 @@ pub fn resolve_with_quality(mut track: Track, quality: crate::protocol::Quality)
                 && !host.ends_with(".localhost")),
         "插件返回了不支持的音频地址"
     );
-    let mut user_agent = None;
+    let mut request_headers = crate::assets::headers(&source.plugin, &url, "audio")?;
     if let Some(headers) = stream["headers"].as_object() {
         for (key, value) in headers {
-            // AVPlayer has a public User-Agent option but no Referer option.
-            // Omit this navigation hint uniformly for every source plugin.
-            if key.eq_ignore_ascii_case("Referer") {
-                continue;
-            }
             ensure!(
-                key.eq_ignore_ascii_case("User-Agent"),
-                "此音频需要当前播放器不支持的 HTTP 头"
+                !matches!(
+                    key.to_ascii_lowercase().as_str(),
+                    "host"
+                        | "connection"
+                        | "content-length"
+                        | "transfer-encoding"
+                        | "proxy-authorization"
+                ),
+                "音频请求头不受支持"
             );
-            user_agent = value.as_str().map(str::to_owned);
+            let value = value.as_str().context("音频请求头值必须是字符串")?;
+            reqwest::header::HeaderName::from_bytes(key.as_bytes())
+                .context("音频请求头名称无效")?;
+            reqwest::header::HeaderValue::from_str(value).context("音频请求头内容无效")?;
+            request_headers.insert(key.to_ascii_lowercase(), value.into());
         }
+    }
+    let mut user_agent = request_headers.get("user-agent").cloned();
+    let mut lease = None;
+    if request_headers.keys().any(|k| k != "user-agent") {
+        let registration = crate::stream_proxy::register(url, request_headers)?;
+        url = registration.0;
+        lease = Some(registration.1 as std::sync::Arc<dyn Send + Sync>);
+        user_agent = None;
     }
     fill_artwork(&mut track);
     Ok(Media {
+        lease,
         track,
         url,
         user_agent,
         quality: crate::quality::metadata(quality.for_plugin(), &stream, true),
+        gain_db: stream["gain"]
+            .as_f64()
+            .filter(|n| n.is_finite() && (-60.0..=60.0).contains(n))
+            .map(|n| n as f32),
+        peak: stream["peak"]
+            .as_f64()
+            .filter(|n| n.is_finite() && *n > 0.0 && *n <= 32.0)
+            .map(|n| n as f32),
     })
 }

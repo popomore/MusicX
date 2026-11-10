@@ -68,6 +68,13 @@ impl Cover {
 }
 
 fn fetch(value: &str) -> Option<CFRetained<CGImage>> {
+    if Url::parse(value)
+        .ok()?
+        .fragment()
+        .is_some_and(|f| f.starts_with("musicx-plugin="))
+    {
+        return thumbnail(&crate::player::artwork(value)?);
+    }
     let url = musicx_core::metadata::public_url(value)?;
     let client = Client::builder()
         .timeout(Duration::from_secs(6))

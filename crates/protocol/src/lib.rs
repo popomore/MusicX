@@ -77,6 +77,10 @@ pub struct Track {
     pub id: u64,
     pub title: String,
     pub artist: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artists: Vec<Artist>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub episode: Option<Episode>,
     pub duration: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cover_url: Option<String>,
@@ -86,6 +90,23 @@ pub struct Track {
     pub source_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<Source>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct Artist {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub cover_url: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct Episode {
+    pub show_id: String,
+    pub description: String,
+    pub published: String,
 }
 
 /// Preserve identities of persisted legacy NetEase favorites and history.
@@ -252,6 +273,8 @@ pub struct Status {
     #[serde(default)]
     pub preferred_quality: Quality,
     #[serde(default)]
+    pub normalization_enabled: bool,
+    #[serde(default)]
     pub audio_quality: Option<AudioQuality>,
     pub error: Option<String>,
     pub switching: bool,
@@ -279,6 +302,9 @@ pub enum UiAction {
     Quality {
         quality: Quality,
     },
+    Normalization {
+        enabled: bool,
+    },
     Pause,
     Resume,
     Toggle,
@@ -300,10 +326,24 @@ pub enum UiAction {
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum QueueContext {
-    Album { id: String, name: String },
-    Playlist { id: u64, name: String },
-    LocalPlaylist { id: String, name: String },
+    Album {
+        id: String,
+        name: String,
+    },
+    Playlist {
+        id: u64,
+        name: String,
+    },
+    LocalPlaylist {
+        id: String,
+        name: String,
+    },
     History,
+    SourceCollection {
+        source: String,
+        id: String,
+        name: String,
+    },
 }
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
@@ -326,6 +366,27 @@ pub struct HistoryProgress {
 pub struct Lyrics {
     pub text: String,
     pub translation: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lines: Vec<LyricLine>,
+}
+
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct LyricLine {
+    pub start: u64,
+    #[serde(default)]
+    pub end: Option<u64>,
+    pub text: String,
+    #[serde(default)]
+    pub translation: String,
+    #[serde(default)]
+    pub words: Vec<LyricWord>,
+}
+
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct LyricWord {
+    pub start: u64,
+    pub end: u64,
+    pub text: String,
 }
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
@@ -389,7 +450,7 @@ pub struct LocalPlaylistSummary {
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum LocalLibraryAction {
     SetFavorite {
-        track: Track,
+        track: Box<Track>,
         liked: bool,
     },
     Create {
@@ -470,6 +531,8 @@ pub struct MusicSource {
     pub qr_sign_in: bool,
     #[serde(default)]
     pub web_sign_in: bool,
+    #[serde(default)]
+    pub oauth_sign_in: bool,
 }
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct MusicSourceCatalog {
@@ -501,7 +564,28 @@ pub struct SourcePlaylist {
     pub cover_url: Option<String>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SourceCollection {
+    pub kind: String,
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub cover_url: Option<String>,
+}
+
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SourcePage {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub cover_url: Option<String>,
+    pub tracks: Vec<Track>,
+    pub collections: Vec<SourceCollection>,
+    pub more: bool,
+    pub next_offset: u64,
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum MusicSourceAction {
     List,
@@ -513,6 +597,15 @@ pub enum MusicSourceAction {
     },
     Install {
         repository: String,
+    },
+    CheckUpdate {
+        source: String,
+    },
+    Update {
+        source: String,
+    },
+    Uninstall {
+        source: String,
     },
     Configure {
         source: String,
@@ -540,6 +633,33 @@ pub enum MusicSourceAction {
     Playlists {
         source: String,
     },
+    ImportLiked {
+        source: String,
+    },
+    ImportRecent {
+        source: String,
+    },
+    Artist {
+        source: String,
+        id: String,
+    },
+    Album {
+        source: String,
+        id: String,
+    },
+    Shows {
+        source: String,
+    },
+    Artwork {
+        source: String,
+        url: String,
+    },
+    Show {
+        source: String,
+        id: String,
+        #[serde(default)]
+        offset: u64,
+    },
     ImportPlaylist {
         source: String,
         playlist_id: String,
@@ -552,4 +672,5 @@ pub enum SignInMethod {
     #[default]
     Qr,
     Web,
+    Oauth,
 }

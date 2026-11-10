@@ -17,21 +17,25 @@ fn run() -> Result<ExitCode> {
         desktop::package_app(std::path::Path::new(&destination), &web_auth_name)?;
         return Ok(ExitCode::SUCCESS);
     }
-    if command.as_deref() == Some("plugin-install") {
+    if matches!(command.as_deref(), Some("plugin-install" | "plugin-update")) {
         let directory = args
             .next()
-            .ok_or_else(|| anyhow::anyhow!("用法：musicx plugin-install <目录>"))?;
+            .ok_or_else(|| anyhow::anyhow!("用法：musicx plugin-install/plugin-update <目录>"))?;
         if args.next().is_some() {
             bail!("只接受一个插件目录");
         }
         println!(
-            "已安装 MyGo 插件 {}",
-            mygo::install(std::path::Path::new(&directory))?
+            "已保存 MyGo 插件 {}",
+            if command.as_deref() == Some("plugin-update") {
+                mygo::update_local(std::path::Path::new(&directory))?
+            } else {
+                mygo::install(std::path::Path::new(&directory))?
+            }
         );
         return Ok(ExitCode::SUCCESS);
     }
     if args.next().is_some() {
-        bail!("用法：musicx [start|mcp-token|plugin-install <目录>]");
+        bail!("用法：musicx [start|mcp-token|plugin-install/plugin-update <目录>]");
     }
     match command.as_deref() {
         None | Some("start") => {
@@ -49,9 +53,9 @@ fn run() -> Result<ExitCode> {
             println!("{}", mcp::read_token()?);
         }
         Some("--help" | "-h") => {
-            println!("用法：musicx [start|mcp-token|plugin-install <目录>]")
+            println!("用法：musicx [start|mcp-token|plugin-install/plugin-update <目录>]")
         }
-        _ => bail!("用法：musicx [start|mcp-token|plugin-install <目录>]"),
+        _ => bail!("用法：musicx [start|mcp-token|plugin-install/plugin-update <目录>]"),
     }
     Ok(ExitCode::SUCCESS)
 }

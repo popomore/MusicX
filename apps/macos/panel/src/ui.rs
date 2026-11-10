@@ -109,6 +109,7 @@ fn header(model: Model) -> impl IntoElement {
                     Page::Info => "歌曲信息",
                     Page::History => "播放历史",
                     Page::Album => "专辑曲目",
+                    Page::Discovery => "来源作品",
                     Page::Sources => "音乐来源",
                     Page::Library => "我的歌单",
                     Page::Player => model.status.with(|s| match s.state {
@@ -129,7 +130,7 @@ fn header(model: Model) -> impl IntoElement {
             move || {
                 !matches!(
                     model.page.get(),
-                    Page::Player | Page::Sources | Page::Library
+                    Page::Player | Page::Sources | Page::Library | Page::Discovery
                 )
             },
             move || nav_action("刷新", move || model.open(model.page.get())),
@@ -621,6 +622,8 @@ fn album(model: Model) -> impl IntoElement {
 fn info(model: Model) -> impl IntoElement {
     scroll().flex_1().child(
         view()
+            .child(crate::discovery_ui::artist_links(model))
+            .child(crate::discovery_ui::episode_details(model))
             .mt(px(16.0))
             .gap(px(8.0))
             .child(
@@ -812,6 +815,10 @@ pub fn App() -> impl IntoElement {
                 .child(when(
                     move || model.page.get() == Page::Sources,
                     move || crate::sources_ui::settings_view(model),
+                ))
+                .child(when(
+                    move || model.page.get() == Page::Discovery,
+                    move || crate::discovery_ui::browse(model),
                 ))
                 .child(when(
                     move || model.page.get() == Page::Library,
