@@ -5,6 +5,10 @@ use std::sync::Arc;
 /// Maximum size of a playback queue that can be persisted and restored.
 pub const MAX_QUEUE_TRACKS: usize = 10_000;
 
+/// PID-scoped native presentation request; it never carries playback data.
+#[cfg(target_os = "macos")]
+pub const PANEL_REOPEN_NOTIFICATION: &str = "local.musicx.panel.reopen";
+
 #[cfg(not(target_os = "ios"))]
 pub const ADDRESS: &str = "127.0.0.1:45967";
 #[cfg(target_os = "ios")]

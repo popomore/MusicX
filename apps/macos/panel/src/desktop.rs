@@ -7,8 +7,8 @@ use objc2::{
     sel,
 };
 use objc2_foundation::{
-    NSBundle, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString,
-    ns_string,
+    NSBundle, NSDistributedNotificationCenter, NSNotification, NSNotificationSuspensionBehavior,
+    NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, ns_string,
 };
 use std::{cell::RefCell, process::ExitCode, rc::Rc};
 pub const PLAYER_WIDTH: f32 = 320.0;
@@ -146,6 +146,10 @@ define_class!(
     struct PanelDelegate;
     unsafe impl NSObjectProtocol for PanelDelegate {}
     impl PanelDelegate {
+        #[unsafe(method(revealPanel:))]
+        fn reveal(&self, _notification: &NSNotification) {
+            show_panel();
+        }
         #[unsafe(method(closePanel:))]
         fn close(&self, _sender: Option<&AnyObject>) {
             PANEL.with_borrow(|panel| { if let Some(panel) = panel { panel.window.performClose(None); } });
@@ -281,7 +285,24 @@ pub fn run_panel() -> ExitCode {
             details_left: std::cell::Cell::new(false),
         })
     });
+    let notifications = NSDistributedNotificationCenter::defaultCenter();
+    let reopen = NSString::from_str(crate::protocol::PANEL_REOPEN_NOTIFICATION);
+    let process_id = NSString::from_str(&std::process::id().to_string());
+    // Observe only our own PID so installed, mounted and QA copies cannot
+    // reopen one another. Register on the AppKit thread before launch completes.
+    unsafe {
+        notifications.addObserver_selector_name_object_suspensionBehavior(
+            &delegate,
+            sel!(revealPanel:),
+            Some(&reopen),
+            Some(&process_id),
+            NSNotificationSuspensionBehavior::DeliverImmediately,
+        );
+    }
     app.run();
+    unsafe {
+        notifications.removeObserver_name_object(&delegate, Some(&reopen), Some(&process_id));
+    }
     app.setDelegate(None);
     ExitCode::SUCCESS
 }

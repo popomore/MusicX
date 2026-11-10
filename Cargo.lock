@@ -1738,6 +1738,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "dispatch2",
+ "musicx-platform-apple",
  "musicx-protocol",
  "nsh-base",
  "nsh-core",
@@ -2029,6 +2030,7 @@ checksum = "d49e936b501e5c5bf01fda3a9452ff86dc3ea98ad5f283e1455153142d97518c"
 dependencies = [
  "bitflags 2.13.2",
  "block2",
+ "libc",
  "objc2",
  "objc2-core-foundation",
  "objc2-core-graphics",

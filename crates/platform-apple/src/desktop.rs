@@ -6,8 +6,8 @@ use objc2::{
 };
 use objc2_app_kit::*;
 use objc2_foundation::{
-    NSData, NSObject, NSObjectProtocol, NSPoint, NSRunLoop, NSRunLoopCommonModes, NSSize, NSString,
-    NSTimer, NSURL, ns_string,
+    NSData, NSDistributedNotificationCenter, NSObject, NSObjectProtocol, NSPoint, NSRunLoop,
+    NSRunLoopCommonModes, NSSize, NSString, NSTimer, ns_string,
 };
 use std::{
     cell::RefCell,
@@ -35,7 +35,6 @@ thread_local! {
 
 struct PanelProcess {
     child: std::process::Child,
-    bundle: std::path::PathBuf,
 }
 
 struct Desktop {
@@ -386,6 +385,26 @@ pub fn run(runtime: DesktopRuntime) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// Reopen the exact child, including a minimized or hidden window. Opening its
+/// bundle URL can select another registered copy and doesn't transfer activation.
+pub fn reveal_panel(process_id: u32) {
+    if let Some(panel) =
+        NSRunningApplication::runningApplicationWithProcessIdentifier(process_id as i32)
+    {
+        NSApplication::sharedApplication(MainThreadMarker::new().expect("main thread"))
+            .yieldActivationToApplication(&panel);
+    }
+    unsafe {
+        NSDistributedNotificationCenter::defaultCenter()
+            .postNotificationName_object_userInfo_deliverImmediately(
+                &NSString::from_str(musicx_core::protocol::PANEL_REOPEN_NOTIFICATION),
+                Some(&NSString::from_str(&process_id.to_string())),
+                None,
+                true,
+            );
+    }
+}
+
 fn show_panel() {
     let result = DESKTOP.with_borrow_mut(|desktop| -> anyhow::Result<()> {
         let Some(desktop) = desktop else {
@@ -394,20 +413,21 @@ fn show_panel() {
         if let Some(panel) = &mut desktop.panel
             && panel.child.try_wait()?.is_none()
         {
-            let url = NSURL::fileURLWithPath(&NSString::from_str(&panel.bundle.to_string_lossy()));
-            NSWorkspace::sharedWorkspace().openURL(&url);
+            reveal_panel(panel.child.id());
             return Ok(());
         }
         let bundle = desktop.panel_bundle.clone();
         let panel_executable = app_executable(&bundle, PANEL_BIN);
         anyhow::ensure!(panel_executable.is_file(), "缺少 MusicX 播放面板");
+        NSApplication::sharedApplication(MainThreadMarker::new().expect("main thread"))
+            .yieldActivationToApplicationWithBundleIdentifier(ns_string!("local.musicx.panel"));
         let child = std::process::Command::new(panel_executable)
             .current_dir(&desktop.working_dir)
             .arg("panel")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .spawn()?;
-        desktop.panel = Some(PanelProcess { child, bundle });
+        desktop.panel = Some(PanelProcess { child });
         Ok(())
     });
     if let Err(error) = result {
