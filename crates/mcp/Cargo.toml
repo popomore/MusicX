@@ -8,6 +8,7 @@ publish = false
 [dependencies]
 musicx-core = { path = "../core" }
 musicx-plugin-api = { path = "../plugin-api" }
+musicx-protocol = { path = "../protocol", features = ["schema"] }
 musicx-plugins = { path = "../plugins" }
 anyhow = "1"
 serde = { version = "1", features = ["derive", "rc"] }

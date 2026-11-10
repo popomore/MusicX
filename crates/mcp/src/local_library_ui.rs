@@ -4,7 +4,6 @@ use musicx_core::{
     local_library::{favorite, lists, playlist},
     protocol::{FavoriteState, LocalLibraryAction},
 };
-use musicx_plugins::{music_sources, mygo};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -35,7 +34,6 @@ async fn get_favorite(
 pub fn routes() -> Router {
     Router::new()
         .route("/ui/local-playlists", get(get_library).post(edit_library))
-        .route("/ui/sources", get(sources))
         .route("/ui/favorite", get(get_favorite))
 }
 async fn get_library(Query(input): Query<Selection>) -> Result<Json<Value>, Failure> {
@@ -54,14 +52,4 @@ async fn edit_library(Json(input): Json<LocalLibraryAction>) -> Result<Json<Valu
         .map_err(failure)?
         .map(Json)
         .map_err(failure)
-}
-async fn sources() -> Result<Json<Value>, Failure> {
-    tokio::task::spawn_blocking(|| -> Result<Value> {
-        let connected = music_sources::account("mygo:netease")?.connected;
-        Ok(json!({"netease":{"connected":connected,"name":"网易云音乐"},"plugins":mygo::list()?}))
-    })
-    .await
-    .map_err(failure)?
-    .map(Json)
-    .map_err(failure)
 }

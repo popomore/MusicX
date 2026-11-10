@@ -20,6 +20,7 @@ sha2 = "0.10"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 rquickjs = "=0.14.0"
 url = "2"
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [target.'cfg(target_os = "ios")'.dependencies]
 rquickjs = { version = "=0.14.0", features = ["bindgen"] }

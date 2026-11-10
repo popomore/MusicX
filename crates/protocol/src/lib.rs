@@ -5,6 +5,10 @@ use std::sync::Arc;
 /// Maximum size of a playback queue that can be persisted and restored.
 pub const MAX_QUEUE_TRACKS: usize = 10_000;
 
+/// PID-scoped native presentation request; it never carries playback data.
+#[cfg(target_os = "macos")]
+pub const PANEL_REOPEN_NOTIFICATION: &str = "local.musicx.panel.reopen";
+
 #[cfg(not(target_os = "ios"))]
 pub const ADDRESS: &str = "127.0.0.1:45967";
 #[cfg(target_os = "ios")]
@@ -13,7 +17,7 @@ pub const ADDRESS: &str = "127.0.0.1:45968";
 /// Allow isolated local instances without sharing the live listener or history.
 pub fn address() -> std::net::SocketAddr {
     let mut address: std::net::SocketAddr = ADDRESS.parse().expect("loopback address");
-    if let Ok(port) = std::env::var("MINI_CLOUDMUSIC_PORT")
+    if let Ok(port) = std::env::var("MUSICX_PORT")
         && let Ok(port) = port.parse::<u16>()
         && port != 0
     {
@@ -22,7 +26,7 @@ pub fn address() -> std::net::SocketAddr {
     address
 }
 
-const DATA_DIR_ENV: &str = "MINI_CLOUDMUSIC_DATA_DIR";
+const DATA_DIR_ENV: &str = "MUSICX_DATA_DIR";
 
 pub fn data_dir() -> Option<std::path::PathBuf> {
     std::env::var_os(DATA_DIR_ENV)
@@ -32,26 +36,22 @@ pub fn data_dir() -> Option<std::path::PathBuf> {
         })
 }
 
-pub fn legacy_data_dir() -> Option<std::path::PathBuf> {
-    if std::env::var_os(DATA_DIR_ENV).is_some() {
-        return None;
-    }
-    Some(data_dir()?.with_file_name("Mini Cloud Music"))
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Album {
     pub id: String,
     pub name: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Source {
     pub plugin: String,
     pub id: String,
 }
 
 #[derive(Clone, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Track {
     pub id: u64,
     pub title: String,
@@ -67,7 +67,8 @@ pub struct Track {
     pub source: Option<Source>,
 }
 
-/// Legacy native NetEase records alias the canonical MyGo NetEase plugin.
+/// Preserve identities of persisted legacy NetEase favorites and history.
+/// This compatibility key never selects, installs or invokes a source plugin.
 pub fn track_key(track: &Track) -> String {
     track.source.as_ref().map_or_else(
         || format!("netease:{}", track.id),
@@ -109,14 +110,6 @@ impl Quality {
             Self::High => "高音质",
             Self::Lossless => "无损",
             Self::Hires => "Hi-Res",
-        }
-    }
-    pub fn netease_level(self) -> &'static str {
-        match self {
-            Self::Standard => "standard",
-            Self::High => "exhigh",
-            Self::Lossless => "lossless",
-            Self::Hires => "hires",
         }
     }
     pub fn plugin_quality(self) -> &'static str {
@@ -246,9 +239,6 @@ pub struct Status {
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum UiAction {
-    Play {
-        id: u64,
-    },
     PlayTrack {
         track: Track,
     },
@@ -256,10 +246,6 @@ pub enum UiAction {
         tracks: Vec<Track>,
         index: usize,
         context: QueueContext,
-    },
-    PlayPlaylist {
-        id: u64,
-        track_id: u64,
     },
     PlayLocalPlaylist {
         id: String,
@@ -342,49 +328,6 @@ pub struct AlbumPage {
     pub tracks: Vec<Track>,
 }
 
-#[derive(Clone, PartialEq, Serialize, Deserialize)]
-pub struct LoginChallenge {
-    pub key: String,
-    pub device: String,
-    pub url: String,
-    pub svg: String,
-    pub expires_at: u64,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct LoginPoll {
-    pub key: String,
-    pub device: String,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct LoginProgress {
-    pub status: String,
-}
-
-#[derive(Clone, PartialEq, Serialize, Deserialize)]
-pub struct PlaylistSummary {
-    pub id: u64,
-    pub name: String,
-    pub track_count: u64,
-    pub owned: bool,
-}
-
-#[derive(Clone, PartialEq, Serialize, Deserialize)]
-pub struct PlaylistList {
-    pub playlists: Vec<PlaylistSummary>,
-    pub more: bool,
-}
-
-#[derive(Clone, PartialEq, Serialize, Deserialize)]
-pub struct PlaylistPage {
-    pub id: u64,
-    pub name: String,
-    pub tracks: Vec<Track>,
-    pub total: usize,
-    pub more: bool,
-}
-
 /// Local library contains metadata and source identities, never resolved audio URLs.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct LocalPlaylist {
@@ -451,9 +394,6 @@ pub enum LocalLibraryAction {
     Delete {
         id: String,
     },
-    ImportNetease {
-        id: u64,
-    },
     ImportSource {
         source: String,
         playlist_id: String,
@@ -497,6 +437,8 @@ pub struct SourceSetting {
 pub struct MusicSource {
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub description: String,
     pub version: String,
     pub repository: Option<String>,
     pub installed: bool,
@@ -507,6 +449,12 @@ pub struct MusicSource {
     pub qr_sign_in: bool,
     #[serde(default)]
     pub web_sign_in: bool,
+}
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MusicSourceCatalog {
+    pub sources: Vec<MusicSource>,
+    pub refreshing: bool,
+    pub warning: Option<String>,
 }
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SourceAccount {
@@ -537,6 +485,8 @@ pub struct SourcePlaylist {
 pub enum MusicSourceAction {
     List,
     Catalog,
+    CatalogView,
+    RefreshCatalog,
     Get {
         source: String,
     },

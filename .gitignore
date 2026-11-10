@@ -3,6 +3,7 @@ target/
 .build/
 .nsh/
 .goals/
+mygo_source_catalog.json
 node_modules/
 __pycache__/
 .DS_Store

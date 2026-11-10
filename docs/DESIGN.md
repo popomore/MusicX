@@ -5,6 +5,7 @@ MusicX keeps the current track in focus. The macOS panel is a transient view of 
 ## macOS layout
 
 - Use the warm surface and text colors in `assets/theme.json`, with system typography and album artwork as the main visual. The compact window is 320 × 512 points, with 24-point content insets and 248-point square artwork.
+- Before the first session snapshot arrives, show a connection state. A confirmed empty session shows the MusicX mark, a short introduction, and actions to add a music source, connect an agent, or open local playlists. Hide artwork placeholders, track metadata, lyrics and transport controls until there is a current track. Keep these actions available for returning users with an empty queue as well.
 - Keep track titles prominent. Place the artist and the linked album on one line and anchor the audio quality badge at the trailing edge. Use a tint on hover and a pressed state to identify clickable text. The title opens song information and the large cover opens the album.
 - Use a solid circular play or pause button and monochrome symbols for adjacent controls. Provide accessible labels and visible selected, pressed, and disabled states.
 - The MusicX mark consists of two crossing audio tracks. Its menu bar version is a fixed-width monochrome symbol. A small dot indicates playback and the tooltip carries the track and playback state. Regenerate the artwork with `sh assets/build-icons.sh`.
@@ -34,10 +35,45 @@ My Playlists opens in browse mode. Show the name, track count, and common play o
 
 Settings groups controls under Playback, MCP Connection, and Music Sources. MCP Connection shows the local endpoint and lets users copy a client configuration or bearer token. Source details show configuration fields, account actions, and import options according to capabilities. The add-source catalog shows compatibility and reasons an action is unavailable. Use secure fields for credentials and offer replacement controls for saved secrets. Cancel an unfinished sign-in when its view closes. Web sign-in runs in a temporary WebKit process and shows the website's domain.
 
+## Data models
+
+The source adapter, player, local library, and UI have different ownership. Shared wire types live in `crates/protocol`; a UI snapshot is not another owner of the listening session.
+
+| Model | Responsibility | Owner |
+| --- | --- | --- |
+| `Source` | A track locator: plugin ID plus the original string track ID. | Shared protocol |
+| `Track`, `Album`, `SourceLink` | Stable music metadata: title, artist, duration in seconds, artwork, album and source references. No resolved audio URL or credentials. | Shared protocol |
+| `Media` | A resolved playback request: full `Track`, temporary audio URL, supported headers and actual stream quality. | `crates/plugin-api` |
+| `Quality`, `AudioQuality` | Listener preference versus the actual source-reported format, bitrate, sample rate and bit depth. A preference never substitutes for measured/reported metadata. | Shared protocol / `crates/core` |
+| `Player`, `Action`, `Message` | The authoritative listening session and its commands: queue, current position, volume, playback transitions and asynchronous resolution. | `crates/core` |
+| `Status`, `QueueContext` | A session snapshot for clients and the origin of its independent queue snapshot. | Shared protocol |
+| `Session` | Durable queue, index, context, position and volume checkpoint. A restart restores paused and obtains a fresh stream on Play. | `crates/core` |
+| `LocalPlaylist`, `PlaylistOrigin` | Player-owned saved tracks, revisions, favorite/pinned state and optional import provenance. A local edit never changes the source playlist. | `crates/core` / shared protocol |
+| `HistoryEntry`, `HistoryProgress` | Each recorded play and its position, duration and completion state, separate from the current queue. | `crates/core` / shared protocol |
+| `MusicSource`, `MusicSourceCatalog` | Plugin descriptions, installation/compatibility state, capabilities, settings and discovery refresh state. | `crates/plugins` / shared protocol |
+| `SourceAccount`, `SourceLogin`, `SourcePlaylist` | Source-provided account state, temporary sign-in jobs and remote playlist descriptions. These do not own the player's session. | `crates/plugins` / shared protocol |
+
+`Source` identifies a track, `MusicSource` describes an installed or discoverable plugin, and `PlaylistOrigin` records where a local import came from. They are not interchangeable. The numeric `Track.id` remains for existing records; current source identity is carried by `Source(plugin, id)`, and a bare number never selects a source.
+
+```mermaid
+flowchart LR
+    Search[Source plugin search] --> Track
+    Track --> Commands[play_song / enqueue_song]
+    Commands --> Resolver[DataSource]
+    Resolver --> Media
+    Media --> Player
+    Player --> Audio[AudioOutput]
+    Player --> Status
+    Player --> Session
+```
+
+`DataSource` resolves playable media and supplies track/album information; it does not control the queue. `AudioOutput` implements platform playback without knowing plugin installation or account flows. The player also uses `DataSource` to obtain fresh media when resuming, advancing or changing quality. The panel's `Model` and browser signals are disposable view state, not a second player or persistent library.
+
 ## Runtime boundaries
 
 - `crates/core` owns session state and persistence. The core drives audio through `AudioOutput` and obtains media through `DataSource`. `crates/protocol` holds the shared types.
 - `crates/platform-apple` adapts playback to AVPlayer and publishes system Now Playing metadata. The macOS helper assembles the platform, plugin bridge, and MCP service.
+- MCP source tools discover music and return the shared `Track` type. Independent `play_song`/`enqueue_song` player tools accept that complete track and resolve through the injected `DataSource`; they do not invoke a concrete source plugin.
 - `crates/plugin-api` defines the Rust source contract. `crates/plugins` adapts MyGo plugins and handles source configuration and accounts. `crates/mcp` exposes player actions and the panel's local routes.
 - Fetch the full queue when its version changes and render only visible rows in long lists. Share playback progress with lyrics and run the lyric display timer only when needed. Limit the panel's artwork cache to 4 MiB and release its resources on close.
-- The distributed macOS app ships the panel and web sign-in components inside its bundle. Source builds stage their app bundles under `runtime/` in `~/Library/Application Support/MusicX/`. Installed plugins live under `mygo-plugins/` in the same data directory. The iPhone app uses its own sandbox. [Local data and upgrades](../README.md#local-data-and-upgrades)
+- The distributed macOS app ships the panel and web sign-in components inside its bundle. Source builds stage their app bundles under `runtime/` in `~/Library/Application Support/MusicX/`. Installed plugins live under `mygo-plugins/` in the same data directory. The iPhone app uses its own sandbox. [Local data](../README.md#local-data)

@@ -11,10 +11,9 @@ pub struct Media {
     pub quality: AudioQuality,
 }
 
-/// Looks up tracks and supplies playable media and metadata. Implementations
+/// Supplies playable media and metadata for explicitly identified source tracks. Implementations
 /// can block on the network and are called outside the platform's UI thread.
 pub trait DataSource: Sync {
-    fn search(&self, query: String, limit: u64) -> Result<Vec<Track>>;
     fn resolve(&self, track: Track, quality: Quality) -> Result<Media>;
     fn resolve_selection(&self, track: Track, quality: Quality) -> Result<Media> {
         self.resolve(track, quality)

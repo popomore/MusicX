@@ -6,8 +6,8 @@ use objc2::{
 };
 use objc2_app_kit::*;
 use objc2_foundation::{
-    NSData, NSObject, NSObjectProtocol, NSPoint, NSRunLoop, NSRunLoopCommonModes, NSSize, NSString,
-    NSTimer, NSURL, ns_string,
+    NSData, NSDistributedNotificationCenter, NSObject, NSObjectProtocol, NSPoint, NSRunLoop,
+    NSRunLoopCommonModes, NSSize, NSString, NSTimer, ns_string,
 };
 use std::{
     cell::RefCell,
@@ -26,8 +26,8 @@ const BACKGROUND_NAME: &str = "MusicX Helper";
 const APP_BUNDLE_VERSION: &str = "6";
 const PANEL_APP: &str = "Panel.app";
 const WEB_AUTH_APP: &str = "WebAuth.app";
-const PANEL_BIN: &str = "mini-cloudmusic-panel";
-const WEB_AUTH_BIN: &str = "mini-cloudmusic-webauth";
+const PANEL_BIN: &str = "musicx-panel";
+const WEB_AUTH_BIN: &str = "musicx-webauth";
 
 thread_local! {
     static DESKTOP: RefCell<Option<Desktop>> = const { RefCell::new(None) };
@@ -35,7 +35,6 @@ thread_local! {
 
 struct PanelProcess {
     child: std::process::Child,
-    bundle: std::path::PathBuf,
 }
 
 struct Desktop {
@@ -204,7 +203,7 @@ pub fn package_app(bundle: &Path, web_auth_name: &str) -> anyhow::Result<()> {
         &panel,
         &helpers.join(PANEL_APP),
         APP_NAME,
-        "local.mini-cloudmusic.panel",
+        "local.musicx.panel",
         PANEL_BIN,
         false,
         signing,
@@ -213,7 +212,7 @@ pub fn package_app(bundle: &Path, web_auth_name: &str) -> anyhow::Result<()> {
         &webauth,
         &helpers.join(WEB_AUTH_APP),
         web_auth_name,
-        "local.mini-cloudmusic.webauth",
+        "local.musicx.webauth",
         WEB_AUTH_BIN,
         true,
         signing,
@@ -223,7 +222,7 @@ pub fn package_app(bundle: &Path, web_auth_name: &str) -> anyhow::Result<()> {
         bundle,
         BACKGROUND_NAME,
         "local.musicx.playback",
-        "mini-cloudmusic",
+        "musicx",
         true,
         signing,
     )
@@ -253,7 +252,7 @@ pub fn prepare_runtime(web_auth_name: &str) -> anyhow::Result<DesktopRuntime> {
     }
     let base = runtime_dir()?;
     let core_bundle = base.join(format!("{APP_NAME}.app"));
-    let private_executable = app_executable(&core_bundle, "mini-cloudmusic");
+    let private_executable = app_executable(&core_bundle, "musicx");
     let panel_bundle = base.join("panel").join(format!("{APP_NAME}.app"));
     let web_auth_bundle = base.join(format!("{web_auth_name}.app"));
     if executable == private_executable {
@@ -281,7 +280,7 @@ pub fn prepare_runtime(web_auth_name: &str) -> anyhow::Result<DesktopRuntime> {
             &webauth,
             &web_auth_bundle,
             web_auth_name,
-            "local.mini-cloudmusic.webauth",
+            "local.musicx.webauth",
             WEB_AUTH_BIN,
             true,
             None,
@@ -292,7 +291,7 @@ pub fn prepare_runtime(web_auth_name: &str) -> anyhow::Result<DesktopRuntime> {
             &panel,
             &panel_bundle,
             APP_NAME,
-            "local.mini-cloudmusic.panel",
+            "local.musicx.panel",
             PANEL_BIN,
             false,
             None,
@@ -302,17 +301,14 @@ pub fn prepare_runtime(web_auth_name: &str) -> anyhow::Result<DesktopRuntime> {
             &core_bundle,
             BACKGROUND_NAME,
             "local.musicx.playback",
-            "mini-cloudmusic",
+            "musicx",
             true,
             None,
         )?;
     }
     Err(Command::new(private_executable)
         .current_dir(&base)
-        .env(
-            "MINI_CLOUDMUSIC_DATA_DIR",
-            base.parent().expect("runtime parent"),
-        )
+        .env("MUSICX_DATA_DIR", base.parent().expect("runtime parent"))
         .args(std::env::args().skip(1))
         .exec()
         .into())
@@ -389,6 +385,26 @@ pub fn run(runtime: DesktopRuntime) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// Reopen the exact child, including a minimized or hidden window. Opening its
+/// bundle URL can select another registered copy and doesn't transfer activation.
+pub fn reveal_panel(process_id: u32) {
+    if let Some(panel) =
+        NSRunningApplication::runningApplicationWithProcessIdentifier(process_id as i32)
+    {
+        NSApplication::sharedApplication(MainThreadMarker::new().expect("main thread"))
+            .yieldActivationToApplication(&panel);
+    }
+    unsafe {
+        NSDistributedNotificationCenter::defaultCenter()
+            .postNotificationName_object_userInfo_deliverImmediately(
+                &NSString::from_str(musicx_core::protocol::PANEL_REOPEN_NOTIFICATION),
+                Some(&NSString::from_str(&process_id.to_string())),
+                None,
+                true,
+            );
+    }
+}
+
 fn show_panel() {
     let result = DESKTOP.with_borrow_mut(|desktop| -> anyhow::Result<()> {
         let Some(desktop) = desktop else {
@@ -397,20 +413,21 @@ fn show_panel() {
         if let Some(panel) = &mut desktop.panel
             && panel.child.try_wait()?.is_none()
         {
-            let url = NSURL::fileURLWithPath(&NSString::from_str(&panel.bundle.to_string_lossy()));
-            NSWorkspace::sharedWorkspace().openURL(&url);
+            reveal_panel(panel.child.id());
             return Ok(());
         }
         let bundle = desktop.panel_bundle.clone();
         let panel_executable = app_executable(&bundle, PANEL_BIN);
         anyhow::ensure!(panel_executable.is_file(), "缺少 MusicX 播放面板");
+        NSApplication::sharedApplication(MainThreadMarker::new().expect("main thread"))
+            .yieldActivationToApplicationWithBundleIdentifier(ns_string!("local.musicx.panel"));
         let child = std::process::Command::new(panel_executable)
             .current_dir(&desktop.working_dir)
             .arg("panel")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .spawn()?;
-        desktop.panel = Some(PanelProcess { child, bundle });
+        desktop.panel = Some(PanelProcess { child });
         Ok(())
     });
     if let Err(error) = result {

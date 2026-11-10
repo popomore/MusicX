@@ -1,5 +1,4 @@
 //! Streamable HTTP MCP and authenticated panel routes.
-mod account_ui;
 mod local_library_ui;
 mod source_ui;
 
@@ -28,11 +27,11 @@ use tokio::sync::oneshot;
 use musicx_core::{
     audio_quality, history, local_library,
     player::{Action, Reply, Status},
-    protocol::{self, address},
     storage,
 };
 use musicx_plugin_api::DataSource;
-use musicx_plugins::{music_sources, mygo, netease};
+use musicx_plugins::{music_sources, mygo};
+use musicx_protocol::{self as protocol, address};
 
 #[derive(Clone, Copy)]
 pub struct Services {
@@ -43,7 +42,7 @@ pub struct Services {
 
 pub fn read_token() -> Result<String> {
     fs::read_to_string(storage::state_dir()?.join("mcp-token"))
-        .context("请先启动播放器，再运行 mini-cloudmusic mcp-token")
+        .context("请先启动播放器，再运行 musicx mcp-token")
 }
 
 async fn authorize(State(expected): State<Arc<String>>, request: Request, next: Next) -> Response {
@@ -68,7 +67,6 @@ async fn authorize(State(expected): State<Arc<String>>, request: Request, next: 
 pub fn start(services: Services) -> Result<()> {
     let address = address();
     let listener = TcpListener::bind(address).context("无法监听 MCP，本机可能已启动播放器")?;
-    mygo::ensure_netease()?;
     listener.set_nonblocking(true)?;
     let path = storage::state_dir()?.join("mcp-token");
     let token = match fs::read_to_string(&path) {
@@ -111,7 +109,6 @@ pub fn start(services: Services) -> Result<()> {
                 .route("/ui/action", post(ui_action))
                 .route("/ui/session/restore", post(ui_restore))
                 .with_state(services)
-                .merge(account_ui::routes())
                 .merge(local_library_ui::routes())
                 .merge(source_ui::routes())
                 .layer(middleware::from_fn_with_state(auth, authorize));
@@ -159,7 +156,7 @@ async fn ui_state(State(services): State<Services>) -> UiResult {
 }
 async fn current_track(
     services: Services,
-) -> Result<netease::Track, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<protocol::Track, (StatusCode, Json<serde_json::Value>)> {
     ui_state(State(services))
         .await?
         .0
@@ -207,12 +204,6 @@ async fn ui_action(
 ) -> UiResult {
     use protocol::UiAction;
     let action = match action {
-        UiAction::Play { id } => Action::Play(
-            tokio::task::spawn_blocking(move || netease::resolve(id))
-                .await
-                .map_err(ui_error)?
-                .map_err(ui_error)?,
-        ),
         UiAction::PlayTrack { track } => Action::Play(
             tokio::task::spawn_blocking(move || {
                 services.sources.resolve(track, audio_quality::preferred())
@@ -241,30 +232,6 @@ async fn ui_action(
                 media,
             }
         }
-        UiAction::PlayPlaylist { id, track_id } => tokio::task::spawn_blocking(move || {
-            let page = netease::playlist_queue(id)?;
-            let index = page
-                .tracks
-                .iter()
-                .position(|t| t.id == track_id)
-                .ok_or_else(|| anyhow::anyhow!("所选歌曲已不在歌单中，请刷新歌单"))?;
-            validate_list(&page.tracks, index)?;
-            let media = services
-                .sources
-                .resolve(page.tracks[index].clone(), audio_quality::preferred())?;
-            Ok::<_, anyhow::Error>(Action::ReplaceQueue {
-                tracks: page.tracks,
-                index,
-                media,
-                context: protocol::QueueContext::Playlist {
-                    id,
-                    name: page.name,
-                },
-            })
-        })
-        .await
-        .map_err(ui_error)?
-        .map_err(ui_error)?,
         UiAction::PlayLocalPlaylist { id, index } => {
             tokio::task::spawn_blocking(move || local_queue(services, id, index))
                 .await
@@ -391,12 +358,6 @@ struct PlayerTools {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
-struct Search {
-    query: String,
-    limit: Option<u64>,
-}
-
-#[derive(Deserialize, schemars::JsonSchema)]
 struct PluginSearch {
     plugin: String,
     query: String,
@@ -404,35 +365,12 @@ struct PluginSearch {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
-struct PluginSong {
-    plugin: String,
-    id: String,
-    name: String,
-    artist: Option<String>,
-    duration_ms: Option<u64>,
-    enqueue: Option<bool>,
-}
-
-#[derive(Deserialize, schemars::JsonSchema)]
 struct Song {
-    id: u64,
-}
-
-#[derive(Deserialize, schemars::JsonSchema)]
-struct Page {
-    offset: Option<u64>,
-    limit: Option<u64>,
+    track: protocol::Track,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
 struct HistoryPage {
-    limit: Option<u64>,
-}
-
-#[derive(Deserialize, schemars::JsonSchema)]
-struct PlaylistPage {
-    id: u64,
-    offset: Option<u64>,
     limit: Option<u64>,
 }
 
@@ -475,7 +413,7 @@ enum LibraryOperation {
     AddQueue,
     Remove,
     Delete,
-    ImportNetease,
+    ImportSource,
     Play,
 }
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -485,7 +423,8 @@ struct LibraryInput {
     name: Option<String>,
     index: Option<usize>,
     revision: Option<u64>,
-    netease_playlist_id: Option<u64>,
+    source: Option<String>,
+    source_playlist_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, schemars::JsonSchema)]
@@ -523,6 +462,23 @@ async fn blocking<T: Send + 'static>(
 }
 
 impl PlayerTools {
+    async fn play_track(
+        &self,
+        track: protocol::Track,
+        enqueue: bool,
+    ) -> Result<CallToolResult, ErrorData> {
+        validate_list(std::slice::from_ref(&track), 0).map_err(tool_error)?;
+        let sources = self.services.sources;
+        let media =
+            blocking(move || sources.resolve_selection(track, audio_quality::preferred())).await?;
+        self.player(if enqueue {
+            Action::Enqueue(media)
+        } else {
+            Action::Play(media)
+        })
+        .await
+    }
+
     async fn player(&self, action: Action) -> Result<CallToolResult, ErrorData> {
         let (send, receive) = oneshot::channel();
         (self.services.submit)(action, Some(send));
@@ -538,7 +494,7 @@ impl PlayerTools {
 #[tool_router]
 impl PlayerTools {
     #[tool(
-        description = "管理音乐数据源。action=list/catalog/get/install/configure/account/sign_in/poll/cancel/sign_out/playlists/import_playlist。插件source为mygo:ID；install用目录仓库owner/repo。configure的values按声明字段保存，敏感值不回显；sign_in返回扫码任务，poll/cancel用job。导入仅建本地副本，不回写来源歌单。"
+        description = "管理音乐数据源。action=list/catalog/catalog_view/refresh_catalog/get/install/configure/account/sign_in/poll/cancel/sign_out/playlists/import_playlist。catalog_view/refresh_catalog返回sources、refreshing和warning，旧缓存立即可读；install可直接用owner/repo或GitHub仓库URL，无需在目录中。插件source为mygo:ID。configure的values按声明字段保存，敏感值不回显；sign_in返回扫码任务，poll/cancel用job。导入仅建本地副本，不回写来源歌单。"
     )]
     async fn manage_music_sources(
         &self,
@@ -553,7 +509,7 @@ impl PlayerTools {
     }
 
     #[tool(
-        description = "管理播放器本地歌单，与网易云歌单独立。action=list/get/create/rename/pin/unpin/add_current/add_queue/remove/delete/import_netease/play。pin和unpin需要playlist_id。歌曲按来源去重，播放为独立快照；导入创建本地副本，不修改第三方歌单。remove需index和当前revision。"
+        description = "管理播放器本地歌单。action=list/get/create/rename/pin/unpin/add_current/add_queue/remove/delete/import_source/play。import_source需要source=mygo:插件ID和source_playlist_id。pin和unpin需要playlist_id。歌曲按来源去重，播放为独立快照；导入创建本地副本，不修改第三方歌单。remove需index和当前revision。"
     )]
     async fn manage_local_playlists(
         &self,
@@ -601,10 +557,11 @@ impl PlayerTools {
                 index: input.index.context("需要index").map_err(tool_error)?,
                 revision: input.revision.context("需要revision").map_err(tool_error)?,
             },
-            LibraryOperation::ImportNetease => Edit::ImportNetease {
-                id: input
-                    .netease_playlist_id
-                    .context("需要netease_playlist_id")
+            LibraryOperation::ImportSource => Edit::ImportSource {
+                source: input.source.context("需要source").map_err(tool_error)?,
+                playlist_id: input
+                    .source_playlist_id
+                    .context("需要source_playlist_id")
                     .map_err(tool_error)?,
             },
             LibraryOperation::AddCurrent | LibraryOperation::AddQueue => {
@@ -630,121 +587,36 @@ impl PlayerTools {
         blocking(mygo::list).await.and_then(output)
     }
 
-    #[tool(description = "用 MyGo Music 插件搜索歌曲。返回插件曲目 ID 和毫秒时长。")]
+    #[tool(
+        description = "通过指定 MyGo 插件搜索歌曲。tracks 返回统一 Track，duration 单位为秒，含完整来源和元数据，可直接传给 play_song/enqueue_song。"
+    )]
     async fn plugin_search(
         &self,
         Parameters(input): Parameters<PluginSearch>,
     ) -> Result<CallToolResult, ErrorData> {
-        let query = input.query.trim();
-        if query.is_empty() || query.chars().count() > 120 {
-            return Err(tool_error("请输入 1 到 120 个字符"));
-        }
-        let args =
-            serde_json::json!({"query":query,"kind":"tracks","offset":input.offset.unwrap_or(0)});
-        blocking(move || {
-            let result = mygo::invoke(&input.plugin, "search", args)?;
-            mygo::remember_artwork(&input.plugin, &result);
-            Ok(result)
-        })
-        .await
-        .and_then(output)
+        blocking(move || mygo::search(&input.plugin, &input.query, input.offset.unwrap_or(0)))
+            .await
+            .and_then(output)
     }
 
     #[tool(
-        description = "播放或排队 MyGo Music 插件曲目。使用 plugin_search 返回的原始 ID、名称、艺人及毫秒时长。"
+        description = "播放完整曲目 Track，使用来源搜索返回的对象，保留封面、专辑及来源信息。通过统一数据源接口解析音频，不推断来源。"
     )]
-    async fn plugin_play(
-        &self,
-        Parameters(input): Parameters<PluginSong>,
-    ) -> Result<CallToolResult, ErrorData> {
-        if input.id.is_empty()
-            || input.id.len() > 512
-            || input.name.is_empty()
-            || input.name.len() > 512
-            || input
-                .artist
-                .as_ref()
-                .is_some_and(|artist| artist.len() > 1024)
-        {
-            return Err(tool_error("无效的插件曲目"));
-        }
-        let track = netease::Track {
-            id: input.id.parse().unwrap_or(0),
-            title: input.name,
-            artist: input.artist.unwrap_or_default(),
-            duration: input.duration_ms.unwrap_or(0) as f64 / 1000.0,
-            cover_url: None,
-            album: None,
-            source_url: None,
-            source: Some(mygo::Source {
-                plugin: input.plugin,
-                id: input.id,
-            }),
-        };
-        let media = blocking(move || mygo::resolve(track)).await?;
-        self.player(if input.enqueue.unwrap_or(false) {
-            Action::Enqueue(media)
-        } else {
-            Action::Play(media)
-        })
-        .await
-    }
-
-    #[tool(description = "按歌名或艺人搜索网易云单曲。返回曲目 ID。")]
-    async fn search_songs(
-        &self,
-        Parameters(input): Parameters<Search>,
-    ) -> Result<CallToolResult, ErrorData> {
-        let sources = self.services.sources;
-        let tracks =
-            blocking(move || sources.search(input.query, input.limit.unwrap_or(8))).await?;
-        output(tracks)
-    }
-
-    #[tool(description = "列出当前登录账号创建和收藏的歌单。支持 offset 和 limit。")]
-    async fn my_playlists(
-        &self,
-        Parameters(input): Parameters<Page>,
-    ) -> Result<CallToolResult, ErrorData> {
-        blocking(move || {
-            netease::my_playlists(input.offset.unwrap_or(0), input.limit.unwrap_or(30))
-        })
-        .await
-        .and_then(output)
-    }
-
-    #[tool(description = "按歌单 ID 读取曲目，按歌单原顺序分页返回。")]
-    async fn playlist_tracks(
-        &self,
-        Parameters(input): Parameters<PlaylistPage>,
-    ) -> Result<CallToolResult, ErrorData> {
-        blocking(move || {
-            netease::playlist_tracks(
-                input.id,
-                input.offset.unwrap_or(0),
-                input.limit.unwrap_or(30),
-            )
-        })
-        .await
-        .and_then(output)
-    }
-
-    #[tool(description = "立即播放指定网易云曲目。")]
     async fn play_song(
         &self,
         Parameters(input): Parameters<Song>,
     ) -> Result<CallToolResult, ErrorData> {
-        let media = blocking(move || netease::resolve(input.id)).await?;
-        self.player(Action::Play(media)).await
+        self.play_track(input.track, false).await
     }
 
-    #[tool(description = "将指定网易云曲目加入队列。队列为空时立即播放。")]
+    #[tool(
+        description = "将完整曲目 Track 加入播放队列，保留全部元数据；队列为空时立即播放。使用来源搜索返回的对象。"
+    )]
     async fn enqueue_song(
         &self,
         Parameters(input): Parameters<Song>,
     ) -> Result<CallToolResult, ErrorData> {
-        let media = blocking(move || netease::resolve(input.id)).await?;
-        self.player(Action::Enqueue(media)).await
+        self.play_track(input.track, true).await
     }
 
     #[tool(description = "读取本机最近播放过的曲目，按时间倒序，最多 100 条。")]
@@ -815,5 +687,199 @@ impl ServerHandler for PlayerTools {
             .with_instructions(
                 "选歌和控制本机 MusicX 播放器。导入个人歌单前，请在音乐来源设置中关联账号。",
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use musicx_plugin_api::Media;
+    use std::sync::Mutex;
+
+    #[test]
+    fn source_and_player_tools_have_separate_inputs() {
+        let tools = PlayerTools::tool_router().list_all();
+        let search = tools
+            .iter()
+            .find(|tool| tool.name == "plugin_search")
+            .unwrap();
+        assert!(
+            search.input_schema["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|field| field == "plugin")
+        );
+        for name in ["play_song", "enqueue_song"] {
+            let tool = tools.iter().find(|tool| tool.name == name).unwrap();
+            let schema = serde_json::to_value(&tool.input_schema).unwrap();
+            assert_eq!(schema["required"], serde_json::json!(["track"]));
+            assert!(schema["properties"].get("plugin").is_none());
+            let track = &schema["properties"]["track"];
+            let track =
+                track
+                    .get("$ref")
+                    .and_then(|value| value.as_str())
+                    .map_or(track, |reference| {
+                        schema
+                            .pointer(reference.strip_prefix('#').unwrap())
+                            .unwrap()
+                    });
+            for field in [
+                "title",
+                "artist",
+                "duration",
+                "cover_url",
+                "album",
+                "source_url",
+                "source",
+            ] {
+                assert!(
+                    track["properties"].get(field).is_some(),
+                    "missing track metadata: {field}"
+                );
+            }
+        }
+        for name in [
+            "plugin_play",
+            "search_songs",
+            "my_playlists",
+            "playlist_tracks",
+        ] {
+            assert!(
+                !tools.iter().any(|tool| tool.name == name),
+                "source-specific player tool: {name}"
+            );
+        }
+    }
+
+    fn track() -> protocol::Track {
+        serde_json::from_value(serde_json::json!({
+            "id":0,"title":"完整曲目","artist":"Fixture artist","duration":125.5,
+            "cover_url":"https://example.com/cover.jpg",
+            "album":{"id":"album:opaque","name":"Fixture album"},
+            "source_url":"https://example.com/tracks/opaque",
+            "source":{"plugin":"uninstalled-fixture-source","id":"track:opaque"}
+        }))
+        .unwrap()
+    }
+
+    struct FixtureSource {
+        seen: Mutex<Vec<protocol::Track>>,
+        fail: bool,
+    }
+    impl DataSource for FixtureSource {
+        fn resolve(&self, track: protocol::Track, quality: protocol::Quality) -> Result<Media> {
+            self.seen.lock().unwrap().push(track.clone());
+            anyhow::ensure!(!self.fail, "fixture source unavailable");
+            Ok(Media {
+                track,
+                url: "https://example.com/resolved.mp3".parse().unwrap(),
+                user_agent: Some("Independent source fixture".into()),
+                quality: protocol::AudioQuality {
+                    requested: quality,
+                    ..Default::default()
+                },
+            })
+        }
+        fn info(&self, _: protocol::Track) -> protocol::TrackInfo {
+            unreachable!()
+        }
+        fn album(&self, _: protocol::Track) -> Result<protocol::AlbumPage> {
+            unreachable!()
+        }
+    }
+
+    fn submit_media(action: Action, reply: Reply, enqueue: bool) {
+        let media = match (action, enqueue) {
+            (Action::Play(media), false) | (Action::Enqueue(media), true) => media,
+            _ => panic!("wrong player action"),
+        };
+        assert!(
+            media.track == track(),
+            "all track metadata must reach the player"
+        );
+        assert_eq!(media.url.as_str(), "https://example.com/resolved.mp3");
+        assert_eq!(
+            media.user_agent.as_deref(),
+            Some("Independent source fixture")
+        );
+        reply
+            .unwrap()
+            .send(Ok(Status {
+                track: Some(media.track),
+                ..Default::default()
+            }))
+            .ok()
+            .unwrap();
+    }
+    fn submit_play(action: Action, reply: Reply) {
+        submit_media(action, reply, false);
+    }
+    fn submit_enqueue(action: Action, reply: Reply) {
+        submit_media(action, reply, true);
+    }
+    fn no_submit(_: Action, _: Reply) {
+        panic!("resolution failure must not change the player");
+    }
+
+    fn fixture(submit: fn(Action, Reply), fail: bool) -> (PlayerTools, &'static FixtureSource) {
+        let source = Box::leak(Box::new(FixtureSource {
+            seen: Mutex::new(Vec::new()),
+            fail,
+        }));
+        (
+            PlayerTools {
+                services: Services {
+                    submit,
+                    quit: || {},
+                    sources: source,
+                },
+                tool_router: PlayerTools::tool_router(),
+            },
+            source,
+        )
+    }
+
+    #[tokio::test]
+    async fn play_song_uses_the_injected_source_and_preserves_full_metadata() {
+        let (tools, source) = fixture(submit_play, false);
+        tools
+            .play_song(Parameters(Song { track: track() }))
+            .await
+            .unwrap();
+        assert!(source.seen.lock().unwrap().as_slice() == [track()]);
+    }
+
+    #[tokio::test]
+    async fn enqueue_song_uses_the_injected_source_and_preserves_full_metadata() {
+        let (tools, source) = fixture(submit_enqueue, false);
+        tools
+            .enqueue_song(Parameters(Song { track: track() }))
+            .await
+            .unwrap();
+        assert!(source.seen.lock().unwrap().as_slice() == [track()]);
+    }
+
+    #[tokio::test]
+    async fn failed_source_resolution_never_submits_play_or_enqueue() {
+        let (tools, source) = fixture(no_submit, true);
+        assert!(
+            tools
+                .play_song(Parameters(Song { track: track() }))
+                .await
+                .unwrap_err()
+                .message
+                .contains("fixture source unavailable")
+        );
+        assert!(
+            tools
+                .enqueue_song(Parameters(Song { track: track() }))
+                .await
+                .unwrap_err()
+                .message
+                .contains("fixture source unavailable")
+        );
+        assert_eq!(source.seen.lock().unwrap().len(), 2);
     }
 }

@@ -1,8 +1,8 @@
 //! The source-management page is disposable. Only a live sign-in owns a temporary VM.
 use crate::{
     protocol::{
-        MusicSource, MusicSourceAction as Action, SignInMethod, SourceAccount, SourceLogin,
-        SourcePlaylist,
+        MusicSource, MusicSourceAction as Action, MusicSourceCatalog, SignInMethod, SourceAccount,
+        SourceLogin, SourcePlaylist,
     },
     remote,
 };
@@ -47,6 +47,10 @@ struct Browser {
     busy: Signal<bool>,
     message: Signal<String>,
     rows: Signal<Vec<MusicSource>>,
+    catalog_refreshing: Signal<bool>,
+    catalog_loading: Signal<bool>,
+    catalog_warning: Signal<Option<String>>,
+    repository: Signal<String>,
     selected: Signal<Option<MusicSource>>,
     draft: Signal<BTreeMap<String, String>>,
     dirty: Signal<BTreeSet<String>>,
@@ -93,16 +97,52 @@ impl Browser {
         self.page
             .set(if catalog { Page::Catalog } else { Page::List });
         self.rows.set(Vec::new());
+        if catalog {
+            self.message.set(String::new());
+            self.catalog_warning.set(None);
+            self.read_catalog(false);
+            return;
+        }
         self.work(
-            move || {
-                request::<Vec<MusicSource>>(if catalog {
-                    Action::Catalog
-                } else {
-                    Action::List
-                })
-            },
+            move || request::<Vec<MusicSource>>(Action::List),
             |this, rows| this.rows.set(rows),
         );
+    }
+    fn read_catalog(self, refresh: bool) {
+        if self.catalog_loading.get() || self.busy.get() {
+            return;
+        }
+        self.catalog_loading.set(true);
+        let (send, receive) = oneshot::channel();
+        std::thread::spawn(move || {
+            let _ = send.send(request::<MusicSourceCatalog>(if refresh {
+                Action::RefreshCatalog
+            } else {
+                Action::CatalogView
+            }));
+        });
+        self.owner.run(|| {
+            spawn(async move {
+                let result = receive.await;
+                self.catalog_loading.set(false);
+                if self.page.get() == Page::Catalog {
+                    match result {
+                        Ok(Ok(catalog)) => {
+                            self.rows.set(catalog.sources);
+                            self.catalog_refreshing.set(catalog.refreshing);
+                            self.catalog_warning.set(catalog.warning);
+                        }
+                        result => {
+                            self.catalog_refreshing.set(false);
+                            self.catalog_warning.set(Some(match result {
+                                Ok(Err(error)) => error.to_string(),
+                                _ => "目录读取已结束，请重试".into(),
+                            }));
+                        }
+                    }
+                }
+            })
+        });
     }
     fn populate(self, source: MusicSource) {
         self.imported.set(false);
@@ -157,6 +197,9 @@ impl Browser {
         else {
             return;
         };
+        self.install_repository(repository);
+    }
+    fn install_repository(self, repository: String) {
         self.work(
             move || request::<MusicSource>(Action::Install { repository }),
             |this, source| {
@@ -216,6 +259,10 @@ impl Browser {
         );
     }
     fn poll(self) {
+        if self.page.get() == Page::Catalog && self.catalog_refreshing.get() && !self.busy.get() {
+            self.read_catalog(false);
+            return;
+        }
         if self.page.get() != Page::Login || self.busy.get() {
             return;
         }
@@ -372,6 +419,10 @@ pub fn sources_view(
         busy: signal(false),
         message: signal(String::new()),
         rows: signal(Vec::new()),
+        catalog_refreshing: signal(false),
+        catalog_loading: signal(false),
+        catalog_warning: signal(None),
+        repository: signal(String::new()),
         selected: signal(None),
         draft: signal(BTreeMap::new()),
         dirty: signal(BTreeSet::new()),
@@ -403,14 +454,23 @@ pub fn sources_view(
         .child(when(move||matches!(this.page.get(),Page::List|Page::Catalog),move||{
             view().flex_1().min_h(px(0.0)).gap(px(6.0))
                 .child(caption(move||if this.page.get()==Page::Catalog{"MyGo 插件目录 · 服务可用性需逐项验证"}else{"已添加的数据源"}))
-                .child(when(move||!this.busy.get()&&this.rows.with(Vec::is_empty),||caption("还没有插件数据源，点击添加。")))
+                .child(when(move||this.page.get()==Page::Catalog,move||view().gap(px(5.0))
+                    .child(input().label("GitHub 插件仓库").placeholder("owner/repo 或 GitHub 地址").value(move||this.repository.get()).on_change(move|value:&str|this.repository.set(value.into()))
+                        .w_full().min_w(px(0.0)).h(px(32.0)).px(px(8.0)).rounded(px(5.0)).bg(move||theme().muted).text_color(move||theme().foreground))
+                    .child(view().flex_row().items_center().justify_between()
+                        .child(action("从仓库添加",move||this.busy.get()||this.repository.with(|value|value.trim().is_empty()),move||this.install_repository(this.repository.get())))
+                        .child(action("刷新目录",move||this.busy.get()||this.catalog_loading.get()||this.catalog_refreshing.get(),move||this.read_catalog(true))))
+                    .child(when(move||this.catalog_refreshing.get()||this.catalog_loading.get(),move||caption(move||if this.catalog_refreshing.get(){"正在更新目录…"}else{"正在读取目录…"})))
+                    .child(when(move||this.catalog_warning.with(Option::is_some),move||caption(move||this.catalog_warning.get().unwrap_or_default())))))
+                .child(when(move||this.page.get()==Page::Catalog&&this.message.with(|message|!message.is_empty()),move||caption(move||this.message.get())))
+                .child(when(move||!this.busy.get()&&!this.catalog_loading.get()&&this.rows.with(Vec::is_empty),move||caption(move||if this.page.get()==Page::Catalog{"目录暂无来源，也可输入仓库添加。"}else{"还没有插件数据源，点击添加。"})))
                 .child(virtual_list(move||this.rows.with(Vec::len),move|at|{
                     let source=move||this.rows.with(|r|r.get(at.index()).cloned());
                     button().accessibility_label(move||Some(SharedString::from(format!("配置数据源 {}",source().map_or_else(String::new,|s|s.name)))))
                         .disabled(move||this.busy.get()).on_press(move||{if let Some(source)=source(){this.select(source);}})
                         .h(px(70.0)).w_full().justify_center().px(px(8.0)).gap(px(4.0)).rounded(px(6.0)).hover(|s|s.bg(theme().muted))
                         .child(text(move||source().map_or_else(String::new,|s|s.name)).number_of_lines(1).text_size(px(14.0)).text_color(move||theme().foreground))
-                        .child(caption(move||source().map_or_else(String::new,|s|if s.installed{"已添加".into()}else if s.can_install{capabilities(&s)}else{"尚未支持此类型".into()})))
+                        .child(caption(move||source().map_or_else(String::new,|s|if s.installed{"已添加".into()}else if s.can_install{if s.capabilities.is_empty(){s.description}else{capabilities(&s)}}else{"尚未支持此类型".into()})))
                 }).flex_1().min_h(px(0.0)).estimated_item_size(px(70.0)).label("音乐数据源列表"))
         }))
         .child(when(move||this.page.get()==Page::Detail,move||{
@@ -419,6 +479,7 @@ pub fn sources_view(
                     .child(crate::controls::source_badge(move||this.selected.with(|s|s.as_ref().map_or_else(String::new,|s|s.id.clone()))))
                     .child(text(move||this.selected.with(|s|s.as_ref().map_or_else(String::new,|s|crate::controls::source_name(&s.id,&s.name)))).number_of_lines(2).text_size(px(19.0)).font_weight(FontWeight::SEMIBOLD).text_color(move||theme().foreground)))
                 .child(when(move||this.managing.get()||this.selected.with(|s|s.as_ref().is_some_and(|s|!s.installed)),move||caption(move||this.selected.with(|s|s.as_ref().map_or_else(String::new,|s|format!("{} · {}",s.version,capabilities(s)))))))
+                .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|!s.description.is_empty())),move||caption(move||this.selected.with(|s|s.as_ref().map_or_else(String::new,|s|s.description.clone())))))
                 .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.repository.is_some()&&(!s.installed||this.managing.get()))),move||button()
                     .accessibility_label(Some("打开数据源项目".into())).on_press(move||{if let Some(url)=this.selected.with(|s|s.as_ref().and_then(|s|s.repository.clone())){spawn(async move{let _=open_url(url).await;});}})
                     .py(px(6.0)).rounded(px(4.0)).hover(|s|s.bg(theme().muted)).child(caption(move||this.selected.with(|s|s.as_ref().and_then(|s|s.repository.clone()).unwrap_or_default())))))
@@ -505,5 +566,5 @@ pub fn sources_view(
         ))
         .child(when(move||this.imported.get()&&this.page.get()==Page::Playlists,move||crate::controls::primary("查看已导入歌单",move||this.busy.get(),done)))
         .child(when(move||this.busy.get(),||caption("正在读取或保存…")))
-        .child(caption(move||this.message.get()))
+        .child(when(move||this.page.get()!=Page::Catalog,move||caption(move||this.message.get())))
 }

@@ -11,7 +11,7 @@ MusicX is a native macOS menu bar player with support for media keys and macOS N
 ## Highlights
 
 - **Control playback through MCP.** Ask your agent to find songs, play or queue tracks, pause, skip, or adjust the volume. [Connect an MCP client](#connect-an-mcp-client)
-- **Add music sources with MyGo plugins.** Browse the catalog for compatible sources such as NetEase Cloud Music, Bodian Music, and Kugou Concept. Install them from **Settings → Music Sources**.
+- **Add music sources with MyGo plugins.** Browse the catalog or enter a GitHub repository to add a compatible source. Install them from **Settings → Music Sources**.
 - **Low memory usage.** Closing the player window frees its UI memory while a lightweight helper keeps playback and MCP available.
 
 > “Play a track by Jay Chou and queue two more.”
@@ -24,7 +24,7 @@ MusicX requires macOS 14 or later. The first notarized download is in preparatio
 2. Drag **MusicX** to **Applications** and open it there.
 3. Use the MusicX menu bar icon to reopen the player after closing the window.
 
-MusicX installs its default NetEase Cloud Music source on first launch. A dot on the menu bar icon indicates playback. Right-click and choose **Quit MusicX**, or press Command-Q with the panel focused, to end the session.
+MusicX starts without a default music source. Add a plugin from **Settings → Music Sources** before searching or playing music; installed sources work independently of catalog availability. A dot on the menu bar icon indicates playback. Right-click and choose **Quit MusicX**, or press Command-Q with the panel focused, to end the session.
 
 ## A player that fits in the menu bar
 
@@ -38,11 +38,11 @@ Open **Settings → MCP Connection** in MusicX and choose **Copy MCP Configurati
 
 The client can search, play, queue, seek, and work with sources, local playlists, and playback history. [MCP tool reference](docs/DEVELOPMENT.md#mcp-tools)
 
-## Local data and upgrades
+## Local data
 
 MusicX saves accounts, preferences, playlists, history, and the MCP token in `~/Library/Application Support/MusicX/`. Installed plugins live in `mygo-plugins/`.
 
-Quit the old helper before upgrading. On startup, MusicX moves the legacy `Mini Cloud Music` directory into place if the new path is absent. When both directories exist, it uses the new path and preserves the old directory.
+MusicX uses only its current data directory and application identity. Previous application identities, environment names, and data directories are not imported or migrated. Existing files elsewhere are left untouched.
 
 ## Project guides
 

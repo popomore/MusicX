@@ -36,8 +36,10 @@ Run a compile check from `apps/ios`.
 cargo check --locked --target aarch64-apple-ios
 ```
 
+The app is packaged as `MusicX.app` with bundle identifier `local.musicx.iphone`. MusicX uses this new application identity without importing previous builds or containers. Apple fixes an App Store Connect bundle identifier after the first uploaded build. [Apple bundle identifier guidance](https://developer.apple.com/documentation/xcode/changing-the-bundle-identifier)
+
 ## Local data and MCP
 
-The app stores account data, playlists, playback history, and its MCP token in the sandbox's `Library/Application Support/MusicX/`. On upgrade, the app moves the legacy directory into place if the new path is absent. Sign in on the phone to use personal playlists.
+The app stores account data, playlists, playback history, and its MCP token in the sandbox's `Library/Application Support/MusicX/`. Open **Music Sources** to add a plugin and use its supported sign-in and playlist import actions. **My Playlists** contains local snapshots. There is no default source or provider-specific link/ID playback.
 
 The Streamable HTTP endpoint listens on the phone's loopback interface at `http://127.0.0.1:45968/mcp`. It uses the device's own bearer token and playback session.

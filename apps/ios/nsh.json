@@ -1,6 +1,6 @@
 {
-  "name": "迷你云音乐",
-  "id": "local.mini-cloudmusic.iphone",
+  "name": "MusicX",
+  "id": "local.musicx.iphone",
   "version": "0.2.0",
   "build": 1,
   "rust": ".",

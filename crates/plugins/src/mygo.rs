@@ -16,28 +16,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::netease::{Media, Track};
+use crate::protocol::Track;
 use musicx_core::{metadata::merge_metadata, storage::state_dir};
-
-pub const NETEASE_REPOSITORY: &str = "sogud/mygo-music-netease";
-const NETEASE_SCRIPT_SHA: &str = "e887ec38987cbbcc66735314019d54a5a0b8cda6544234d232df16f259d8f8b0";
-pub(crate) fn is_pinned_netease(script: &[u8]) -> bool {
-    use sha2::{Digest, Sha256};
-    format!("{:x}", Sha256::digest(script)) == NETEASE_SCRIPT_SHA
-}
-
-/// Install the catalog's pinned plugin once, without importing legacy credentials.
-pub fn ensure_netease() -> Result<()> {
-    static INSTALL: Mutex<()> = Mutex::new(());
-    let _guard = INSTALL.lock().map_err(|_| anyhow!("插件安装锁不可用"))?;
-    let dir = plugin_root()?.join("netease");
-    if !dir.exists() {
-        crate::music_sources::install(NETEASE_REPOSITORY)?;
-    }
-    let m = manifest(&dir)?;
-    ensure!(m.id == "netease" && compatible(&m), "网易云插件类型不兼容");
-    Ok(())
-}
+use musicx_plugin_api::Media;
 
 fn aes_ecb(key: &str, text: &str) -> Result<String> {
     use aes::{
@@ -63,6 +44,28 @@ const MAX_BODY: u64 = 2 * 1024 * 1024;
 const METADATA_TIMEOUT: Duration = Duration::from_secs(3);
 static PLUGIN_CALL: Mutex<()> = Mutex::new(());
 static METADATA: Mutex<VecDeque<(String, String, Track)>> = Mutex::new(VecDeque::new());
+
+/// Normalize source results at the adapter boundary so players receive one Track type.
+pub fn search(plugin: &str, query: &str, offset: u64) -> Result<Value> {
+    let query = query.trim();
+    ensure!(
+        !query.is_empty() && query.chars().count() <= 120,
+        "请输入 1 到 120 个字符"
+    );
+    let mut result = invoke(
+        plugin,
+        "search",
+        json!({"query":query,"kind":"tracks","offset":offset}),
+    )?;
+    let rows = result["tracks"].as_array().context("来源未返回歌曲列表")?;
+    let tracks: Vec<_> = rows
+        .iter()
+        .filter_map(|row| catalog_track(plugin, row))
+        .collect();
+    remember_artwork(plugin, &result);
+    result["tracks"] = serde_json::to_value(tracks)?;
+    Ok(result)
+}
 
 /// Keep a small metadata-only window of plugin search covers, never image bytes.
 pub fn remember_artwork(plugin: &str, result: &Value) {
@@ -191,9 +194,20 @@ pub(crate) fn fill_artwork(track: &mut Track) {
 }
 
 pub fn source_name(plugin: &str) -> String {
+    if !valid_id(plugin) {
+        return "未关联来源".into();
+    }
     plugin_root()
         .and_then(|root| manifest(&root.join(plugin)))
         .map_or_else(|_| plugin.to_owned(), |manifest| manifest.name)
+}
+
+pub(crate) fn source_repository(plugin: &str) -> Option<String> {
+    if !valid_id(plugin) {
+        return None;
+    }
+    let manifest = manifest(&plugin_root().ok()?.join(plugin)).ok()?;
+    musicx_core::metadata::public_url(manifest.repository.as_deref()?)
 }
 
 pub fn album(track: &Track) -> Result<crate::protocol::AlbumPage> {
@@ -416,6 +430,7 @@ pub fn list() -> Result<Value> {
             let manifest = manifest(&item.path())?;
             found.push(json!({
                 "id": manifest.id, "name": manifest.name, "version": manifest.version,
+                "repository": manifest.repository,
                 "network": manifest.permissions.network, "catalog_supported": compatible(&manifest)
             }));
         }
@@ -530,21 +545,9 @@ pub(crate) fn invoke_sign_in(
             .lock()
             .map_err(|_| anyhow!("插件运行锁不可用"))?,
     );
-    let pinned_web = if id == "netease" && method == crate::protocol::SignInMethod::Web {
-        let dir = plugin_root()?.join(id);
-        let m = manifest(&dir)?;
-        is_pinned_netease(&fs::read(entry(&dir, &m)?)?)
-    } else {
-        false
-    };
-    let export = if pinned_web {
-        "__mini_web_signin"
-    } else {
-        "signIn"
-    };
     invoke_inner(
         id,
-        export,
+        "signIn",
         json!({"method":method}),
         Some(job),
         Duration::from_secs(300),
@@ -565,33 +568,7 @@ fn invoke_inner(
         id == manifest.id && compatible(&manifest),
         "此插件需要外部进程或远程播放"
     );
-    let mut script = fs::read(entry(&dir, &manifest)?)?;
-    if export == "__mini_web_signin" {
-        ensure!(
-            id == "netease" && is_pinned_netease(&script),
-            "此网易云插件版本不支持网页登录适配"
-        );
-        script.extend_from_slice(r#"
-export async function __mini_web_signin(){
-  const result=await host.webSignIn({url:"https://music.163.com/#/login",cookiesOf:"https://music.163.com/",until:["MUSIC_U"]});
-  const cookies={};for(const part of result.cookie.split(/;\s*/)){const at=part.indexOf("=");if(at>0){const key=part.slice(0,at);if(COOKIE_NAMES.includes(key))cookies[key]=part.slice(at+1);}}
-  const pending={cookies,profile:null};pending.profile=await profileFor(pending);
-  if(!pending.profile)throw new Error("网页登录未取得有效账号，请重新登录");
-  session=pending;profileCheckedAt=Date.now();persistSession();return pending.profile;
-}
-"#.as_bytes());
-    }
-    if export == "__mini_track" {
-        use sha2::{Digest, Sha256};
-        ensure!(
-            id == "netease" && format!("{:x}", Sha256::digest(&script)) == NETEASE_SCRIPT_SHA,
-            "当前网易云插件不提供ID单曲兼容，请通过搜索结果选歌"
-        );
-        // The MyGo contract passes full Track objects to playback. Existing MCP
-        // ID-only calls still need metadata; reuse this pinned plugin's own
-        // converter and detail request, without another NetEase API client.
-        script.extend_from_slice(b"\nexport async function __mini_track({id}) { return (await songDetails([id])).map(toTrack)[0] || null; }\n");
-    }
+    let script = fs::read(entry(&dir, &manifest)?)?;
     let storage_name = format!("mygo-{id}-storage.json");
     let storage = optional_json(&state_dir()?.join(&storage_name))?;
     let settings = optional_json(&dir.join("settings.json"))?;
@@ -769,9 +746,6 @@ export async function __mini_web_signin(){
     })
 }
 
-pub fn resolve(track: Track) -> Result<Media> {
-    resolve_with_quality(track, crate::audio_quality::preferred())
-}
 pub fn resolve_with_quality(mut track: Track, quality: crate::protocol::Quality) -> Result<Media> {
     let source = track.source.as_ref().context("缺少插件曲目标识")?;
     let stream = invoke(
@@ -797,12 +771,9 @@ pub fn resolve_with_quality(mut track: Track, quality: crate::protocol::Quality)
     let mut user_agent = None;
     if let Some(headers) = stream["headers"].as_object() {
         for (key, value) in headers {
-            // NetEase's public CDN works without this non-authentication hint.
-            // AVPlayer exposes a public User-Agent option, but no Referer API.
-            if source.plugin == "netease"
-                && key.eq_ignore_ascii_case("Referer")
-                && value.as_str() == Some("https://music.163.com/")
-            {
+            // AVPlayer has a public User-Agent option but no Referer option.
+            // Omit this navigation hint uniformly for every source plugin.
+            if key.eq_ignore_ascii_case("Referer") {
                 continue;
             }
             ensure!(

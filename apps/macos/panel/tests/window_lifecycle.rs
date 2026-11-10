@@ -70,6 +70,16 @@ fn reopen() {
     );
 }
 
+fn reopen_from_helper() {
+    // Exercise the real helper sender in another process, not an in-process
+    // delegate call, so notification routing is part of the regression.
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--reveal-panel", &std::process::id().to_string()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
 fn lifecycle_checks() -> anyhow::Result<Vec<&'static str>> {
     let mut passed = Vec::new();
     let mut check = |phase, predicate: fn(&NSApplication, &NSWindow) -> bool| {
@@ -96,10 +106,41 @@ fn lifecycle_checks() -> anyhow::Result<Vec<&'static str>> {
     })?;
     on_main(reopen);
     check("hidden reopen", front)?;
+    on_main(|| {
+        let (app, window) = app_window();
+        window.miniaturize(None);
+        app.hide(None);
+    });
+    check("hidden minimized before helper reopen", |app, window| {
+        !app.isActive() && window.isMiniaturized()
+    })?;
+    on_main(reopen_from_helper);
+    check("helper minimized reopen", front)?;
+    on_main(|| {
+        let (app, window) = app_window();
+        window.orderOut(None);
+        app.hide(None);
+    });
+    check("hidden before helper reopen", |app, window| {
+        !app.isActive() && !window.isVisible()
+    })?;
+    on_main(|| musicx_platform_apple::desktop::reveal_panel(0));
+    std::thread::sleep(Duration::from_millis(200));
+    anyhow::ensure!(
+        on_main(|| !app_window().1.isVisible()),
+        "another PID reopened this panel"
+    );
+    on_main(reopen_from_helper);
+    check("helper hidden reopen", front)?;
     Ok(passed)
 }
 
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("--reveal-panel") {
+        let process_id = std::env::args().nth(2).unwrap().parse().unwrap();
+        musicx_platform_apple::desktop::reveal_panel(process_id);
+        return;
+    }
     if std::env::var("MUSICX_NATIVE_UI_TEST").as_deref() != Ok("1") {
         println!("Skipped: set MUSICX_NATIVE_UI_TEST=1 in an interactive macOS session.");
         return;
@@ -111,7 +152,7 @@ fn main() {
     });
     assert_eq!(desktop::run_panel(), std::process::ExitCode::SUCCESS);
     let passed = worker.join().unwrap().unwrap();
-    assert_eq!(passed.len(), 6);
+    assert_eq!(passed.len(), 10);
     for phase in passed {
         println!("{phase}: passed");
     }

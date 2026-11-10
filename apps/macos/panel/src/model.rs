@@ -15,8 +15,7 @@ pub enum Page {
     Info,
     History,
     Album,
-    #[cfg_attr(target_os = "macos", allow(dead_code))] // Phone-only link entry.
-    Link,
+    Sources,
     Library,
     #[cfg(target_os = "macos")]
     Queue,
@@ -30,6 +29,8 @@ pub enum Page {
 pub struct Model {
     owner: Owner,
     pub status: Signal<Status>,
+    #[cfg(target_os = "macos")]
+    pub status_ready: Signal<bool>,
     pub page: Signal<Page>,
     #[cfg(target_os = "macos")]
     pub drawer_open: Signal<bool>,
@@ -63,8 +64,6 @@ pub struct Model {
     favorite_generation: Signal<u64>,
     pub scrub: Signal<Option<f64>>,
     pub cover_failed: Signal<bool>,
-    #[cfg_attr(target_os = "macos", allow(dead_code))]
-    pub link: Signal<String>,
 }
 
 enum Loaded {
@@ -84,6 +83,8 @@ impl Model {
         Self {
             owner: Owner::current(),
             status: signal(Status::default()),
+            #[cfg(target_os = "macos")]
+            status_ready: signal(false),
             page: signal(Page::Player),
             #[cfg(target_os = "macos")]
             drawer_open: signal(false),
@@ -122,7 +123,6 @@ impl Model {
             favorite_generation: signal(0),
             scrub: signal(None),
             cover_failed: signal(false),
-            link: signal(String::new()),
         }
     }
     pub fn open(self, page: Page) {
@@ -208,7 +208,7 @@ impl Model {
                 Page::Queue => remote::read_json("/ui/queue").map(|q| Loaded::Queue(Box::new(q))),
                 #[cfg(target_os = "macos")]
                 Page::Lyrics | Page::Settings => unreachable!(),
-                Page::Player | Page::Link | Page::Library => unreachable!(),
+                Page::Player | Page::Sources | Page::Library => unreachable!(),
             };
             let _ = send.send(result);
         });
@@ -247,7 +247,7 @@ impl Model {
     }
     fn slot(page: Page) -> Option<usize> {
         match page {
-            Page::Player | Page::Link | Page::Library => None,
+            Page::Player | Page::Sources | Page::Library => None,
             Page::Info => Some(0),
             #[cfg(target_os = "macos")]
             Page::Lyrics => Some(0),
@@ -275,6 +275,8 @@ impl Model {
             self.cover_failed.set(false);
         }
         self.status.set(status);
+        #[cfg(target_os = "macos")]
+        self.status_ready.set(true);
         #[cfg(target_os = "macos")]
         if changed || library_changed {
             if changed {
@@ -428,7 +430,6 @@ impl Model {
             }
         });
     }
-    #[cfg(target_os = "macos")]
     pub fn play_local(self, id: String, index: usize) {
         self.play_action(Action::PlayLocalPlaylist { id, index });
     }
@@ -491,13 +492,6 @@ impl Model {
                 self.quality_busy.set(false);
             })
         });
-    }
-    #[cfg_attr(target_os = "macos", allow(dead_code))]
-    pub fn play_link(self) {
-        match remote::song_id(&self.link.get()) {
-            Ok(id) => self.play_action(Action::PlayId(id)),
-            Err(error) => self.error.set(error.to_string()),
-        }
     }
     fn play_action(self, action: Action) {
         if self.starting.get() {

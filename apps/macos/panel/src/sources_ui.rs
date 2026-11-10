@@ -78,6 +78,66 @@ pub fn settings_view(model: Model) -> impl IntoElement {
     flow(model, false, || {})
 }
 
+#[cfg(target_os = "ios")]
+fn playback_settings(_model: Model) -> impl IntoElement {
+    view()
+}
+
+#[cfg(target_os = "macos")]
+fn playback_settings(model: Model) -> impl IntoElement {
+    view()
+        .gap(px(8.0))
+        .pb(px(14.0))
+        .child(section("播放"))
+        .child(
+            button()
+                .accessibility_label(Some("切换播放界面单行歌词".into()))
+                .on_press(move || model.toggle_mini_lyrics())
+                .selected(move || model.show_mini_lyrics.get())
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .h(px(40.0))
+                .px(px(4.0))
+                .rounded(px(5.0))
+                .hover(|s| s.bg(theme().muted))
+                .child(
+                    text("单行同步歌词")
+                        .text_size(px(13.0))
+                        .text_color(move || theme().foreground),
+                )
+                .child(
+                    view()
+                        .w(px(28.0))
+                        .h(px(16.0))
+                        .p(px(2.0))
+                        .rounded(px(8.0))
+                        .bg(move || {
+                            if model.show_mini_lyrics.get() {
+                                theme().foreground
+                            } else {
+                                theme().muted
+                            }
+                        })
+                        .flex_row()
+                        .style_with(move |s| {
+                            if model.show_mini_lyrics.get() {
+                                s.justify_end()
+                            } else {
+                                s.justify_start()
+                            }
+                        })
+                        .child(
+                            view()
+                                .w(px(12.0))
+                                .h(px(12.0))
+                                .rounded(px(6.0))
+                                .bg(move || theme().background),
+                        ),
+                ),
+        )
+}
+
 fn mcp_settings() -> impl IntoElement {
     let message = signal("");
     view()
@@ -166,66 +226,15 @@ fn flow(model: Model, importing: bool, back: impl Fn() + Copy + 'static) -> impl
                     view()
                         .gap(px(10.0))
                         .pb(px(12.0))
-                        .child(when(
-                            move || !importing,
-                            move || {
-                                view()
-                                    .gap(px(8.0))
-                                    .pb(px(14.0))
-                                    .child(section("播放"))
-                                    .child(
-                                        button()
-                                            .accessibility_label(Some(
-                                                "切换播放界面单行歌词".into(),
-                                            ))
-                                            .on_press(move || model.toggle_mini_lyrics())
-                                            .selected(move || model.show_mini_lyrics.get())
-                                            .flex_row()
-                                            .items_center()
-                                            .justify_between()
-                                            .h(px(40.0))
-                                            .px(px(4.0))
-                                            .rounded(px(5.0))
-                                            .hover(|s| s.bg(theme().muted))
-                                            .child(
-                                                text("单行同步歌词")
-                                                    .text_size(px(13.0))
-                                                    .text_color(move || theme().foreground),
-                                            )
-                                            .child(
-                                                view()
-                                                    .w(px(28.0))
-                                                    .h(px(16.0))
-                                                    .p(px(2.0))
-                                                    .rounded(px(8.0))
-                                                    .bg(move || {
-                                                        if model.show_mini_lyrics.get() {
-                                                            theme().foreground
-                                                        } else {
-                                                            theme().muted
-                                                        }
-                                                    })
-                                                    .flex_row()
-                                                    .style_with(move |s| {
-                                                        if model.show_mini_lyrics.get() {
-                                                            s.justify_end()
-                                                        } else {
-                                                            s.justify_start()
-                                                        }
-                                                    })
-                                                    .child(
-                                                        view()
-                                                            .w(px(12.0))
-                                                            .h(px(12.0))
-                                                            .rounded(px(6.0))
-                                                            .bg(move || theme().background),
-                                                    ),
-                                            ),
-                                    )
-                            },
-                        ))
+                        .child(when(move || !importing, move || playback_settings(model)))
                         .child(when(move || !importing, mcp_settings))
                         .child(when(move || !importing, || section("音乐来源")))
+                        .child(when(
+                            move || {
+                                !this.busy.get() && this.plugins.with(|sources| sources.is_empty())
+                            },
+                            || caption("尚未添加音乐来源。添加插件后，可按其能力登录或导入歌单。"),
+                        ))
                         .child(each(
                             move || {
                                 this.plugins.with(|rows| {

@@ -20,8 +20,8 @@ lto = "thin"
 codegen-units = 1
 strip = "symbols"
 
-[profile.release.package.mini-cloudmusic-panel]
+[profile.release.package.musicx-panel]
 opt-level = "s"
 
-[profile.release.package.mini-cloudmusic-webauth]
+[profile.release.package.musicx-webauth]
 opt-level = "s"

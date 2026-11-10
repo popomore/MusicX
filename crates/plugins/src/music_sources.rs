@@ -1,19 +1,17 @@
 //! Sources adapt a bounded subset of the MyGo contract; local playlists stay ours.
-use crate::{mygo, protocol::*};
+use crate::{mygo, protocol::*, repository, source_catalog};
 use anyhow::{Context, Result, ensure};
 use musicx_core::{metadata, storage};
-use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
     fs,
-    io::{Read, Write},
+    io::Write,
     os::unix::fs::OpenOptionsExt,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
 };
 
 static SETTINGS_WRITER: Mutex<()> = Mutex::new(());
@@ -26,49 +24,41 @@ static LOGIN: Mutex<LoginRegistry> = Mutex::new(LoginRegistry {
     cancelled: std::collections::VecDeque::new(),
 });
 
-#[derive(Clone, Deserialize)]
-struct CatalogEntry {
-    repo: String,
-    #[serde(default)]
-    commit: String,
-    #[serde(default)]
-    manifest: Value,
-    #[serde(default)]
-    exports: Vec<String>,
-    #[serde(default)]
-    imports: Vec<String>,
-    #[serde(default)]
-    host_api: Vec<String>,
-    #[serde(default)]
-    entry_error: Option<String>,
-    #[serde(default)]
-    error: Option<String>,
-    #[serde(default)]
-    manifest_sha256: String,
-    #[serde(default)]
-    entry_sha256: String,
-}
-fn definitions() -> Result<Vec<CatalogEntry>> {
-    Ok(serde_json::from_str(include_str!(
-        "../../../assets/mygo_source_catalog.json"
-    ))?)
-}
 fn plugin(source: &str) -> Result<&str> {
-    if source == "netease" {
-        return Ok("netease");
-    }
     let id = source.strip_prefix("mygo:").context("请选择插件数据源")?;
     ensure!(mygo::valid_id(id), "无效的数据源标识");
     Ok(id)
 }
 
-/// Lexical declarations, not plugin execution. Comments/strings cannot invent capabilities.
-pub(crate) fn declared_exports(source: &str) -> Vec<String> {
+fn script_words(source: &str) -> Vec<String> {
+    // Template text is inert, but every ${...} expression is JavaScript again.
+    // Keep those contexts on a heap stack rather than recursively scanning input.
+    enum Context {
+        Code(Option<usize>),
+        Template,
+    }
     let bytes = source.as_bytes();
+    let mut contexts = vec![Context::Code(None)];
     let mut at = 0;
     let mut words = Vec::new();
     while at < bytes.len() {
         let c = bytes[at];
+        if matches!(contexts.last(), Some(Context::Template)) {
+            match c {
+                b'\\' => at = (at + 2).min(bytes.len()),
+                b'`' => {
+                    contexts.pop();
+                    at += 1;
+                }
+                b'$' if bytes.get(at + 1) == Some(&b'{') => {
+                    contexts.push(Context::Code(Some(1)));
+                    words.push("{".into());
+                    at += 2;
+                }
+                _ => at += 1,
+            }
+            continue;
+        }
         if c == b'/' && bytes.get(at + 1) == Some(&b'/') {
             while at < bytes.len() && bytes[at] != b'\n' {
                 at += 1;
@@ -83,7 +73,14 @@ pub(crate) fn declared_exports(source: &str) -> Vec<String> {
             at = (at + 2).min(bytes.len());
             continue;
         }
-        if b"'\"`".contains(&c) {
+        if c == b'`' {
+            words.push("<literal>".into());
+            contexts.push(Context::Template);
+            at += 1;
+            continue;
+        }
+        if b"'\"".contains(&c) {
+            words.push("<literal>".into());
             at += 1;
             while at < bytes.len() {
                 if bytes[at] == b'\\' {
@@ -97,6 +94,60 @@ pub(crate) fn declared_exports(source: &str) -> Vec<String> {
             }
             continue;
         }
+        // Skip regular-expression contents where an expression can begin.
+        let expression_start = words.last().is_none_or(|word: &String| {
+            matches!(
+                word.as_str(),
+                "(" | "["
+                    | "{"
+                    | "="
+                    | ":"
+                    | ","
+                    | ";"
+                    | "!"
+                    | "?"
+                    | "&"
+                    | "|"
+                    | "return"
+                    | "throw"
+                    | "case"
+            )
+        });
+        if c == b'/' && expression_start {
+            words.push("<literal>".into());
+            at += 1;
+            let mut class = false;
+            while at < bytes.len() {
+                match bytes[at] {
+                    b'\\' => {
+                        at = (at + 2).min(bytes.len());
+                        continue;
+                    }
+                    b'[' => class = true,
+                    b']' => class = false,
+                    b'/' if !class => {
+                        at += 1;
+                        break;
+                    }
+                    _ => {}
+                }
+                at += 1;
+            }
+            while at < bytes.len() && bytes[at].is_ascii_alphabetic() {
+                at += 1;
+            }
+            continue;
+        }
+        if c.is_ascii_digit() {
+            words.push("<literal>".into());
+            at += 1;
+            while at < bytes.len()
+                && (bytes[at].is_ascii_alphanumeric() || b"._".contains(&bytes[at]))
+            {
+                at += 1;
+            }
+            continue;
+        }
         if c.is_ascii_alphabetic() || c == b'_' || c == b'$' {
             let start = at;
             at += 1;
@@ -107,12 +158,29 @@ pub(crate) fn declared_exports(source: &str) -> Vec<String> {
             }
             words.push(String::from_utf8_lossy(&bytes[start..at]).into_owned());
         } else {
-            if b"{}*,;".contains(&c) {
+            if b"{}[]()*,;.:=!?&|".contains(&c) {
                 words.push((c as char).to_string());
+            }
+            if let Some(Context::Code(Some(depth))) = contexts.last_mut() {
+                if c == b'{' {
+                    *depth += 1;
+                }
+                if c == b'}' {
+                    *depth -= 1;
+                    if *depth == 0 {
+                        contexts.pop();
+                    }
+                }
             }
             at += 1;
         }
     }
+    words
+}
+
+/// Lexical declarations, not plugin execution. Comments/strings cannot invent capabilities.
+pub(crate) fn declared_exports(source: &str) -> Vec<String> {
+    let words = script_words(source);
     let mut out = Vec::new();
     let mut depth = 0;
     let mut at = 0;
@@ -122,9 +190,41 @@ pub(crate) fn declared_exports(source: &str) -> Vec<String> {
             if words.get(i).is_some_and(|v| v == "async") {
                 i += 1;
             }
-            if words.get(i).is_some_and(|v| {
-                matches!(v.as_str(), "function" | "const" | "let" | "class" | "var")
-            }) {
+            if words
+                .get(i)
+                .is_some_and(|v| matches!(v.as_str(), "const" | "let" | "var"))
+            {
+                i += 1;
+                let mut nesting = 0usize;
+                let mut binding = true;
+                while let Some(word) = words.get(i) {
+                    if nesting == 0
+                        && matches!(word.as_str(), ";" | "export" | "const" | "let" | "var")
+                    {
+                        break;
+                    }
+                    if nesting == 0 && binding {
+                        if word
+                            .as_bytes()
+                            .first()
+                            .is_some_and(|c| c.is_ascii_alphabetic() || b"_$".contains(c))
+                        {
+                            out.push(word.clone());
+                        }
+                        binding = false;
+                    }
+                    match word.as_str() {
+                        "{" | "[" | "(" => nesting += 1,
+                        "}" | "]" | ")" => nesting = nesting.saturating_sub(1),
+                        "," if nesting == 0 => binding = true,
+                        _ => {}
+                    }
+                    i += 1;
+                }
+            } else if words
+                .get(i)
+                .is_some_and(|v| matches!(v.as_str(), "function" | "class"))
+            {
                 i += 1;
                 if words.get(i).is_some_and(|v| v == "*") {
                     i += 1;
@@ -163,6 +263,58 @@ pub(crate) fn declared_exports(source: &str) -> Vec<String> {
     out.sort();
     out.dedup();
     out
+}
+
+fn uses_module_imports(source: &str) -> bool {
+    let words = script_words(source);
+    words.iter().enumerate().any(|(at, word)| {
+        if word == "import" {
+            if words.get(at.wrapping_sub(1)).is_some_and(|v| v == ".")
+                || words
+                    .get(at + 1)
+                    .is_some_and(|v| matches!(v.as_str(), ":" | "."))
+            {
+                return false;
+            }
+            return true;
+        }
+        if word == "export" {
+            if words.get(at + 1).is_some_and(|v| v == "*") {
+                return true;
+            }
+            if words.get(at + 1).is_some_and(|v| v == "{") {
+                return words[at + 2..]
+                    .iter()
+                    .position(|v| v == "}")
+                    .and_then(|end| words.get(at + 3 + end))
+                    .is_some_and(|v| v == "from");
+            }
+        }
+        false
+    })
+}
+
+fn check_single_file_script(source: &str) -> Result<()> {
+    check_script_syntax(source)?;
+    ensure!(
+        !uses_module_imports(source),
+        "此插件需要多个模块，当前支持单文件入口"
+    );
+    Ok(())
+}
+
+fn check_script_syntax(source: &str) -> Result<()> {
+    use rquickjs::CatchResultExt;
+    let runtime = rquickjs::Runtime::new()?;
+    runtime.set_memory_limit(32 * 1024 * 1024);
+    runtime.set_max_stack_size(256 * 1024);
+    let context = rquickjs::Context::full(&runtime)?;
+    context.with(|ctx| {
+        rquickjs::Module::declare(ctx.clone(), "plugin-install", source)
+            .catch(&ctx)
+            .map(|_| ())
+            .map_err(|error| anyhow::anyhow!("插件入口无法编译：{error}"))
+    })
 }
 fn legacy_fields(source: &str) -> Vec<SourceSettingDefinition> {
     let mut fields = Vec::new();
@@ -279,6 +431,12 @@ fn source_descriptor(
         })
         .collect();
     Ok(MusicSource {
+        description: m
+            .metadata
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
         id: format!("mygo:{}", m.id),
         name: m.name,
         version: m.version,
@@ -295,38 +453,21 @@ fn source_descriptor(
 pub fn get_source(source: &str) -> Result<MusicSource> {
     let id = plugin(source)?;
     let dir = mygo::plugin_root()?.join(id);
-    let mut m = mygo::manifest(&dir)?;
+    let m = mygo::manifest(&dir)?;
     let code = fs::read_to_string(mygo::entry(&dir, &m)?)?;
     let exports = declared_exports(&code);
     let mut fields = m.settings.clone();
     if fields.is_empty() {
         fields = legacy_fields(&code);
-        let known = definitions()?
-            .into_iter()
-            .find(|v| v.manifest["id"] == id && v.manifest["version"] == m.version);
-        if let Some(known) = known {
-            if m.repository.is_none() {
-                m.repository = Some(format!("https://github.com/{}", known.repo));
-            }
-            let declared: Vec<SourceSettingDefinition> =
-                serde_json::from_value(known.manifest["settings"].clone()).unwrap_or_default();
-            for field in &mut fields {
-                if let Some(full) = declared.iter().find(|f| f.key == field.key) {
-                    *field = full.clone();
-                }
-            }
-        }
     }
     let limit = limitation(&m, false, false);
     let qr = code.contains("host.signInPrompt") && exports.iter().any(|v| v == "signIn");
-    let web = code.contains("host.webSignIn")
-        || (id == "netease" && mygo::is_pinned_netease(code.as_bytes()));
+    let web = code.contains("host.webSignIn");
     let mut result = source_descriptor(m, true, exports, fields, limit, qr)?;
     result.web_sign_in = cfg!(target_os = "macos") && web;
     Ok(result)
 }
 pub fn list() -> Result<Vec<MusicSource>> {
-    mygo::ensure_netease()?;
     let mut sources = Vec::new();
     for row in mygo::list()?.as_array().into_iter().flatten() {
         if let Some(id) = row["id"].as_str() {
@@ -336,6 +477,23 @@ pub fn list() -> Result<Vec<MusicSource>> {
     Ok(sources)
 }
 pub fn catalog() -> Result<Vec<MusicSource>> {
+    catalog_from(source_catalog::load()?.entries)
+}
+
+pub fn catalog_view(refresh: bool) -> Result<MusicSourceCatalog> {
+    let catalog = if refresh {
+        source_catalog::refresh()?
+    } else {
+        source_catalog::load()?
+    };
+    Ok(MusicSourceCatalog {
+        sources: catalog_from(catalog.entries)?,
+        refreshing: catalog.refreshing,
+        warning: catalog.warning,
+    })
+}
+
+fn catalog_from(entries: Vec<source_catalog::Entry>) -> Result<Vec<MusicSource>> {
     let installed = mygo::list()?;
     let ids: Vec<_> = installed
         .as_array()
@@ -344,13 +502,36 @@ pub fn catalog() -> Result<Vec<MusicSource>> {
         .filter_map(|p| p["id"].as_str())
         .collect();
     let mut result = Vec::new();
-    for row in definitions()? {
+    for row in entries {
         let Ok(mut m) = serde_json::from_value::<mygo::Manifest>(row.manifest.clone()) else {
+            let repository = format!("https://github.com/{}", row.repo);
+            let existing = installed.as_array().into_iter().flatten().find(|p| {
+                p["repository"]
+                    .as_str()
+                    .is_some_and(|url| url.eq_ignore_ascii_case(&repository))
+            });
+            if let Some(id) = existing.and_then(|p| p["id"].as_str()) {
+                result.push(get_source(&format!("mygo:{id}"))?);
+                continue;
+            }
             result.push(MusicSource {
                 id: format!("catalog:{}", row.repo),
-                name: row.repo.clone(),
-                repository: Some(format!("https://github.com/{}", row.repo)),
-                limitation: Some("仓库没有可读取的插件清单".into()),
+                name: if row.name.is_empty() {
+                    row.repo.clone()
+                } else {
+                    row.name.clone()
+                },
+                description: row.description,
+                repository: Some(repository),
+                can_install: row.discovered,
+                limitation: Some(
+                    if row.discovered {
+                        "添加时检查来源兼容性"
+                    } else {
+                        "仓库没有可读取的插件清单"
+                    }
+                    .into(),
+                ),
                 ..Default::default()
             });
             continue;
@@ -436,32 +617,9 @@ pub fn configure(source: &str, changes: BTreeMap<String, String>) -> Result<Valu
     }
     Ok(json!({"source":get_source(source)?,"warning":warning}))
 }
-fn fetch(url: &str, limit: u64) -> Result<Vec<u8>> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(25))
-        .build()?;
-    let response = client
-        .get(url)
-        .header("User-Agent", "mini-cloudmusic")
-        .send()?
-        .error_for_status()?;
-    let mut out = Vec::new();
-    response.take(limit + 1).read_to_end(&mut out)?;
-    ensure!(out.len() as u64 <= limit, "插件文件超过大小限制");
-    Ok(out)
-}
-pub fn install(repository: &str) -> Result<MusicSource> {
-    let repo = repository
-        .trim()
-        .trim_start_matches("https://github.com/")
-        .trim_end_matches('/');
-    let row = definitions()?
-        .into_iter()
-        .find(|v| v.repo == repo)
-        .context("请选择来源目录中的仓库")?;
-    let info = catalog()?
-        .into_iter()
-        .find(|v| v.repository.as_deref() == Some(&format!("https://github.com/{repo}")))
+fn ensure_installable(row: &source_catalog::Entry) -> Result<()> {
+    let info = catalog_from(vec![row.clone()])?
+        .pop()
         .context("来源不在目录中")?;
     ensure!(
         info.can_install,
@@ -469,42 +627,69 @@ pub fn install(repository: &str) -> Result<MusicSource> {
         info.limitation
             .unwrap_or_else(|| "相同标识的数据源已经添加".into())
     );
-    ensure!(
-        row.commit.len() == 40 && row.commit.bytes().all(|c| c.is_ascii_hexdigit()),
-        "来源版本无效"
-    );
-    let root = format!("https://raw.githubusercontent.com/{repo}/{}/", row.commit);
-    let manifest = fetch(&format!("{root}plugin.json"), 65536)?;
+    Ok(())
+}
+
+pub fn install(repository: &str) -> Result<MusicSource> {
+    let repo = repository::parse_repository(repository)?;
+    // Discovery is optional. Only an already-cached explicit snapshot pins a version.
+    let mut row = source_catalog::cached_entry(&repo).unwrap_or_else(|| source_catalog::Entry {
+        repo: repo.clone(),
+        discovered: true,
+        ..Default::default()
+    });
+    ensure_installable(&row)?;
+    let package = if !row.discovered {
+        repository::pinned(&repo, &row.commit)?
+    } else {
+        repository::download(&repo)?
+    };
+    let manifest = package.manifest;
+    let script = package.script;
     use sha2::{Digest, Sha256};
-    ensure!(
-        format!("{:x}", Sha256::digest(&manifest)) == row.manifest_sha256,
-        "来源清单校验失败"
-    );
     let mut m: mygo::Manifest = serde_json::from_slice(&manifest)?;
-    ensure!(
-        m.id == row.manifest["id"].as_str().unwrap_or_default()
-            && m.version == row.manifest["version"].as_str().unwrap_or_default(),
-        "来源清单与目录版本不符"
-    );
+    if !row.discovered {
+        ensure!(
+            format!("{:x}", Sha256::digest(&manifest)) == row.manifest_sha256,
+            "来源清单校验失败"
+        );
+        ensure!(
+            m.id == row.manifest["id"].as_str().unwrap_or_default()
+                && m.version == row.manifest["version"].as_str().unwrap_or_default(),
+            "来源清单与目录版本不符"
+        );
+        if m.settings.is_empty() {
+            m.settings =
+                serde_json::from_value(row.manifest["settings"].clone()).unwrap_or_default();
+        }
+    }
     ensure!(
         mygo::valid_id(&m.id) && limitation(&m, false, false).is_none(),
         "来源超出当前宿主支持范围"
     );
-    let main = std::path::Path::new(&m.main);
-    ensure!(
-        !main.is_absolute()
-            && !main
-                .components()
-                .any(|c| matches!(c, std::path::Component::ParentDir)),
-        "插件入口路径无效"
-    );
-    let script = fetch(&format!("{root}{}", m.main), 2 * 1024 * 1024)?;
-    ensure!(
-        format!("{:x}", Sha256::digest(&script)) == row.entry_sha256,
-        "来源入口校验失败"
-    );
+    let code = std::str::from_utf8(&script).context("插件入口不是有效的 UTF-8")?;
+    check_single_file_script(code)?;
+    if row.discovered {
+        row.manifest = serde_json::from_slice(&manifest)?;
+        row.exports = declared_exports(code);
+        ensure_installable(&row)?;
+    } else {
+        ensure!(
+            format!("{:x}", Sha256::digest(&script)) == row.entry_sha256,
+            "来源入口校验失败"
+        );
+    }
     m.repository = Some(format!("https://github.com/{repo}"));
-    m.metadata.insert("sourceCommit".into(), json!(row.commit));
+    if !row.description.is_empty() {
+        m.metadata
+            .entry("description".into())
+            .or_insert_with(|| json!(row.description));
+    }
+    m.metadata
+        .insert("sourceVersion".into(), json!(package.version));
+    if let Some(commit) = package.commit {
+        m.metadata.insert("sourceCommit".into(), json!(commit));
+    }
     let staging = mygo::plugin_root()?.join(format!(".source-{}", storage::random_hex::<8>()));
     fs::create_dir(&staging)?;
     let result = (|| -> Result<String> {
@@ -557,8 +742,7 @@ pub fn playlists(source: &str) -> Result<Vec<SourcePlaylist>> {
         .collect())
 }
 pub fn playlist_snapshot(source: &str, id: &str) -> Result<(PlaylistOrigin, Vec<Track>)> {
-    let normalized = normalize_playlist_id(source, id)?;
-    let id = normalized.as_str();
+    let id = id.trim();
     ensure!(!id.is_empty() && id.len() <= 1024, "无效的歌单标识");
     let plugin = plugin(source)?;
     let value = mygo::invoke(plugin, "playlist", json!({"id":id}))
@@ -592,27 +776,6 @@ pub fn playlist_snapshot(source: &str, id: &str) -> Result<(PlaylistOrigin, Vec<
         },
         tracks,
     ))
-}
-
-fn normalize_playlist_id(source: &str, value: &str) -> Result<String> {
-    let value = value.trim();
-    if !matches!(source, "netease" | "mygo:netease") || !value.contains("://") {
-        return Ok(value.to_owned());
-    }
-    let url = reqwest::Url::parse(&value.replace("/#/playlist", "/playlist"))?;
-    ensure!(
-        matches!(url.host_str(), Some("music.163.com" | "y.music.163.com"))
-            && url.path() == "/playlist",
-        "请输入网易云歌单链接或ID"
-    );
-    let id = url
-        .query_pairs()
-        .find(|(k, _)| k == "id")
-        .context("链接缺少歌单ID")?
-        .1
-        .into_owned();
-    ensure!(id.parse::<u64>().is_ok_and(|n| n > 0), "无效歌单ID");
-    Ok(id)
 }
 
 pub(crate) struct LoginJob {
@@ -796,6 +959,8 @@ pub fn execute(input: MusicSourceAction) -> Result<Value> {
     Ok(match input {
         MusicSourceAction::List => serde_json::to_value(list()?)?,
         MusicSourceAction::Catalog => serde_json::to_value(catalog()?)?,
+        MusicSourceAction::CatalogView => serde_json::to_value(catalog_view(false)?)?,
+        MusicSourceAction::RefreshCatalog => serde_json::to_value(catalog_view(true)?)?,
         MusicSourceAction::Get { source } => serde_json::to_value(get_source(&source)?)?,
         MusicSourceAction::Install { repository } => serde_json::to_value(install(&repository)?)?,
         MusicSourceAction::Configure { source, values } => configure(&source, values)?,
@@ -827,17 +992,6 @@ pub fn execute(input: MusicSourceAction) -> Result<Value> {
 mod tests {
     use super::*;
     #[test]
-    fn legacy_and_plugin_playlist_links_share_the_same_identity() {
-        for source in ["netease", "mygo:netease"] {
-            assert_eq!(
-                normalize_playlist_id(source, "https://music.163.com/#/playlist?id=123").unwrap(),
-                "123"
-            );
-            assert!(normalize_playlist_id(source, "https://example.com/playlist?id=123").is_err());
-            assert!(normalize_playlist_id(source, "https://music.163.com/song?id=123").is_err());
-        }
-    }
-    #[test]
     fn exports_skip_comments_strings_and_support_aliases() {
         assert_eq!(
             declared_exports(
@@ -845,6 +999,83 @@ mod tests {
             ),
             ["search", "stream"]
         );
+    }
+    #[test]
+    fn single_file_checks_detect_imports_and_reexports_without_matching_strings() {
+        for code in [
+            "import './other.js';",
+            "const result = import('./other.js');",
+            "export * from './other.js';",
+            "export { search } from './other.js';",
+        ] {
+            assert!(uses_module_imports(code), "{code}");
+        }
+        assert!(!uses_module_imports(
+            "// import 'fake';\nconst text = 'export * from fake'; export function search() { return Array.from([]); }"
+        ));
+        assert!(!uses_module_imports("const from = 1; export { from };"));
+    }
+
+    #[test]
+    fn imports_in_template_interpolations_are_rejected() {
+        for code in [
+            "export const stream = () => `${import('./helper.js')}`;",
+            "export const stream = () => `outer ${`inner ${import('./helper.js')}`}`;",
+            "export const stream = () => `${({ text: '}', module: import('./helper.js') })}`;",
+        ] {
+            assert!(check_script_syntax(code).is_ok(), "{code}");
+            assert!(uses_module_imports(code), "{code}");
+        }
+        assert!(!uses_module_imports(
+            "const text = `import('./helper.js') \\${ignored}`; export function stream() {}"
+        ));
+    }
+
+    #[test]
+    fn import_property_names_do_not_require_other_modules() {
+        for code in [
+            "const options = { import: false }; export function stream() {}",
+            "const options = { import: () => false }; export function stream() { return options.import(); }",
+            "export function stream() { return import.meta.url; }",
+        ] {
+            assert!(check_script_syntax(code).is_ok(), "{code}");
+            assert!(!uses_module_imports(code), "{code}");
+        }
+    }
+
+    #[test]
+    fn exported_variable_declarations_include_later_bindings() {
+        for declaration in ["const", "let", "var"] {
+            let code = format!(
+                "export {declaration} version = '1', options = {{a: [1,2]}}, stream = () => ({{url:'https://example.com/a.mp3'}}), search = () => [];"
+            );
+            assert!(check_script_syntax(&code).is_ok());
+            assert_eq!(
+                declared_exports(&code),
+                ["options", "search", "stream", "version"]
+            );
+        }
+        assert_eq!(
+            declared_exports("export const ratio = 4 / 2, stream = () => ({});"),
+            ["ratio", "stream"]
+        );
+    }
+
+    #[test]
+    fn installation_validation_rejects_dependencies_without_catalog_import_metadata() {
+        let code = "export function stream() { return import('./helper.js'); }";
+        assert!(check_single_file_script(code).is_err());
+    }
+
+    #[test]
+    fn installation_compiles_without_running_plugin_code() {
+        assert!(
+            check_script_syntax(
+                "throw new Error('must not run'); export function stream() { return {}; }"
+            )
+            .is_ok()
+        );
+        assert!(check_script_syntax("export function stream( {").is_err());
     }
     #[test]
     fn legacy_settings_are_discoverable_without_running_code() {

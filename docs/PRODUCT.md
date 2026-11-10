@@ -25,16 +25,16 @@ MusicX remembers the current track, queue, playback position, and volume across 
 
 ## Music sources and accounts
 
-MusicX supports compatible MyGo Music plugins, including NetEase Cloud Music. A source can offer search, playback, lyrics, album information, account sign-in, or playlist import depending on its capabilities. The settings view surfaces the available actions for each source.
+MusicX starts without a default source. Users explicitly add compatible MyGo Music plugins from the catalog or a GitHub repository. A source can offer search, playback, lyrics, album information, account sign-in, or playlist import depending on its capabilities. The settings view surfaces the available actions for each source.
 
 Connect accounts with QR sign-in or, where supported on macOS, an embedded web sign-in window. Credentials belong to the source's local account session. Imported playlists are local snapshots that remain available after signing out. Playback of their tracks still depends on the source and its account requirements.
 
-## Local data and upgrades
+## Local data
 
 Install the macOS app by dragging MusicX from its disk image to Applications. Accounts, playlists, history, preferences, and the MCP token live in `~/Library/Application Support/MusicX/`. Installed plugins live in `mygo-plugins/`.
 
-On upgrade, the old `Mini Cloud Music` directory is moved into place when the new path is absent and the old helper has stopped. When both directories exist, MusicX uses the new path and preserves the legacy directory. [Startup and migration details](../README.md#local-data-and-upgrades)
+MusicX uses its current application identity and data directory without importing previous versions. Existing files elsewhere are left untouched. [Local data details](../README.md#local-data)
 
 ## iPhone
 
-The iPhone app has touch navigation and independent background playback. It supports track selection by link or ID and browsing personal playlists with the device's own sign-in. Its MCP listener is local to the phone, and its account data and plugins live in the app sandbox. [iPhone build guide](../apps/ios/README.md)
+The iPhone app has touch navigation and independent background playback. It uses the same plugin source management and local playlist flows as macOS, with sign-in and playlist import provided by the selected plugin. Its MCP listener is local to the phone, and its account data and plugins live in the app sandbox. [iPhone build guide](../apps/ios/README.md)
