@@ -1,0 +1,108 @@
+#!/usr/bin/env python3
+"""File-backed GitHub CLI fixture. Unknown operations fail without network access."""
+
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+args = sys.argv[1:]
+state_path = Path(os.environ["GH_TEST_STATE"])
+state = json.loads(state_path.read_text())
+state["calls"].append(args)
+
+
+def flag(name, default=None):
+    return args[args.index(name) + 1] if name in args else default
+
+
+def field(name):
+    return next(value.split("=", 1)[1] for value in args if value.startswith(name + "="))
+
+
+def execute():
+    if args[0] == "api":
+        endpoint = next(value for value in args if value.startswith("repos/"))
+        prefix = "repos/test/musicx/"
+        assert endpoint.startswith(prefix), endpoint
+        endpoint = endpoint.removeprefix(prefix)
+        method = flag("--method", "GET")
+        if endpoint.startswith("git/matching-refs/tags/"):
+            if state.get("api_error"):
+                raise RuntimeError("GitHub unavailable")
+            prefix = endpoint.removeprefix("git/matching-refs/tags/")
+            return [
+                {"ref": "refs/tags/" + tag, "object": {"sha": sha, "type": "commit"}}
+                for tag, sha in state["refs"].items()
+                if tag.startswith(prefix)
+            ]
+        if endpoint.startswith("commits/refs/tags/"):
+            tag = endpoint.removeprefix("commits/refs/tags/")
+            return {"sha": state["refs"][tag]}
+        if endpoint == "git/refs" and method == "POST":
+            tag = field("ref").removeprefix("refs/tags/")
+            assert tag not in state["refs"], "Ref already exists"
+            state["refs"][tag] = field("sha")
+            return {}
+        if endpoint == "releases?per_page=100":
+            return [state["release"]] if state["release"] else []
+        if endpoint == "releases/1/assets?per_page=100":
+            return state["release"]["assets"]
+        if endpoint == "releases/1" and method == "PATCH":
+            assert field("draft") == "false"
+            state["release"]["draft"] = False
+            return {"html_url": "https://example.invalid/release"}
+        raise AssertionError(f"Unsupported API operation: {args}")
+
+    if args[:2] == ["release", "create"]:
+        tag = args[2]
+        assert state["release"] is None and tag in state["refs"]
+        state["release"] = {
+            "id": 1,
+            "tag_name": tag,
+            "title": flag("--title"),
+            "draft": True,
+            "prerelease": "--prerelease=true" in args,
+            "assets": [],
+        }
+        return {}
+    if args[:2] == ["release", "view"]:
+        release = state["release"]
+        return {
+            "databaseId": release["id"],
+            "isDraft": release["draft"],
+            "isPrerelease": release["prerelease"],
+        }
+    if args[:2] == ["release", "upload"]:
+        assets = state["release"]["assets"]
+        for filename in args[args.index("--repo") + 2 :]:
+            path = Path(filename)
+            assert all(asset["name"] != path.name for asset in assets)
+            assets.append({
+                "id": len(assets) + 1,
+                "name": path.name,
+                "digest": "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest(),
+                "state": "uploaded",
+            })
+        return {}
+    raise AssertionError(f"Unsupported CLI operation: {args}")
+
+
+try:
+    result = execute()
+except Exception as error:
+    state_path.write_text(json.dumps(state))
+    print(error, file=sys.stderr)
+    sys.exit(1)
+state_path.write_text(json.dumps(state))
+if "--silent" not in args:
+    if "--jq" in args:
+        filtered = subprocess.run(
+            ["jq", "-r", flag("--jq")], input=json.dumps(result), text=True, check=True,
+            capture_output=True,
+        )
+        print(filtered.stdout, end="")
+    else:
+        print(json.dumps(result))
