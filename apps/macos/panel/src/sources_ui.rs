@@ -91,6 +91,34 @@ fn playback_settings(model: Model) -> impl IntoElement {
         .child(section("播放"))
         .child(
             button()
+                .accessibility_label(Some("切换音量均衡".into()))
+                .on_press(move || {
+                    crate::remote::submit(
+                        crate::remote::Action::Normalization(
+                            !model.status.with(|s| s.normalization_enabled),
+                        ),
+                        None,
+                    )
+                })
+                .selected(move || model.status.with(|s| s.normalization_enabled))
+                .py(px(8.0))
+                .px(px(4.0))
+                .rounded(px(5.0))
+                .hover(|s| s.bg(theme().muted))
+                .child(
+                    text(move || {
+                        if model.status.with(|s| s.normalization_enabled) {
+                            "音量均衡 · 已开启"
+                        } else {
+                            "音量均衡 · 已关闭"
+                        }
+                    })
+                    .text_size(px(13.0))
+                    .text_color(move || theme().foreground),
+                ),
+        )
+        .child(
+            button()
                 .accessibility_label(Some("切换播放界面单行歌词".into()))
                 .on_press(move || model.toggle_mini_lyrics())
                 .selected(move || model.show_mini_lyrics.get())
@@ -241,7 +269,12 @@ fn flow(model: Model, importing: bool, back: impl Fn() + Copy + 'static) -> impl
                                     rows.iter()
                                         .filter(|s| {
                                             !importing
-                                                || s.capabilities.iter().any(|v| v == "playlist")
+                                                || s.capabilities.iter().any(|v| {
+                                                    matches!(
+                                                        v.as_str(),
+                                                        "playlist" | "liked" | "recent"
+                                                    )
+                                                })
                                         })
                                         .cloned()
                                         .collect::<Vec<_>>()
@@ -289,8 +322,9 @@ fn flow(model: Model, importing: bool, back: impl Fn() + Copy + 'static) -> impl
                                             )
                                             .child(caption(move || {
                                                 row.with(|source| {
-                                                    let sign_in =
-                                                        source.web_sign_in || source.qr_sign_in;
+                                                    let sign_in = source.web_sign_in
+                                                        || source.qr_sign_in
+                                                        || source.oauth_sign_in;
                                                     let playlist = source
                                                         .capabilities
                                                         .iter()
@@ -328,6 +362,7 @@ fn flow(model: Model, importing: bool, back: impl Fn() + Copy + 'static) -> impl
             move || this.mode.get() == Mode::Plugins,
             move || {
                 crate::source_browser::sources_view(
+                    model,
                     move || this.home(),
                     move || {
                         if importing {

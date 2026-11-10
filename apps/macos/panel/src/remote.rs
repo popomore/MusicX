@@ -19,7 +19,6 @@ pub enum Action {
         track_key: String,
     },
     PlayTrack(Track),
-    #[cfg(target_os = "macos")]
     PlayList {
         tracks: Vec<Track>,
         index: usize,
@@ -36,6 +35,8 @@ pub enum Action {
     },
     #[cfg(target_os = "macos")]
     Quality(crate::protocol::Quality),
+    #[cfg(target_os = "macos")]
+    Normalization(bool),
 }
 pub type Reply = Option<oneshot::Sender<Result<Status>>>;
 fn read_token() -> Result<String> {
@@ -151,7 +152,6 @@ pub fn submit(action: Action, reply: Reply) {
             track_key: Some(track_key),
         }),
         Action::PlayTrack(track) => Some(UiAction::PlayTrack { track }),
-        #[cfg(target_os = "macos")]
         Action::PlayList {
             tracks,
             index,
@@ -166,6 +166,8 @@ pub fn submit(action: Action, reply: Reply) {
         Action::PlayQueue { index, revision } => Some(UiAction::PlayQueue { index, revision }),
         #[cfg(target_os = "macos")]
         Action::Quality(quality) => Some(UiAction::Quality { quality }),
+        #[cfg(target_os = "macos")]
+        Action::Normalization(enabled) => Some(UiAction::Normalization { enabled }),
     };
     // Preparing an entire saved playlist must not delay pause/seek requests.
     if matches!(

@@ -16,6 +16,7 @@ pub(crate) struct Package {
     pub script: Vec<u8>,
     pub version: String,
     pub commit: Option<String>,
+    pub locales: std::collections::BTreeMap<String, Vec<u8>>,
 }
 
 struct Release {
@@ -53,16 +54,20 @@ pub(crate) fn parse_repository(input: &str) -> Result<String> {
 pub(crate) fn download(repo: &str) -> Result<Package> {
     download_from(repo, API)
 }
+pub(crate) fn latest_version(repo: &str) -> Result<String> {
+    Ok(latest(repo, API)?.version)
+}
 
 fn download_from(repo: &str, api: &str) -> Result<Package> {
     let release = latest(repo, api)?;
     let bytes = crate::http::fetch(&release.url, MAX_ARCHIVE).context("插件下载失败")?;
-    let (manifest, script) = unpack(bytes)?;
+    let (manifest, script, locales) = unpack(bytes)?;
     Ok(Package {
         manifest,
         script,
         version: release.version,
         commit: release.commit,
+        locales,
     })
 }
 
@@ -71,15 +76,14 @@ pub(crate) fn pinned(repo: &str, commit: &str) -> Result<Package> {
         commit.len() == 40 && commit.bytes().all(|c| c.is_ascii_hexdigit()),
         "来源版本无效"
     );
-    let root = format!("https://raw.githubusercontent.com/{repo}/{commit}/");
-    let manifest = crate::http::fetch(&format!("{root}plugin.json"), 65536)?;
-    let main = entry_name(&manifest)?;
-    let script = crate::http::fetch(&format!("{root}{main}"), MAX_SCRIPT)?;
+    let bytes = crate::http::fetch(&format!("{API}/repos/{repo}/zipball/{commit}"), MAX_ARCHIVE)?;
+    let (manifest, script, locales) = unpack(bytes)?;
     Ok(Package {
         manifest,
         script,
         version: commit.to_owned(),
         commit: Some(commit.to_owned()),
+        locales,
     })
 }
 
@@ -181,11 +185,19 @@ fn entry_name(manifest: &[u8]) -> Result<String> {
                 .all(|part| matches!(part, Component::Normal(_) | Component::CurDir)),
         "插件入口路径无效"
     );
-    ensure!(main.ends_with(".js"), "当前支持单文件 JavaScript 插件入口");
+    ensure!(
+        main.ends_with(".js") || main.ends_with(".ts"),
+        "当前支持单文件 JavaScript 或 TypeScript 插件入口"
+    );
     Ok(main.to_owned())
 }
 
-fn unpack(bytes: Vec<u8>) -> Result<(Vec<u8>, Vec<u8>)> {
+type Unpacked = (
+    Vec<u8>,
+    Vec<u8>,
+    std::collections::BTreeMap<String, Vec<u8>>,
+);
+fn unpack(bytes: Vec<u8>) -> Result<Unpacked> {
     let mut archive =
         zip::ZipArchive::new(Cursor::new(bytes)).context("插件下载内容不是有效的 ZIP")?;
     ensure!(archive.len() <= 4096, "插件包包含过多文件");
@@ -215,7 +227,17 @@ fn unpack(bytes: Vec<u8>) -> Result<(Vec<u8>, Vec<u8>)> {
         &format!("{prefix}{}", main.trim_start_matches("./")),
         MAX_SCRIPT,
     )?;
-    Ok((manifest, script))
+    let mut locales = std::collections::BTreeMap::new();
+    for language in ["en", "zh-CN"] {
+        let name = format!("{prefix}locales/{language}.json");
+        if names.contains(&name) {
+            let bytes = archive_file(&mut archive, &name, 65536)?;
+            serde_json::from_slice::<std::collections::BTreeMap<String, String>>(&bytes)
+                .context("插件语言包格式无效")?;
+            locales.insert(language.into(), bytes);
+        }
+    }
+    Ok((manifest, script, locales))
 }
 
 fn archive_file(
@@ -469,8 +491,8 @@ mod tests {
     }
 
     #[test]
-    fn archives_cannot_supply_escaping_typescript_or_oversized_entries() {
-        for main in ["../outside.js", "/outside.js", "..\\outside.js", "index.ts"] {
+    fn archives_cannot_supply_escaping_or_oversized_entries() {
+        for main in ["../outside.js", "/outside.js", "..\\outside.js"] {
             let manifest = serde_json::to_vec(&serde_json::json!({"main":main})).unwrap();
             assert!(
                 unpack(archive(&[("plugin.json", &manifest), ("index.js", SCRIPT)])).is_err(),
@@ -492,6 +514,21 @@ mod tests {
             ]))
             .is_err()
         );
+    }
+
+    #[test]
+    fn archives_preserve_typescript_and_supported_locales() {
+        let manifest = br#"{"id":"typed","main":"index.ts"}"#;
+        let source = b"export const value: string = 'typed';";
+        let locale = br#"{"Hello":"Translated"}"#;
+        let (_, script, locales) = unpack(archive(&[
+            ("plugin.json", manifest),
+            ("index.ts", source),
+            ("locales/zh-CN.json", locale),
+        ]))
+        .unwrap();
+        assert_eq!(script, source);
+        assert_eq!(locales["zh-CN"], locale);
     }
 
     #[test]

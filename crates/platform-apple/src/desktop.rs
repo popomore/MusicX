@@ -142,6 +142,7 @@ fn package(
 <key>CFBundleVersion</key><string>{APP_BUNDLE_VERSION}</string>
 <key>LSUIElement</key><{ui_element}/>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
+<key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
 </dict></plist>"#,
             version = env!("CARGO_PKG_VERSION"),
         ),

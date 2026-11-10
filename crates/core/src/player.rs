@@ -46,6 +46,7 @@ pub enum Action {
     },
     Volume(f32),
     Quality(crate::protocol::Quality),
+    Normalization(bool),
 }
 
 pub type Reply = Option<oneshot::Sender<Result<Status>>>;
@@ -204,6 +205,7 @@ impl<A: AudioOutput> Player<A> {
                 library_revision: crate::local_library::revision(),
                 queue_context: self.queue_context.clone(),
                 preferred_quality: crate::audio_quality::preferred(),
+                normalization_enabled: crate::audio_quality::normalization_enabled(),
                 ..Status::default()
             };
         }
@@ -256,6 +258,7 @@ impl<A: AudioOutput> Player<A> {
             library_revision: crate::local_library::revision(),
             queue_context: self.queue_context.clone(),
             preferred_quality: crate::audio_quality::preferred(),
+            normalization_enabled: crate::audio_quality::normalization_enabled(),
             audio_quality: self.audio_quality.clone(),
             error: error.or_else(|| self.error.clone()),
             switching: self.switching,
@@ -441,6 +444,12 @@ impl<A: AudioOutput> Player<A> {
                     self.deferred_position = Some(position);
                 } else {
                     self.seek(position);
+                }
+            }
+            Action::Normalization(enabled) => {
+                crate::audio_quality::set_normalization(enabled)?;
+                if let Some(audio) = &self.audio {
+                    audio.set_normalization(enabled);
                 }
             }
             Action::Volume(value) => {

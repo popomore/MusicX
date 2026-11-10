@@ -6,6 +6,10 @@ pub use ui::App;
 #[cfg(target_os = "ios")]
 #[path = "../../macos/panel/src/controls.rs"]
 mod controls;
+#[path = "../../macos/panel/src/artwork.rs"]
+mod artwork;
+#[path = "../../macos/panel/src/discovery_ui.rs"]
+mod discovery_ui;
 #[cfg(target_os = "ios")]
 #[path = "../../macos/panel/src/library.rs"]
 mod library;
@@ -29,6 +33,7 @@ fn native(registry: &mut Registry) {
 
 #[cfg(target_os = "ios")]
 fn initialize() -> anyhow::Result<()> {
+    artwork::install();
     nsh_core::image::budget().set_limit(4 * 1024 * 1024);
     use musicx_platform_apple::{mobile, player};
     static STARTED: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();

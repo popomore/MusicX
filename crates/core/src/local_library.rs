@@ -157,7 +157,7 @@ impl Library {
     }
     fn edit(&mut self, action: LocalLibraryAction) -> Result<Value> {
         if let LocalLibraryAction::SetFavorite { track, liked } = action {
-            return self.set_favorite(track, liked);
+            return self.set_favorite(*track, liked);
         }
         if let LocalLibraryAction::Create { name: title } = action {
             let list = LocalPlaylist {

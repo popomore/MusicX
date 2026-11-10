@@ -1,11 +1,17 @@
 //! MyGo compatibility and explicit plugin source registration.
+pub mod assets;
 mod catalog;
+mod discovery;
 mod http;
+mod localization;
 pub mod music_sources;
 pub mod mygo;
+mod oauth;
 mod quality;
 mod repository;
+mod script;
 mod source_catalog;
+mod stream_proxy;
 mod web_auth;
 
 use anyhow::Result;
@@ -20,6 +26,11 @@ pub struct MyGo;
 pub static MYGO: MyGo = MyGo;
 
 impl DataSource for MyGo {
+    fn artwork(&self, value: &str) -> Option<Vec<u8>> {
+        let url = url::Url::parse(value).ok()?;
+        let plugin = url.fragment()?.strip_prefix("musicx-plugin=")?;
+        assets::image(plugin, value).ok()
+    }
     fn resolve(&self, track: Track, quality: Quality) -> Result<Media> {
         catalog::resolve_with_quality(track, quality)
     }

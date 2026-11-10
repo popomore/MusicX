@@ -164,7 +164,9 @@ fn timed(model: Model, timeline: Memo<Rc<Timeline>>) -> impl IntoElement {
                                     t.cues
                                         .get(at.index())
                                         .map(|c| {
-                                            if c.text.is_empty() {
+                                            if !c.words.is_empty() {
+                                                String::new()
+                                            } else if c.text.is_empty() {
                                                 "♪".to_owned()
                                             } else {
                                                 c.text.clone()
@@ -173,6 +175,30 @@ fn timed(model: Model, timeline: Memo<Rc<Timeline>>) -> impl IntoElement {
                                         .unwrap_or_default()
                                 })
                             })
+                            .child(each(
+                                move || {
+                                    timeline.with(|t| {
+                                        t.cues.get(at.index()).map_or_else(Vec::new, |c| {
+                                            c.words.iter().cloned().enumerate().collect()
+                                        })
+                                    })
+                                },
+                                |(index, _)| *index,
+                                move |word, _| {
+                                    text(move || word.with(|(_, w)| w.text.clone())).text_color(
+                                        move || {
+                                            model.lyric_clock.get();
+                                            let ms =
+                                                (playback_time(model).max(0.0) * 1000.0) as u64;
+                                            if current() && word.with(|(_, w)| ms >= w.start) {
+                                                theme().foreground
+                                            } else {
+                                                theme().muted_foreground
+                                            }
+                                        },
+                                    )
+                                },
+                            ))
                             .text_size(px(17.0))
                             .style_with(move |s| {
                                 s.font_weight(if current() {
@@ -280,7 +306,7 @@ pub(super) fn lyrics(model: Model) -> impl IntoElement {
     let timeline = computed(move || {
         Rc::new(model.info.with(|i| {
             i.as_ref()
-                .map(|i| Timeline::parse(&i.lyrics.text, &i.lyrics.translation))
+                .map(|i| Timeline::from_lyrics(&i.lyrics))
                 .unwrap_or_default()
         }))
     });
@@ -301,7 +327,7 @@ pub(super) fn mini(model: Model) -> impl IntoElement {
     let timeline = computed(move || {
         Rc::new(model.info.with(|info| {
             info.as_ref()
-                .map(|i| Timeline::parse(&i.lyrics.text, &i.lyrics.translation))
+                .map(|i| Timeline::from_lyrics(&i.lyrics))
                 .unwrap_or_default()
         }))
     });

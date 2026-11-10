@@ -26,3 +26,25 @@ pub fn set_preferred(quality: Quality) -> Result<()> {
     *value = quality;
     Ok(())
 }
+fn normalization() -> &'static RwLock<bool> {
+    static VALUE: OnceLock<RwLock<bool>> = OnceLock::new();
+    VALUE.get_or_init(|| {
+        RwLock::new(
+            crate::protocol::data_dir()
+                .and_then(|p| std::fs::read(p.join("normalization.json")).ok())
+                .and_then(|b| serde_json::from_slice(&b).ok())
+                .unwrap_or(false),
+        )
+    })
+}
+pub fn normalization_enabled() -> bool {
+    *normalization().read().unwrap_or_else(|e| e.into_inner())
+}
+pub fn set_normalization(enabled: bool) -> Result<()> {
+    let mut value = normalization()
+        .write()
+        .map_err(|_| anyhow::anyhow!("音量均衡设置不可用"))?;
+    crate::storage::save_private("normalization.json", &serde_json::to_string(&enabled)?)?;
+    *value = enabled;
+    Ok(())
+}

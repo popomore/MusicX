@@ -9,11 +9,16 @@ pub struct Media {
     pub url: Url,
     pub user_agent: Option<String>,
     pub quality: AudioQuality,
+    pub gain_db: Option<f32>,
+    pub peak: Option<f32>,
 }
 
 /// Supplies playable media and metadata for explicitly identified source tracks. Implementations
 /// can block on the network and are called outside the platform's UI thread.
 pub trait DataSource: Sync {
+    fn artwork(&self, _url: &str) -> Option<Vec<u8>> {
+        None
+    }
     fn resolve(&self, track: Track, quality: Quality) -> Result<Media>;
     fn resolve_selection(&self, track: Track, quality: Quality) -> Result<Media> {
         self.resolve(track, quality)

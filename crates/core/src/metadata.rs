@@ -23,8 +23,14 @@ pub fn public_url(value: &str) -> Option<String> {
 }
 
 pub fn artwork_url(value: &str) -> Option<String> {
-    let mut url = Url::parse(&public_url(value)?).ok()?;
-    if url.domain().is_some_and(|host| host.ends_with(".126.net")) {
+    let value = value
+        .replace("{size}", "600")
+        .replace("%7Bsize%7D", "600")
+        .replace("%7bsize%7d", "600");
+    let mut url = Url::parse(&public_url(&value)?).ok()?;
+    if url.domain().is_some_and(|host| host.ends_with(".126.net"))
+        && !url.query_pairs().any(|(k, _)| k == "param")
+    {
         url.query_pairs_mut().append_pair("param", "512y512");
     }
     Some(url.to_string())

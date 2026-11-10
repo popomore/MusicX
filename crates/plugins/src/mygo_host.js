@@ -1,12 +1,27 @@
 // Compatibility bindings for the MyGo catalog and stream exports.
 const storage = JSON.parse(__storage);
 const settings = JSON.parse(__settings);
+const translations = JSON.parse(__translations);
 globalThis.host = Object.freeze({
     platform: __platform,
     arch: __arch,
-    language: () => "zh-CN",
-    t: text => text,
+    language: () => __language,
+    t: text => Object.hasOwn(translations, text) ? translations[text] : text,
     setting: key => Object.hasOwn(settings, key) ? settings[key] : "",
+    openURL: url => {
+        const result=JSON.parse(__openURL(String(url)));
+        if(result.error) throw new Error(result.error);
+    },
+    waitForRedirect: async options => {
+        const start=JSON.parse(__redirectStart(JSON.stringify(options)));
+        if(start.error) throw new Error(start.error);
+        for (;;) {
+            const result=JSON.parse(__redirectPoll());
+            if(result.error) throw new Error(result.error);
+            if(!result.pending) return result.value;
+            await new Promise(resolve=>setTimeout(resolve,50));
+        }
+    },
     signInPrompt: prompt => {
         if (!__signInPrompt(JSON.stringify(prompt))) throw new Error("Open the source sign-in page to continue");
     },
@@ -80,6 +95,10 @@ globalThis.__nextTimer = () => {
     return true;
 };
 globalThis.console = Object.freeze({ log() {}, warn() {}, error() {} });
+globalThis.__invoke = async (fn, args) => {
+    try { return {ok:true,value:await fn(args)}; }
+    catch(error) { return {ok:false,code:String(error?.code||""),message:String(error?.message||error||"Plugin failed")}; }
+};
 globalThis.fetch = async (url, init = {}) => {
     if (init.signal?.aborted) throw new Error("Request aborted");
     const response = JSON.parse(__fetch(JSON.stringify({

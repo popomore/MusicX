@@ -42,6 +42,8 @@ struct Browser {
     configuring: Signal<bool>,
     imported: Signal<bool>,
     disconnecting: Signal<bool>,
+    removing: Signal<bool>,
+    update_available: Signal<bool>,
     owner: Owner,
     page: Signal<Page>,
     busy: Signal<bool>,
@@ -146,6 +148,8 @@ impl Browser {
     }
     fn populate(self, source: MusicSource) {
         self.imported.set(false);
+        self.removing.set(false);
+        self.update_available.set(false);
         self.configuring
             .set(source.settings.iter().any(|f| f.secret && !f.configured));
         let values = source
@@ -349,6 +353,75 @@ impl Browser {
             },
         );
     }
+    fn import_collection(self, liked: bool) {
+        let Some(source) = self.selected.with(|v| v.as_ref().map(|v| v.id.clone())) else {
+            return;
+        };
+        self.work(
+            move || {
+                request::<crate::protocol::LocalPlaylist>(if liked {
+                    Action::ImportLiked { source }
+                } else {
+                    Action::ImportRecent { source }
+                })
+            },
+            |this, list| {
+                this.imported.set(true);
+                this.message.set(format!(
+                    "已导入「{}」· {} 首，本地副本已保存",
+                    list.name,
+                    list.tracks.len()
+                ));
+            },
+        );
+    }
+    fn check_update(self) {
+        let Some(source) = self.selected.get() else {
+            return;
+        };
+        self.work(
+            move || request::<serde_json::Value>(Action::CheckUpdate { source: source.id }),
+            |this, result| {
+                let available = result["available"].as_bool().unwrap_or(false);
+                this.update_available.set(available);
+                this.message.set(if available {
+                    format!(
+                        "可更新到 {}",
+                        result["latest_version"].as_str().unwrap_or_default()
+                    )
+                } else {
+                    "已是最新版本".into()
+                });
+            },
+        );
+    }
+    fn update(self) {
+        let Some(source) = self.selected.get() else {
+            return;
+        };
+        self.work(
+            move || request::<MusicSource>(Action::Update { source: source.id }),
+            |this, source| {
+                this.populate(source);
+                this.update_available.set(false);
+                this.message.set("来源已更新，账号和设置已保留".into());
+            },
+        );
+    }
+    fn uninstall(self) {
+        let Some(source) = self.selected.get() else {
+            return;
+        };
+        self.work(
+            move || request::<serde_json::Value>(Action::Uninstall { source: source.id }),
+            |this, _| {
+                this.removing.set(false);
+                this.selected.set(None);
+                this.list(false);
+                this.message.set("来源已移除，本地歌单保留".into());
+            },
+        );
+    }
 }
 fn action(
     label: &'static str,
@@ -382,6 +455,10 @@ fn capabilities(source: &MusicSource) -> String {
         ("stream", "播放"),
         ("lyrics", "歌词"),
         ("album", "专辑"),
+        ("artist", "歌手"),
+        ("liked", "喜欢导入"),
+        ("recent", "记录导入"),
+        ("shows", "播客"),
         ("playlists", "歌单"),
         ("signIn", "账号"),
     ]
@@ -398,6 +475,7 @@ pub enum Start {
     Catalog,
 }
 pub fn sources_view(
+    model: crate::model::Model,
     back: impl Fn() + Copy + 'static,
     done: impl Fn() + Copy + 'static,
     initial: Option<MusicSource>,
@@ -414,6 +492,8 @@ pub fn sources_view(
         configuring: signal(false),
         imported: signal(false),
         disconnecting: signal(false),
+        removing: signal(false),
+        update_available: signal(false),
         owner: Owner::current(),
         page: signal(Page::List),
         busy: signal(false),
@@ -507,10 +587,11 @@ pub fn sources_view(
                                     .child(when(move||this.managing.get(),move||action("刷新账号",move||this.busy.get(),move||this.refresh_account())))
                                     .child(when(move||this.account.with(|a|a.as_ref().is_none_or(|a|!a.connected)),move||view().flex_row().gap(px(4.0))
                                         .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.web_sign_in)),move||crate::controls::primary("网页登录",move||this.busy.get(),move||this.sign_in(SignInMethod::Web))))
+                                        .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.oauth_sign_in)),move||action("浏览器登录",move||this.busy.get(),move||this.sign_in(SignInMethod::Oauth))))
                                         .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.qr_sign_in)),move||action("扫码登录",move||this.busy.get(),move||this.sign_in(SignInMethod::Qr))))))
                                     .child(when(move||this.managing.get()&&this.account.with(|s|s.as_ref().is_some_and(|a|a.connected)),move||action("断开来源账号",move||this.busy.get(),move||this.disconnecting.set(true))))
                                     .child(when(move||this.disconnecting.get(),move||action("确认断开来源账号",move||this.busy.get(),move||{this.disconnecting.set(false);this.sign_out();}))))
-                                .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|!s.qr_sign_in&&!s.web_sign_in)),||caption("此来源的登录方式尚未接入，可先填写它提供的账号配置项")))
+                                .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|!s.qr_sign_in&&!s.web_sign_in&&!s.oauth_sign_in)),||caption("此来源的登录方式尚未接入，可先填写它提供的账号配置项")))
                         }))
                         .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.capabilities.iter().any(|v|v=="playlist"))),move||{
                             view().gap(px(6.0)).pt(px(6.0))
@@ -519,6 +600,9 @@ pub fn sources_view(
                                 .child(action("导入来源歌单",move||this.busy.get(),move||this.playlists()))
                         }))
                         .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|!s.settings.is_empty())),move||action("来源设置",move||this.busy.get(),move||this.configuring.update(|v|*v = !*v))))
+                        .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.capabilities.iter().any(|v|v=="liked"))),move||action("导入云端喜欢",move||this.busy.get(),move||this.import_collection(true))))
+                        .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.capabilities.iter().any(|v|v=="recent"))),move||action("导入云端播放记录",move||this.busy.get(),move||this.import_collection(false))))
+                        .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.capabilities.iter().any(|v|v=="shows"))),move||action("浏览播客",move||this.busy.get(),move||{if let Some(source)=this.selected.with(|s|s.as_ref().map(|s|s.id.clone())){model.open_source(Action::Shows{source});}})))
                         .child(when(move||this.configuring.get(),move||view().gap(px(10.0))
                         .child(each(move||this.selected.with(|s|s.as_ref().map_or_else(Vec::new,|s|s.settings.clone())),|f|f.definition.key.clone(),move|field,_|{
                             view().gap(px(5.0))
@@ -535,6 +619,13 @@ pub fn sources_view(
                         .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.settings.is_empty())),||caption("此来源没有额外配置项")))
                         ))
                         .child(action("更多选项",move||this.busy.get(),move||{this.managing.update(|v|*v = !*v);this.disconnecting.set(false);} ))
+                        .child(when(move||this.managing.get(),move||view().gap(px(5.0))
+                            .child(action("检查更新",move||this.busy.get(),move||this.check_update()))
+                            .child(when(move||this.update_available.get(),move||action("更新来源",move||this.busy.get(),move||this.update())))
+                            .child(action("移除来源",move||this.busy.get(),move||this.removing.set(true)))
+                            .child(when(move||this.removing.get(),move||view().gap(px(4.0))
+                                .child(caption("本地歌单保留。移除后需重新添加来源才能播放其曲目。"))
+                                .child(action("确认移除来源",move||this.busy.get(),move||this.uninstall()))))))
                 }))
             )
         }))
@@ -546,12 +637,14 @@ pub fn sources_view(
             .child(action("取消关联",move||this.busy.get(),move||this.cancel()))
         )))
         .child(when(move||this.page.get()==Page::Playlists,move||view().flex_1().min_h(px(0.0)).gap(px(8.0))
-            .child(crate::controls::heading("导入来源歌单"))
-            .child(caption("选择来源歌单，或按歌单 ID 导入到我的歌单。"))
+            .child(crate::controls::heading("导入来源内容"))
+            .child(caption("按来源能力导入喜欢、播放记录或歌单，保存到我的歌单。"))
+            .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.capabilities.iter().any(|v|v=="liked"))),move||action("导入云端喜欢",move||this.busy.get(),move||this.import_collection(true))))
+            .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.capabilities.iter().any(|v|v=="recent"))),move||action("导入云端播放记录",move||this.busy.get(),move||this.import_collection(false))))
             .child(when(move||!this.busy.get()&&this.playlists.with(Vec::is_empty)&&this.selected.with(|s|s.as_ref().is_some_and(|s|s.capabilities.iter().any(|v|v=="playlists"))),move||action("查看来源账号与配置",move||this.busy.get(),move||{this.page.set(Page::Detail);this.refresh_account();})))
-            .child(view().flex_row().items_center().gap(px(4.0))
+            .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.capabilities.iter().any(|v|v=="playlist"))),move||view().flex_row().items_center().gap(px(4.0))
                 .child(input().label("来源歌单ID").placeholder("来源歌单ID").value(move||this.playlist_id.get()).on_change(move|v:&str|this.playlist_id.set(v.into())).flex_1().min_w(px(0.0)).h(px(32.0)).px(px(8.0)).rounded(px(5.0)).bg(move||theme().muted).text_color(move||theme().foreground))
-                .child(action("导入",move||this.busy.get()||this.playlist_id.with(|v|v.trim().is_empty()),move||this.import(this.playlist_id.get()))))
+                .child(action("导入",move||this.busy.get()||this.playlist_id.with(|v|v.trim().is_empty()),move||this.import(this.playlist_id.get())))))
             .child(virtual_list(move||this.playlists.with(Vec::len),move|at|{
                 let item=move||this.playlists.with(|rows|rows.get(at.index()).cloned());
                 view().flex_row().items_center().gap(px(4.0)).h(px(65.0))
@@ -564,7 +657,7 @@ pub fn sources_view(
                         .child(text("导入").text_size(px(11.0)).text_color(move||theme().foreground)))
             }).flex_1().min_h(px(0.0)).estimated_item_size(px(65.0)).label("来源歌单列表"))
         ))
-        .child(when(move||this.imported.get()&&this.page.get()==Page::Playlists,move||crate::controls::primary("查看已导入歌单",move||this.busy.get(),done)))
+        .child(when(move||this.imported.get(),move||crate::controls::primary("查看已导入歌单",move||this.busy.get(),done)))
         .child(when(move||this.busy.get(),||caption("正在读取或保存…")))
         .child(when(move||this.page.get()!=Page::Catalog,move||caption(move||this.message.get())))
 }

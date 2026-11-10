@@ -102,6 +102,8 @@ fn track(id: u64) -> Track {
         id,
         title: format!("Track {id}"),
         artist: "Test".into(),
+        artists: Vec::new(),
+        episode: None,
         duration: 180.0,
         cover_url: None,
         album: None,
@@ -117,6 +119,8 @@ fn media(track: Track) -> Media {
             .unwrap(),
         user_agent: Some("private-agent".into()),
         quality: AudioQuality::default(),
+        gain_db: None,
+        peak: None,
     }
 }
 

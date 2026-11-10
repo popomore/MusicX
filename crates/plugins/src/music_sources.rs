@@ -14,7 +14,7 @@ use std::{
     },
 };
 
-static SETTINGS_WRITER: Mutex<()> = Mutex::new(());
+pub(crate) static SETTINGS_WRITER: Mutex<()> = Mutex::new(());
 struct LoginRegistry {
     active: Option<Arc<LoginJob>>,
     cancelled: std::collections::VecDeque<String>,
@@ -294,7 +294,7 @@ fn uses_module_imports(source: &str) -> bool {
     })
 }
 
-fn check_single_file_script(source: &str) -> Result<()> {
+pub(crate) fn check_single_file_script(source: &str) -> Result<()> {
     check_script_syntax(source)?;
     ensure!(
         !uses_module_imports(source),
@@ -381,13 +381,15 @@ fn settings_value(id: &str) -> Result<BTreeMap<String, String>> {
         Err(e) => Err(e.into()),
     }
 }
-fn limitation(m: &mygo::Manifest, entry_error: bool, imports: bool) -> Option<String> {
-    if m.playback != "stream" {
+pub(crate) fn limitation(m: &mygo::Manifest, entry_error: bool, imports: bool) -> Option<String> {
+    if let Some(reason) = mygo::minimum_version_limitation(m) {
+        Some(reason)
+    } else if m.playback != "stream" {
         Some("此插件控制远程播放器，当前只接入音频来源".into())
     } else if !mygo::compatible(m) {
         Some("此插件需要外部程序，当前宿主尚未接入".into())
-    } else if !m.main.ends_with(".js") {
-        Some("此入口需要 TypeScript 转译，当前支持单文件 JavaScript".into())
+    } else if !m.main.ends_with(".js") && !m.main.ends_with(".ts") {
+        Some("当前支持单文件 JavaScript 或 TypeScript".into())
     } else if entry_error {
         Some("仓库未提供可直接读取的入口，需要插件发布包".into())
     } else if imports {
@@ -399,13 +401,27 @@ fn limitation(m: &mygo::Manifest, entry_error: bool, imports: bool) -> Option<St
     }
 }
 fn source_descriptor(
-    m: mygo::Manifest,
+    mut m: mygo::Manifest,
     installed: bool,
     exports: Vec<String>,
-    fields: Vec<SourceSettingDefinition>,
+    mut fields: Vec<SourceSettingDefinition>,
     limit: Option<String>,
     qr: bool,
 ) -> Result<MusicSource> {
+    if installed {
+        let translations = crate::localization::translations(&m.id);
+        if let Some(name) = translations.get(&m.name) {
+            m.name.clone_from(name);
+        }
+        for field in &mut fields {
+            if let Some(label) = translations.get(&field.label) {
+                field.label.clone_from(label);
+            }
+            if let Some(help) = translations.get(&field.help) {
+                field.help.clone_from(help);
+            }
+        }
+    }
     let values = if installed {
         settings_value(&m.id)?
     } else {
@@ -448,6 +464,7 @@ fn source_descriptor(
         settings,
         qr_sign_in: qr,
         web_sign_in: false,
+        oauth_sign_in: false,
     })
 }
 pub fn get_source(source: &str) -> Result<MusicSource> {
@@ -465,6 +482,9 @@ pub fn get_source(source: &str) -> Result<MusicSource> {
     let web = code.contains("host.webSignIn");
     let mut result = source_descriptor(m, true, exports, fields, limit, qr)?;
     result.web_sign_in = cfg!(target_os = "macos") && web;
+    result.oauth_sign_in = cfg!(target_os = "macos")
+        && code.contains("host.waitForRedirect")
+        && code.contains("host.openURL");
     Ok(result)
 }
 pub fn list() -> Result<Vec<MusicSource>> {
@@ -631,6 +651,9 @@ fn ensure_installable(row: &source_catalog::Entry) -> Result<()> {
 }
 
 pub fn install(repository: &str) -> Result<MusicSource> {
+    install_package(repository, None)
+}
+fn install_package(repository: &str, replacing: Option<&str>) -> Result<MusicSource> {
     let repo = repository::parse_repository(repository)?;
     // Discovery is optional. Only an already-cached explicit snapshot pins a version.
     let mut row = source_catalog::cached_entry(&repo).unwrap_or_else(|| source_catalog::Entry {
@@ -638,7 +661,9 @@ pub fn install(repository: &str) -> Result<MusicSource> {
         discovered: true,
         ..Default::default()
     });
-    ensure_installable(&row)?;
+    if replacing.is_none() {
+        ensure_installable(&row)?;
+    }
     let package = if !row.discovered {
         repository::pinned(&repo, &row.commit)?
     } else {
@@ -648,6 +673,9 @@ pub fn install(repository: &str) -> Result<MusicSource> {
     let script = package.script;
     use sha2::{Digest, Sha256};
     let mut m: mygo::Manifest = serde_json::from_slice(&manifest)?;
+    if let Some(id) = replacing {
+        ensure!(m.id == id, "更新包的数据源标识与已安装来源不一致");
+    }
     if !row.discovered {
         ensure!(
             format!("{:x}", Sha256::digest(&manifest)) == row.manifest_sha256,
@@ -667,12 +695,16 @@ pub fn install(repository: &str) -> Result<MusicSource> {
         mygo::valid_id(&m.id) && limitation(&m, false, false).is_none(),
         "来源超出当前宿主支持范围"
     );
-    let code = std::str::from_utf8(&script).context("插件入口不是有效的 UTF-8")?;
+    let original = std::str::from_utf8(&script).context("插件入口不是有效的 UTF-8")?;
+    let compiled = crate::script::javascript(&m.main, original)?;
+    let code = compiled.as_str();
     check_single_file_script(code)?;
     if row.discovered {
         row.manifest = serde_json::from_slice(&manifest)?;
         row.exports = declared_exports(code);
-        ensure_installable(&row)?;
+        if replacing.is_none() {
+            ensure_installable(&row)?;
+        }
     } else {
         ensure!(
             format!("{:x}", Sha256::digest(&script)) == row.entry_sha256,
@@ -694,13 +726,52 @@ pub fn install(repository: &str) -> Result<MusicSource> {
     fs::create_dir(&staging)?;
     let result = (|| -> Result<String> {
         m.main = "index.js".into();
-        fs::write(staging.join("index.js"), script)?;
+        fs::write(staging.join("index.js"), compiled)?;
         fs::write(staging.join("plugin.json"), serde_json::to_vec(&m)?)?;
-        mygo::install(&staging)
+        if !package.locales.is_empty() {
+            fs::create_dir(staging.join("locales"))?;
+            for (language, bytes) in package.locales {
+                fs::write(
+                    staging.join("locales").join(format!("{language}.json")),
+                    bytes,
+                )?;
+            }
+        }
+        if replacing.is_some() {
+            mygo::update_local(&staging)
+        } else {
+            mygo::install(&staging)
+        }
     })();
     let _ = fs::remove_dir_all(staging);
     let id = result?;
     get_source(&format!("mygo:{id}"))
+}
+
+pub fn update(source: &str) -> Result<MusicSource> {
+    let id = plugin(source)?;
+    let info = get_source(source)?;
+    let repository = info
+        .repository
+        .context("此来源没有记录仓库，请使用本地插件目录更新")?;
+    install_package(&repository, Some(id))
+}
+pub fn check_update(source: &str) -> Result<Value> {
+    let id = plugin(source)?;
+    let m = mygo::manifest(&mygo::plugin_root()?.join(id))?;
+    let repo =
+        repository::parse_repository(m.repository.as_deref().context("此来源没有记录仓库")?)?;
+    let latest = if let Some(row) = source_catalog::cached_entry(&repo).filter(|r| !r.discovered) {
+        row.commit
+    } else {
+        repository::latest_version(&repo)?
+    };
+    let current = m
+        .metadata
+        .get("sourceVersion")
+        .and_then(Value::as_str)
+        .unwrap_or(&m.version);
+    Ok(json!({"available":current != latest,"installed_version":current,"latest_version":latest}))
 }
 
 pub fn account(source: &str) -> Result<SourceAccount> {
@@ -851,10 +922,10 @@ pub fn begin_sign_in_method(
     let id = plugin(source)?.to_owned();
     let info = get_source(source)?;
     ensure!(
-        if method == SignInMethod::Web {
-            info.web_sign_in
-        } else {
-            info.qr_sign_in
+        match method {
+            SignInMethod::Web => info.web_sign_in,
+            SignInMethod::Qr => info.qr_sign_in,
+            SignInMethod::Oauth => info.oauth_sign_in,
         },
         "此来源的关联方式暂未接入，请检查来源配置项"
     );
@@ -878,6 +949,8 @@ pub fn begin_sign_in_method(
             status: "waiting".into(),
             text: if method == SignInMethod::Web {
                 "请在网页登录窗口中完成登录"
+            } else if method == SignInMethod::Oauth {
+                "请在浏览器中完成来源登录"
             } else {
                 "正在获取登录二维码…"
             }
@@ -963,6 +1036,12 @@ pub fn execute(input: MusicSourceAction) -> Result<Value> {
         MusicSourceAction::RefreshCatalog => serde_json::to_value(catalog_view(true)?)?,
         MusicSourceAction::Get { source } => serde_json::to_value(get_source(&source)?)?,
         MusicSourceAction::Install { repository } => serde_json::to_value(install(&repository)?)?,
+        MusicSourceAction::CheckUpdate { source } => check_update(&source)?,
+        MusicSourceAction::Update { source } => serde_json::to_value(update(&source)?)?,
+        MusicSourceAction::Uninstall { source } => {
+            mygo::uninstall(plugin(&source)?)?;
+            json!({"ok":true})
+        }
         MusicSourceAction::Configure { source, values } => configure(&source, values)?,
         MusicSourceAction::Account { source } => serde_json::to_value(account(&source)?)?,
         MusicSourceAction::SignIn {
@@ -979,6 +1058,24 @@ pub fn execute(input: MusicSourceAction) -> Result<Value> {
             json!({"ok":true})
         }
         MusicSourceAction::Playlists { source } => serde_json::to_value(playlists(&source)?)?,
+        MusicSourceAction::ImportLiked { source } => crate::discovery::import(&source, true)?,
+        MusicSourceAction::ImportRecent { source } => crate::discovery::import(&source, false)?,
+        MusicSourceAction::Artist { source, id } => {
+            serde_json::to_value(crate::discovery::browse(&source, "artist", &id, 0)?)?
+        }
+        MusicSourceAction::Album { source, id } => {
+            serde_json::to_value(crate::discovery::browse(&source, "album", &id, 0)?)?
+        }
+        MusicSourceAction::Shows { source } => {
+            serde_json::to_value(crate::discovery::browse(&source, "shows", "", 0)?)?
+        }
+        MusicSourceAction::Artwork { source, url } => {
+            use base64::Engine;
+            json!({"data":base64::engine::general_purpose::STANDARD.encode(crate::assets::image(plugin(&source)?, &url)?)})
+        }
+        MusicSourceAction::Show { source, id, offset } => {
+            serde_json::to_value(crate::discovery::browse(&source, "show", &id, offset)?)?
+        }
         MusicSourceAction::ImportPlaylist {
             source,
             playlist_id,

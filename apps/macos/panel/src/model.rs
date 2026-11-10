@@ -15,6 +15,7 @@ pub enum Page {
     Info,
     History,
     Album,
+    Discovery,
     Sources,
     Library,
     #[cfg(target_os = "macos")]
@@ -51,6 +52,8 @@ pub struct Model {
     pub error: Signal<String>,
     pub info: Signal<Option<TrackInfo>>,
     pub album: Signal<Option<AlbumPage>>,
+    pub discovery: Signal<Option<crate::protocol::MusicSourceAction>>,
+    pub discovery_back: Signal<Page>,
     pub history: Signal<Vec<(usize, HistoryEntry)>>,
     #[cfg(target_os = "macos")]
     pub queue: Signal<Option<Status>>,
@@ -110,6 +113,8 @@ impl Model {
             error: signal(String::new()),
             info: signal(None),
             album: signal(None),
+            discovery: signal(None),
+            discovery_back: signal(Page::Player),
             history: signal(Vec::new()),
             #[cfg(target_os = "macos")]
             queue: signal(None),
@@ -208,7 +213,7 @@ impl Model {
                 Page::Queue => remote::read_json("/ui/queue").map(|q| Loaded::Queue(Box::new(q))),
                 #[cfg(target_os = "macos")]
                 Page::Lyrics | Page::Settings => unreachable!(),
-                Page::Player | Page::Sources | Page::Library => unreachable!(),
+                Page::Player | Page::Sources | Page::Library | Page::Discovery => unreachable!(),
             };
             let _ = send.send(result);
         });
@@ -247,7 +252,7 @@ impl Model {
     }
     fn slot(page: Page) -> Option<usize> {
         match page {
-            Page::Player | Page::Sources | Page::Library => None,
+            Page::Player | Page::Sources | Page::Library | Page::Discovery => None,
             Page::Info => Some(0),
             #[cfg(target_os = "macos")]
             Page::Lyrics => Some(0),
@@ -351,7 +356,10 @@ impl Model {
         std::thread::spawn(move || {
             let _ = send.send(remote::post_json::<_, FavoriteState>(
                 "/ui/local-playlists",
-                &LocalLibraryAction::SetFavorite { track, liked },
+                &LocalLibraryAction::SetFavorite {
+                    track: Box::new(track),
+                    liked,
+                },
             ));
         });
         self.owner.run(|| {
@@ -436,6 +444,24 @@ impl Model {
     #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub fn play(self, track: Track) {
         self.play_action(Action::PlayTrack(track));
+    }
+    pub fn open_source(self, action: crate::protocol::MusicSourceAction) {
+        if self.page.get() != Page::Discovery {
+            self.discovery_back.set(self.page.get());
+        }
+        self.discovery.set(Some(action));
+        self.open(Page::Discovery);
+    }
+    pub fn play_source(self, page: crate::protocol::SourcePage, source: String, index: usize) {
+        self.play_action(Action::PlayList {
+            tracks: page.tracks,
+            index,
+            context: crate::protocol::QueueContext::SourceCollection {
+                source,
+                id: page.id,
+                name: page.title,
+            },
+        });
     }
     #[cfg(target_os = "macos")]
     pub fn play_browsed(self, index: usize) {

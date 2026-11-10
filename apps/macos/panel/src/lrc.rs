@@ -7,6 +7,7 @@ pub struct Cue {
     pub ms: i64,
     pub text: String,
     pub translation: String,
+    pub words: Vec<crate::protocol::LyricWord>,
 }
 
 #[derive(Default, PartialEq)]
@@ -15,6 +16,24 @@ pub struct Timeline {
 }
 
 impl Timeline {
+    pub fn from_lyrics(lyrics: &crate::protocol::Lyrics) -> Self {
+        if lyrics.lines.is_empty() {
+            return Self::parse(&lyrics.text, &lyrics.translation);
+        }
+        let mut cues: Vec<_> = lyrics
+            .lines
+            .iter()
+            .take(MAX_CUES)
+            .map(|line| Cue {
+                ms: line.start.min(i64::MAX as u64) as i64,
+                text: line.text.clone(),
+                translation: line.translation.clone(),
+                words: line.words.clone(),
+            })
+            .collect();
+        cues.sort_by_key(|cue| cue.ms);
+        Self { cues }
+    }
     pub fn parse(original: &str, translation: &str) -> Self {
         let mut cues = parse(original);
         let translations = parse(translation);
@@ -138,6 +157,7 @@ fn parse(input: &str) -> Vec<Cue> {
                 ms,
                 text: text.clone(),
                 translation: String::new(),
+                words: Vec::new(),
             });
         }
         if rows.len() == MAX_CUES {

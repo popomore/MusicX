@@ -14,7 +14,10 @@ use objc2_av_foundation::{
 };
 use objc2_core_media::CMTime;
 use objc2_foundation::{NSDictionary, NSString, NSURL};
-use std::{cell::RefCell, sync::OnceLock};
+use std::{
+    cell::{Cell, RefCell},
+    sync::OnceLock,
+};
 
 pub use musicx_core::player::{Action, State, Status};
 
@@ -26,6 +29,10 @@ thread_local! {
 
 pub fn configure(source: &'static dyn DataSource) -> Result<()> {
     SOURCE.set(source).map_err(|_| anyhow!("播放核心已配置"))
+}
+#[cfg(target_os = "macos")]
+pub(crate) fn artwork(url: &str) -> Option<Vec<u8>> {
+    SOURCE.get()?.artwork(url)
 }
 
 pub fn submit(action: Action, reply: Reply) {
@@ -46,7 +53,12 @@ pub fn shutdown() {
     PLAYER.with_borrow_mut(Player::shutdown);
 }
 
-struct AppleAudio(Retained<AVPlayer>);
+struct AppleAudio {
+    player: Retained<AVPlayer>,
+    volume: Cell<f32>,
+    gain: Cell<f32>,
+    scale: Cell<f32>,
+}
 
 fn activate_audio_session() -> Result<()> {
     #[cfg(target_os = "ios")]
@@ -61,10 +73,21 @@ impl AudioOutput for AppleAudio {
             .ok_or_else(|| anyhow!("无效的音频地址"))?;
         let main = MainThreadMarker::new().expect("AVPlayer main thread");
         let output = output.get_or_insert_with(|| {
-            let audio = Self(unsafe { AVPlayer::new(main) });
+            let audio = Self {
+                player: unsafe { AVPlayer::new(main) },
+                volume: Cell::new(volume),
+                gain: Cell::new(1.0),
+                scale: Cell::new(1.0),
+            };
             audio.set_volume(volume);
             audio
         });
+        output.gain.set(musicx_core::audio::normalization_scale(
+            media.gain_db,
+            media.peak,
+        ));
+        output.set_normalization(musicx_core::audio_quality::normalization_enabled());
+        output.set_volume(volume);
         unsafe {
             let item = if let Some(agent) = &media.user_agent {
                 let value = NSString::from_str(agent);
@@ -75,7 +98,7 @@ impl AudioOutput for AppleAudio {
             } else {
                 AVPlayerItem::playerItemWithURL(&url, main)
             };
-            output.0.replaceCurrentItemWithPlayerItem(Some(&item));
+            output.player.replaceCurrentItemWithPlayerItem(Some(&item));
         }
         if play {
             output.play();
@@ -87,17 +110,17 @@ impl AudioOutput for AppleAudio {
 
     fn snapshot(&self) -> AudioSnapshot {
         unsafe {
-            let item = self.0.currentItem();
-            let state = match self.0.timeControlStatus() {
+            let item = self.player.currentItem();
+            let state = match self.player.timeControlStatus() {
                 AVPlayerTimeControlStatus::Playing => AudioState::Playing,
                 AVPlayerTimeControlStatus::WaitingToPlayAtSpecifiedRate => AudioState::Waiting,
                 _ => AudioState::Paused,
             };
             AudioSnapshot {
-                position: self.0.currentTime().seconds(),
+                position: self.player.currentTime().seconds(),
                 duration: item.as_ref().map(|item| item.duration().seconds()),
                 state,
-                volume: self.0.volume(),
+                volume: self.volume.get(),
                 error: item
                     .and_then(|item| item.error())
                     .map(|error| error.localizedDescription().to_string()),
@@ -110,15 +133,20 @@ impl AudioOutput for AppleAudio {
     }
 
     fn play(&self) {
-        unsafe { self.0.play() };
+        unsafe { self.player.play() };
     }
 
     fn pause(&self) {
-        unsafe { self.0.pause() };
+        unsafe { self.player.pause() };
     }
 
+    fn set_normalization(&self, enabled: bool) {
+        self.scale.set(if enabled { self.gain.get() } else { 1.0 });
+        self.set_volume(self.volume.get());
+    }
     fn set_volume(&self, volume: f32) {
-        unsafe { self.0.setVolume(volume) };
+        self.volume.set(volume);
+        unsafe { self.player.setVolume(volume * self.scale.get()) };
     }
 
     fn seek(&self, seconds: f64, complete: impl Fn(bool) + Send + 'static) {
@@ -126,7 +154,7 @@ impl AudioOutput for AppleAudio {
             complete(finished.as_bool());
         });
         unsafe {
-            self.0
+            self.player
                 .seekToTime_toleranceBefore_toleranceAfter_completionHandler(
                     CMTime::with_seconds(seconds, 1000),
                     CMTime::with_seconds(0.0, 1000),
