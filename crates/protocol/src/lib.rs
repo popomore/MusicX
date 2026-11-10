@@ -67,7 +67,8 @@ pub struct Track {
     pub source: Option<Source>,
 }
 
-/// Legacy native NetEase records alias the canonical MyGo NetEase plugin.
+/// Preserve identities of persisted legacy NetEase favorites and history.
+/// This compatibility key never selects, installs or invokes a source plugin.
 pub fn track_key(track: &Track) -> String {
     track.source.as_ref().map_or_else(
         || format!("netease:{}", track.id),
@@ -109,14 +110,6 @@ impl Quality {
             Self::High => "高音质",
             Self::Lossless => "无损",
             Self::Hires => "Hi-Res",
-        }
-    }
-    pub fn netease_level(self) -> &'static str {
-        match self {
-            Self::Standard => "standard",
-            Self::High => "exhigh",
-            Self::Lossless => "lossless",
-            Self::Hires => "hires",
         }
     }
     pub fn plugin_quality(self) -> &'static str {
@@ -246,9 +239,6 @@ pub struct Status {
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum UiAction {
-    Play {
-        id: u64,
-    },
     PlayTrack {
         track: Track,
     },
@@ -256,10 +246,6 @@ pub enum UiAction {
         tracks: Vec<Track>,
         index: usize,
         context: QueueContext,
-    },
-    PlayPlaylist {
-        id: u64,
-        track_id: u64,
     },
     PlayLocalPlaylist {
         id: String,
@@ -342,49 +328,6 @@ pub struct AlbumPage {
     pub tracks: Vec<Track>,
 }
 
-#[derive(Clone, PartialEq, Serialize, Deserialize)]
-pub struct LoginChallenge {
-    pub key: String,
-    pub device: String,
-    pub url: String,
-    pub svg: String,
-    pub expires_at: u64,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct LoginPoll {
-    pub key: String,
-    pub device: String,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct LoginProgress {
-    pub status: String,
-}
-
-#[derive(Clone, PartialEq, Serialize, Deserialize)]
-pub struct PlaylistSummary {
-    pub id: u64,
-    pub name: String,
-    pub track_count: u64,
-    pub owned: bool,
-}
-
-#[derive(Clone, PartialEq, Serialize, Deserialize)]
-pub struct PlaylistList {
-    pub playlists: Vec<PlaylistSummary>,
-    pub more: bool,
-}
-
-#[derive(Clone, PartialEq, Serialize, Deserialize)]
-pub struct PlaylistPage {
-    pub id: u64,
-    pub name: String,
-    pub tracks: Vec<Track>,
-    pub total: usize,
-    pub more: bool,
-}
-
 /// Local library contains metadata and source identities, never resolved audio URLs.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct LocalPlaylist {
@@ -450,9 +393,6 @@ pub enum LocalLibraryAction {
     },
     Delete {
         id: String,
-    },
-    ImportNetease {
-        id: u64,
     },
     ImportSource {
         source: String,

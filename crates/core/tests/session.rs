@@ -31,9 +31,6 @@ fn dispatch(message: Message) {
 struct Source;
 static SOURCE: Source = Source;
 impl DataSource for Source {
-    fn search(&self, _: String, _: u64) -> Result<Vec<Track>> {
-        unreachable!()
-    }
     fn resolve(&self, track: Track, _: Quality) -> Result<Media> {
         if FAIL_RESOLVE.load(Ordering::Relaxed) {
             bail!("offline");

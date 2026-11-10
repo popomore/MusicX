@@ -13,7 +13,7 @@ test_data=$(mktemp -d)
 MINI_CLOUDMUSIC_DATA_DIR="$test_data" MINI_CLOUDMUSIC_PORT=45969 ./run
 ```
 
-Use the same data directory and port when connecting to the test session. To read its token, pass `MINI_CLOUDMUSIC_DATA_DIR` to the `mcp-token` command. The test session installs its own default plugin on first launch.
+Use the same data directory and port when connecting to the test session. To read its token, pass `MINI_CLOUDMUSIC_DATA_DIR` to the `mcp-token` command. The test session starts with no plugins; add test sources explicitly.
 
 ## Package the macOS app
 
@@ -92,10 +92,7 @@ The settings panel copies a configuration for clients that use the `mcpServers` 
 
 | Tools | What they do |
 | --- | --- |
-| `search_songs` | Search NetEase Cloud Music by track or artist |
-| `my_playlists`, `playlist_tracks` | Read paginated NetEase playlists and tracks |
-| `play_song`, `enqueue_song` | Play or queue a NetEase track |
-| `list_music_plugins`, `plugin_search`, `plugin_play` | List installed MyGo plugins, search a plugin, or play a plugin track |
+| `list_music_plugins`, `plugin_search`, `plugin_play` | List installed plugins, search with an explicit plugin ID, or play/enqueue a plugin track |
 | `manage_music_sources` | Browse sources, configure plugins, connect accounts, and import playlists |
 | `manage_local_playlists` | Create, edit, pin, or play local playlists |
 | `player_status`, `control_player` | Inspect and control the current session |
@@ -104,12 +101,9 @@ The settings panel copies a configuration for clients that use the `mcpServers` 
 
 ## Work with music sources
 
-Use the launcher to build all required components and test NetEase QR sign-in and sign-out.
+MusicX starts with the locally installed plugins, including an empty installation. Startup and listing installed sources do not install plugins or contact the catalog. Add a source in **Settings → Music Sources** on macOS or **Music Sources** on iPhone. Account sign-in, sign-out, configuration, and playlist import use that selected plugin's capabilities. MCP clients use `manage_music_sources` with `source=mygo:<plugin-id>`.
 
-```sh
-./run login
-./run logout
-```
+Search with `plugin_search` and an explicit `plugin` ID. Use the returned track ID and metadata with `plugin_play`; set `enqueue=true` to queue it. Generic playback, lyrics, and album requests carry the track's `source.plugin` and `source.id`. Legacy NetEase-only tools, account routes, link/ID playback, and the `login`/`logout` CLI commands have been removed. No source is inferred from a bare numeric ID. Existing local records are retained; re-add tracks without source metadata from a selected plugin to play them.
 
 Install a compatible single-file JavaScript plugin from a local directory.
 
@@ -117,9 +111,9 @@ Install a compatible single-file JavaScript plugin from a local directory.
 cargo run --release --locked -- plugin-install /path/to/plugin
 ```
 
-Available actions depend on the plugin's capabilities. Repository installs prefer the latest Release's platform or generic ZIP, then its source archive. Repositories without a Release resolve the default branch to one fixed commit and download its ZIP. Packages are checked against MusicX's single-file JavaScript host and compiled without executing plugin code before installation; TypeScript, external modules, and unsupported host permissions remain unavailable. The default NetEase source uses the same installation flow, without a built-in version or checksum pin. [MyGo Music plugin directory](https://music.egoist.dev/zh/plugins)
+Available actions depend on the plugin's capabilities. Repository installs prefer the latest Release's platform or generic ZIP, then its source archive. Repositories without a Release resolve the default branch to one fixed commit and download its ZIP. Packages are checked against MusicX's single-file JavaScript host and compiled without executing plugin code before installation; TypeScript, external modules, and unsupported host permissions remain unavailable. Every source uses the same installation flow; there is no built-in repository, source version, or checksum pin. [MyGo Music plugin directory](https://music.egoist.dev/zh/plugins)
 
-Playback and sign-in call public plugin exports. MusicX does not inject access to NetEase's internal functions. Numeric-ID playback reuses metadata from earlier plugin search results when available, otherwise it displays the ID while streaming. Playing a full track preserves its supplied metadata. Sign-in methods follow the installed plugin: QR sign-in needs `host.signInPrompt`, and web sign-in needs `host.webSignIn`.
+Playback and sign-in call public plugin exports. Playing a full track preserves its supplied metadata, and enrichment matches both the plugin ID and the track ID. Source names and repository links come from the installed manifest. Playlist identifiers are opaque strings passed to the selected plugin; MusicX does not parse provider-specific links. Sign-in methods follow the installed plugin: QR sign-in needs `host.signInPrompt`, and web sign-in needs `host.webSignIn`.
 
 The add-source page accepts `owner/repo` or a GitHub repository URL directly, even when discovery is unavailable. MCP clients can use `manage_music_sources` with `action=install` and `repository`. Installation records the repository and selected version locally; commit-based installs also record the full commit SHA.
 
@@ -144,6 +138,10 @@ Custom endpoints may return a GitHub repository search response (`{"items":[{"fu
 Catalog requests have a 25-second timeout and a 2 MiB response limit. Fetch or parse errors are reported when no valid cached copy exists. Invalid responses do not replace the cache. Unset the variable to restore the official topic search. Playback and account settings for installed plugins use their local installation without reading or downloading the catalog.
 
 `catalog` retains its array response for existing MCP clients. `catalog_view` and `refresh_catalog` return `sources`, `refreshing`, and `warning`; clients can poll `catalog_view` while `refreshing` is true to display the completed background update. ZIP downloads are limited to 16 MiB and 4,096 entries; only the checked manifest and JavaScript entry are written into the installation.
+
+Stream headers follow the same AVPlayer policy for every plugin: `User-Agent` is supported, the navigation-only `Referer` hint is omitted, and other headers are rejected. Sources requiring additional headers may remain unavailable on this host.
+
+`manage_local_playlists` accepts `action=import_source`, `source=mygo:<plugin-id>`, and `source_playlist_id`. The equivalent source action is `manage_music_sources` with `action=import_playlist` and `playlist_id`. Both create local snapshots without changing the source's playlist.
 
 ## Checks before opening a pull request
 

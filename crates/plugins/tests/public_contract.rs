@@ -1,6 +1,6 @@
 //! Exercise the public boundary in a child process so tests never share user data.
 use musicx_plugin_api::DataSource;
-use musicx_plugins::{MYGO, music_sources, mygo, netease};
+use musicx_plugins::{MYGO, music_sources, mygo};
 use serde_json::json;
 use std::{
     fs,
@@ -10,7 +10,7 @@ use std::{
 };
 
 #[test]
-fn public_plugin_exports_work_without_private_netease_symbols() {
+fn all_sources_are_explicit_plugins() {
     let directory = std::env::temp_dir().join(format!(
         "musicx-public-contract-{}-{}",
         std::process::id(),
@@ -42,21 +42,34 @@ fn public_exports_child() {
     if std::env::var("MUSICX_PUBLIC_CONTRACT_CHILD").as_deref() != Ok("1") {
         return;
     }
+    assert!(music_sources::list().unwrap().is_empty());
     let root = PathBuf::from(std::env::var_os("MUSICX_PUBLIC_CONTRACT_ROOT").unwrap());
     let fixture = root.join("fixture");
     fs::create_dir(&fixture).unwrap();
     fs::write(fixture.join("plugin.json"), serde_json::to_vec(&json!({
-        "id":"netease", "name":"Public contract fixture", "version":"9.9.9", "main":"index.js", "playback":"stream"
+        "id":"fixture-source", "name":"Public contract fixture", "version":"9.9.9", "main":"index.js", "playback":"stream",
+        "repository":"https://github.com/example/fixture-source"
     })).unwrap()).unwrap();
     fs::write(fixture.join("index.js"), r#"
 export function search() {
-  return {tracks:[{id:'123',name:'公开接口曲名',artists:[{name:'歌手'}],duration:60000,
+  return {tracks:[{id:'track:123',name:'公开接口曲名',artists:[{name:'歌手'}],duration:60000,
     album:{id:'album',name:'专辑',imageUrl:'https://example.com/cover.jpg'}}]};
 }
 export function stream({id,quality}) {
   host.storage.set('stream',{id,quality});
-  return {url:'https://example.com/'+id+'.mp3',type:'mp3'};
+  if(id==='unsupported-headers') return {url:'https://example.com/track.mp3',headers:{Authorization:'fixture'}};
+  return {url:'https://example.com/'+id+'.mp3',type:'mp3',headers:{'User-Agent':'Fixture Player',Referer:'https://example.com/'}};
 }
+export function playlists() {
+  return [{id:'collection:mix/001',name:'Fixture playlist',trackCount:1}];
+}
+export function playlist({id}) {
+  host.storage.set('playlistId',id);
+  return {id,name:'Fixture playlist',trackCount:1,tracks:search().tracks};
+}
+export function lyrics() { return {lines:[]}; }
+export function album() { return {id:'album',name:'Fixture album',tracks:search().tracks}; }
+export function signOut() { host.storage.remove('method'); return {}; }
 export async function signIn({method}) {
   if(host.setting('nativeFixtureLogin')==='enabled') {
     if(method==='web') await host.webSignIn({url:'https://example.com'});
@@ -72,22 +85,72 @@ export function account() {
 "#).unwrap();
     mygo::install(&fixture).unwrap();
 
-    let rows = netease::search("fixture".into(), 1).unwrap();
-    let media = netease::resolve_with_quality(123, Default::default()).unwrap();
+    let result = mygo::invoke(
+        "fixture-source",
+        "search",
+        json!({"query":"fixture","kind":"tracks"}),
+    )
+    .unwrap();
+    mygo::remember_artwork("fixture-source", &result);
+    let track: musicx_core::protocol::Track = serde_json::from_value(json!({
+        "id":0,"title":result["tracks"][0]["name"],"artist":result["tracks"][0]["artists"][0]["name"],"duration":60.0,
+        "source":{"plugin":"fixture-source","id":"track:123"}
+    }))
+    .unwrap();
+    let media = MYGO
+        .resolve_selection(track.clone(), Default::default())
+        .unwrap();
     assert_eq!(media.track.title, "公开接口曲名");
     assert_eq!(media.track.artist, "歌手");
-    assert_eq!(media.url.as_str(), "https://example.com/123.mp3");
-    let mut supplied = rows[0].clone();
-    supplied.source = None;
+    assert_eq!(
+        media.track.source.as_ref().unwrap().plugin,
+        "fixture-source"
+    );
+    assert_eq!(media.url.as_str(), "https://example.com/track:123.mp3");
+    assert_eq!(media.user_agent.as_deref(), Some("Fixture Player"));
+    let info = MYGO.info(media.track.clone());
+    assert_eq!(info.source_name, "Public contract fixture");
+    assert_eq!(
+        info.source_link.unwrap().url,
+        "https://github.com/example/fixture-source"
+    );
+    let album = MYGO.album(media.track.clone()).unwrap();
+    assert_eq!(album.album.name, "Fixture album");
+    assert_eq!(
+        album.tracks[0].source.as_ref().unwrap().plugin,
+        "fixture-source"
+    );
+    let mut supplied = track;
     supplied.title = "调用方给定的标题".into();
     let media = MYGO
-        .resolve_selection(supplied, Default::default())
+        .resolve_selection(supplied.clone(), Default::default())
         .unwrap();
     assert_eq!(media.track.title, "调用方给定的标题");
-    let unknown = netease::resolve_with_quality(456, Default::default()).unwrap();
-    assert_eq!(unknown.track.title, "456");
-    assert_eq!(unknown.url.as_str(), "https://example.com/456.mp3");
+    supplied.source = None;
+    assert!(
+        MYGO.resolve_selection(supplied.clone(), Default::default())
+            .is_err()
+    );
+    let info = MYGO.info(supplied);
+    assert_eq!(info.source_name, "未关联来源");
+    assert!(info.source_link.is_none());
     assert!(!root.join("state/mygo_source_catalog.json").exists());
+    assert!(!root.join("state/mygo-plugins/netease").exists());
+    let sources = music_sources::list().unwrap();
+    assert_eq!(sources.len(), 1);
+    assert_eq!(sources[0].id, "mygo:fixture-source");
+    assert!(music_sources::get_source("fixture-source").is_err());
+    let playlists = music_sources::playlists("mygo:fixture-source").unwrap();
+    assert_eq!(playlists[0].id, "collection:mix/001");
+    let imported = musicx_plugins::change_library(serde_json::from_value(json!({
+        "action":"import_source","source":"mygo:fixture-source","playlist_id":"  collection:mix/001  "
+    })).unwrap()).unwrap();
+    assert_eq!(imported["imported_from"]["provider"], "mygo:fixture-source");
+    assert_eq!(imported["imported_from"]["id"], "collection:mix/001");
+    assert_eq!(imported["tracks"][0]["source"]["plugin"], "fixture-source");
+    let mut unsupported = media.track;
+    unsupported.source.as_mut().unwrap().id = "unsupported-headers".into();
+    assert!(MYGO.resolve(unsupported, Default::default()).is_err());
 
     let methods = if cfg!(target_os = "macos") {
         vec!["qr", "web"]
@@ -96,7 +159,7 @@ export function account() {
     };
     for method in methods {
         let action = serde_json::from_value(
-            json!({"action":"sign_in","source":"mygo:netease","method":method}),
+            json!({"action":"sign_in","source":"mygo:fixture-source","method":method}),
         )
         .unwrap();
         let started = music_sources::execute(action).unwrap();
@@ -113,8 +176,16 @@ export function account() {
         }
         assert!(complete);
         std::thread::sleep(Duration::from_millis(10));
-        let account = mygo::invoke("netease", "account", json!({})).unwrap();
+        let account = mygo::invoke("fixture-source", "account", json!({})).unwrap();
         assert_eq!(account["name"], method);
         assert_eq!(account["settingMethod"], method);
     }
+    music_sources::execute(
+        serde_json::from_value(json!({
+            "action":"sign_out","source":"mygo:fixture-source"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(!root.join("state/mygo-plugins/netease").exists());
 }

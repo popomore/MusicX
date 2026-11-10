@@ -25,9 +25,6 @@ static LOGIN: Mutex<LoginRegistry> = Mutex::new(LoginRegistry {
 });
 
 fn plugin(source: &str) -> Result<&str> {
-    if source == "netease" {
-        return Ok("netease");
-    }
     let id = source.strip_prefix("mygo:").context("请选择插件数据源")?;
     ensure!(mygo::valid_id(id), "无效的数据源标识");
     Ok(id)
@@ -328,7 +325,6 @@ pub fn get_source(source: &str) -> Result<MusicSource> {
     Ok(result)
 }
 pub fn list() -> Result<Vec<MusicSource>> {
-    mygo::ensure_netease()?;
     let mut sources = Vec::new();
     for row in mygo::list()?.as_array().into_iter().flatten() {
         if let Some(id) = row["id"].as_str() {
@@ -607,8 +603,7 @@ pub fn playlists(source: &str) -> Result<Vec<SourcePlaylist>> {
         .collect())
 }
 pub fn playlist_snapshot(source: &str, id: &str) -> Result<(PlaylistOrigin, Vec<Track>)> {
-    let normalized = normalize_playlist_id(source, id)?;
-    let id = normalized.as_str();
+    let id = id.trim();
     ensure!(!id.is_empty() && id.len() <= 1024, "无效的歌单标识");
     let plugin = plugin(source)?;
     let value = mygo::invoke(plugin, "playlist", json!({"id":id}))
@@ -642,27 +637,6 @@ pub fn playlist_snapshot(source: &str, id: &str) -> Result<(PlaylistOrigin, Vec<
         },
         tracks,
     ))
-}
-
-fn normalize_playlist_id(source: &str, value: &str) -> Result<String> {
-    let value = value.trim();
-    if !matches!(source, "netease" | "mygo:netease") || !value.contains("://") {
-        return Ok(value.to_owned());
-    }
-    let url = reqwest::Url::parse(&value.replace("/#/playlist", "/playlist"))?;
-    ensure!(
-        matches!(url.host_str(), Some("music.163.com" | "y.music.163.com"))
-            && url.path() == "/playlist",
-        "请输入网易云歌单链接或ID"
-    );
-    let id = url
-        .query_pairs()
-        .find(|(k, _)| k == "id")
-        .context("链接缺少歌单ID")?
-        .1
-        .into_owned();
-    ensure!(id.parse::<u64>().is_ok_and(|n| n > 0), "无效歌单ID");
-    Ok(id)
 }
 
 pub(crate) struct LoginJob {
@@ -878,17 +852,6 @@ pub fn execute(input: MusicSourceAction) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn legacy_and_plugin_playlist_links_share_the_same_identity() {
-        for source in ["netease", "mygo:netease"] {
-            assert_eq!(
-                normalize_playlist_id(source, "https://music.163.com/#/playlist?id=123").unwrap(),
-                "123"
-            );
-            assert!(normalize_playlist_id(source, "https://example.com/playlist?id=123").is_err());
-            assert!(normalize_playlist_id(source, "https://music.163.com/song?id=123").is_err());
-        }
-    }
     #[test]
     fn exports_skip_comments_strings_and_support_aliases() {
         assert_eq!(

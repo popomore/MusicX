@@ -464,12 +464,12 @@ mod tests {
 
     #[test]
     fn github_discovery_needs_no_bundled_metadata() {
-        let entries = parse(serde_json::json!({"items":[{"full_name":"sogud/mygo-music-netease","name":"NetEase","description":"网易云来源"},{"full_name":"example/new-plugin"}]})).unwrap();
+        let entries = parse(serde_json::json!({"items":[{"full_name":"example/fixture-source","name":"Fixture","description":"测试来源"},{"full_name":"example/new-plugin"}]})).unwrap();
         assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].repo, crate::mygo::NETEASE_REPOSITORY);
+        assert_eq!(entries[0].repo, "example/fixture-source");
         assert!(entries[0].discovered);
-        assert_eq!(entries[0].name, "NetEase");
-        assert_eq!(entries[0].description, "网易云来源");
+        assert_eq!(entries[0].name, "Fixture");
+        assert_eq!(entries[0].description, "测试来源");
         assert!(entries[1].discovered);
         assert_eq!(entries[1].repo, "example/new-plugin");
     }
@@ -689,10 +689,11 @@ mod tests {
     fn live_default_catalog_uses_the_official_topic_search() {
         let directory = Directory::new();
         let entries = load_from(None, &directory.0).unwrap();
+        assert!(!entries.is_empty());
         assert!(
             entries
                 .iter()
-                .any(|row| row.repo == crate::mygo::NETEASE_REPOSITORY)
+                .all(|row| row.discovered && valid_repository(&row.repo))
         );
         assert!(directory.0.join(CACHE_FILE).is_file());
         println!("official catalog: {} repositories", entries.len());

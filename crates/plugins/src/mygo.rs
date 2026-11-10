@@ -16,23 +16,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::netease::{Media, Track};
+use crate::protocol::Track;
 use musicx_core::{metadata::merge_metadata, storage::state_dir};
-
-pub const NETEASE_REPOSITORY: &str = "sogud/mygo-music-netease";
-
-/// Install the default source through the same repository flow as other plugins.
-pub fn ensure_netease() -> Result<()> {
-    static INSTALL: Mutex<()> = Mutex::new(());
-    let _guard = INSTALL.lock().map_err(|_| anyhow!("插件安装锁不可用"))?;
-    let dir = plugin_root()?.join("netease");
-    if !dir.exists() {
-        crate::music_sources::install(NETEASE_REPOSITORY)?;
-    }
-    let m = manifest(&dir)?;
-    ensure!(m.id == "netease" && compatible(&m), "网易云插件类型不兼容");
-    Ok(())
-}
+use musicx_plugin_api::Media;
 
 fn aes_ecb(key: &str, text: &str) -> Result<String> {
     use aes::{
@@ -75,15 +61,6 @@ pub fn remember_artwork(plugin: &str, result: &Value) {
             cache.push_back((plugin.to_owned(), id, track));
         }
     }
-}
-
-pub(crate) fn remembered_track(plugin: &str, id: &str) -> Option<Track> {
-    METADATA
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .iter()
-        .find(|(p, i, _)| p == plugin && i == id)
-        .map(|(_, _, track)| track.clone())
 }
 
 pub(crate) fn catalog_track(plugin: &str, value: &Value) -> Option<Track> {
@@ -195,9 +172,20 @@ pub(crate) fn fill_artwork(track: &mut Track) {
 }
 
 pub fn source_name(plugin: &str) -> String {
+    if !valid_id(plugin) {
+        return "未关联来源".into();
+    }
     plugin_root()
         .and_then(|root| manifest(&root.join(plugin)))
         .map_or_else(|_| plugin.to_owned(), |manifest| manifest.name)
+}
+
+pub(crate) fn source_repository(plugin: &str) -> Option<String> {
+    if !valid_id(plugin) {
+        return None;
+    }
+    let manifest = manifest(&plugin_root().ok()?.join(plugin)).ok()?;
+    musicx_core::metadata::public_url(manifest.repository.as_deref()?)
 }
 
 pub fn album(track: &Track) -> Result<crate::protocol::AlbumPage> {
@@ -764,12 +752,9 @@ pub fn resolve_with_quality(mut track: Track, quality: crate::protocol::Quality)
     let mut user_agent = None;
     if let Some(headers) = stream["headers"].as_object() {
         for (key, value) in headers {
-            // NetEase's public CDN works without this non-authentication hint.
-            // AVPlayer exposes a public User-Agent option, but no Referer API.
-            if source.plugin == "netease"
-                && key.eq_ignore_ascii_case("Referer")
-                && value.as_str() == Some("https://music.163.com/")
-            {
+            // AVPlayer has a public User-Agent option but no Referer option.
+            // Omit this navigation hint uniformly for every source plugin.
+            if key.eq_ignore_ascii_case("Referer") {
                 continue;
             }
             ensure!(

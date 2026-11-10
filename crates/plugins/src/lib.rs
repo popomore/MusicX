@@ -1,9 +1,8 @@
-//! MyGo compatibility, source registration and legacy NetEase entry points.
+//! MyGo compatibility and explicit plugin source registration.
 mod catalog;
 mod http;
 pub mod music_sources;
 pub mod mygo;
-pub mod netease;
 mod quality;
 mod repository;
 mod source_catalog;
@@ -21,10 +20,6 @@ pub struct MyGo;
 pub static MYGO: MyGo = MyGo;
 
 impl DataSource for MyGo {
-    fn search(&self, query: String, limit: u64) -> Result<Vec<Track>> {
-        netease::search(query, limit)
-    }
-
     fn resolve(&self, track: Track, quality: Quality) -> Result<Media> {
         catalog::resolve_with_quality(track, quality)
     }
@@ -41,9 +36,6 @@ impl DataSource for MyGo {
 /// Fetch imports before acquiring the local library's writer lock.
 pub fn change_library(action: LocalLibraryAction) -> Result<Value> {
     let (origin, tracks) = match action {
-        LocalLibraryAction::ImportNetease { id } => {
-            music_sources::playlist_snapshot("netease", &id.to_string())?
-        }
         LocalLibraryAction::ImportSource {
             source,
             playlist_id,

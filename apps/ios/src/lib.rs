@@ -4,11 +4,21 @@ use nsh_core::prelude::*;
 pub use ui::App;
 
 #[cfg(target_os = "ios")]
+#[path = "../../macos/panel/src/controls.rs"]
+mod controls;
+#[cfg(target_os = "ios")]
+#[path = "../../macos/panel/src/library.rs"]
 mod library;
 #[path = "../../macos/panel/src/model.rs"]
 mod model;
 #[path = "../../macos/panel/src/remote.rs"]
 mod remote;
+#[cfg(target_os = "ios")]
+#[path = "../../macos/panel/src/source_browser.rs"]
+mod source_browser;
+#[cfg(target_os = "ios")]
+#[path = "../../macos/panel/src/sources_ui.rs"]
+mod sources_ui;
 #[path = "../../macos/panel/src/ui.rs"]
 mod ui;
 

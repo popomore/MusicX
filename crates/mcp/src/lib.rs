@@ -1,5 +1,4 @@
 //! Streamable HTTP MCP and authenticated panel routes.
-mod account_ui;
 mod local_library_ui;
 mod source_ui;
 
@@ -32,7 +31,7 @@ use musicx_core::{
     storage,
 };
 use musicx_plugin_api::DataSource;
-use musicx_plugins::{music_sources, mygo, netease};
+use musicx_plugins::{music_sources, mygo};
 
 #[derive(Clone, Copy)]
 pub struct Services {
@@ -68,7 +67,6 @@ async fn authorize(State(expected): State<Arc<String>>, request: Request, next: 
 pub fn start(services: Services) -> Result<()> {
     let address = address();
     let listener = TcpListener::bind(address).context("无法监听 MCP，本机可能已启动播放器")?;
-    mygo::ensure_netease()?;
     listener.set_nonblocking(true)?;
     let path = storage::state_dir()?.join("mcp-token");
     let token = match fs::read_to_string(&path) {
@@ -111,7 +109,6 @@ pub fn start(services: Services) -> Result<()> {
                 .route("/ui/action", post(ui_action))
                 .route("/ui/session/restore", post(ui_restore))
                 .with_state(services)
-                .merge(account_ui::routes())
                 .merge(local_library_ui::routes())
                 .merge(source_ui::routes())
                 .layer(middleware::from_fn_with_state(auth, authorize));
@@ -159,7 +156,7 @@ async fn ui_state(State(services): State<Services>) -> UiResult {
 }
 async fn current_track(
     services: Services,
-) -> Result<netease::Track, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<protocol::Track, (StatusCode, Json<serde_json::Value>)> {
     ui_state(State(services))
         .await?
         .0
@@ -207,12 +204,6 @@ async fn ui_action(
 ) -> UiResult {
     use protocol::UiAction;
     let action = match action {
-        UiAction::Play { id } => Action::Play(
-            tokio::task::spawn_blocking(move || netease::resolve(id))
-                .await
-                .map_err(ui_error)?
-                .map_err(ui_error)?,
-        ),
         UiAction::PlayTrack { track } => Action::Play(
             tokio::task::spawn_blocking(move || {
                 services.sources.resolve(track, audio_quality::preferred())
@@ -241,30 +232,6 @@ async fn ui_action(
                 media,
             }
         }
-        UiAction::PlayPlaylist { id, track_id } => tokio::task::spawn_blocking(move || {
-            let page = netease::playlist_queue(id)?;
-            let index = page
-                .tracks
-                .iter()
-                .position(|t| t.id == track_id)
-                .ok_or_else(|| anyhow::anyhow!("所选歌曲已不在歌单中，请刷新歌单"))?;
-            validate_list(&page.tracks, index)?;
-            let media = services
-                .sources
-                .resolve(page.tracks[index].clone(), audio_quality::preferred())?;
-            Ok::<_, anyhow::Error>(Action::ReplaceQueue {
-                tracks: page.tracks,
-                index,
-                media,
-                context: protocol::QueueContext::Playlist {
-                    id,
-                    name: page.name,
-                },
-            })
-        })
-        .await
-        .map_err(ui_error)?
-        .map_err(ui_error)?,
         UiAction::PlayLocalPlaylist { id, index } => {
             tokio::task::spawn_blocking(move || local_queue(services, id, index))
                 .await
@@ -391,12 +358,6 @@ struct PlayerTools {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
-struct Search {
-    query: String,
-    limit: Option<u64>,
-}
-
-#[derive(Deserialize, schemars::JsonSchema)]
 struct PluginSearch {
     plugin: String,
     query: String,
@@ -414,25 +375,7 @@ struct PluginSong {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
-struct Song {
-    id: u64,
-}
-
-#[derive(Deserialize, schemars::JsonSchema)]
-struct Page {
-    offset: Option<u64>,
-    limit: Option<u64>,
-}
-
-#[derive(Deserialize, schemars::JsonSchema)]
 struct HistoryPage {
-    limit: Option<u64>,
-}
-
-#[derive(Deserialize, schemars::JsonSchema)]
-struct PlaylistPage {
-    id: u64,
-    offset: Option<u64>,
     limit: Option<u64>,
 }
 
@@ -475,7 +418,7 @@ enum LibraryOperation {
     AddQueue,
     Remove,
     Delete,
-    ImportNetease,
+    ImportSource,
     Play,
 }
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -485,7 +428,8 @@ struct LibraryInput {
     name: Option<String>,
     index: Option<usize>,
     revision: Option<u64>,
-    netease_playlist_id: Option<u64>,
+    source: Option<String>,
+    source_playlist_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, schemars::JsonSchema)]
@@ -553,7 +497,7 @@ impl PlayerTools {
     }
 
     #[tool(
-        description = "管理播放器本地歌单，与网易云歌单独立。action=list/get/create/rename/pin/unpin/add_current/add_queue/remove/delete/import_netease/play。pin和unpin需要playlist_id。歌曲按来源去重，播放为独立快照；导入创建本地副本，不修改第三方歌单。remove需index和当前revision。"
+        description = "管理播放器本地歌单。action=list/get/create/rename/pin/unpin/add_current/add_queue/remove/delete/import_source/play。import_source需要source=mygo:插件ID和source_playlist_id。pin和unpin需要playlist_id。歌曲按来源去重，播放为独立快照；导入创建本地副本，不修改第三方歌单。remove需index和当前revision。"
     )]
     async fn manage_local_playlists(
         &self,
@@ -601,10 +545,11 @@ impl PlayerTools {
                 index: input.index.context("需要index").map_err(tool_error)?,
                 revision: input.revision.context("需要revision").map_err(tool_error)?,
             },
-            LibraryOperation::ImportNetease => Edit::ImportNetease {
-                id: input
-                    .netease_playlist_id
-                    .context("需要netease_playlist_id")
+            LibraryOperation::ImportSource => Edit::ImportSource {
+                source: input.source.context("需要source").map_err(tool_error)?,
+                playlist_id: input
+                    .source_playlist_id
+                    .context("需要source_playlist_id")
                     .map_err(tool_error)?,
             },
             LibraryOperation::AddCurrent | LibraryOperation::AddQueue => {
@@ -668,7 +613,7 @@ impl PlayerTools {
         {
             return Err(tool_error("无效的插件曲目"));
         }
-        let track = netease::Track {
+        let track = protocol::Track {
             id: input.id.parse().unwrap_or(0),
             title: input.name,
             artist: input.artist.unwrap_or_default(),
@@ -688,63 +633,6 @@ impl PlayerTools {
             Action::Play(media)
         })
         .await
-    }
-
-    #[tool(description = "按歌名或艺人搜索网易云单曲。返回曲目 ID。")]
-    async fn search_songs(
-        &self,
-        Parameters(input): Parameters<Search>,
-    ) -> Result<CallToolResult, ErrorData> {
-        let sources = self.services.sources;
-        let tracks =
-            blocking(move || sources.search(input.query, input.limit.unwrap_or(8))).await?;
-        output(tracks)
-    }
-
-    #[tool(description = "列出当前登录账号创建和收藏的歌单。支持 offset 和 limit。")]
-    async fn my_playlists(
-        &self,
-        Parameters(input): Parameters<Page>,
-    ) -> Result<CallToolResult, ErrorData> {
-        blocking(move || {
-            netease::my_playlists(input.offset.unwrap_or(0), input.limit.unwrap_or(30))
-        })
-        .await
-        .and_then(output)
-    }
-
-    #[tool(description = "按歌单 ID 读取曲目，按歌单原顺序分页返回。")]
-    async fn playlist_tracks(
-        &self,
-        Parameters(input): Parameters<PlaylistPage>,
-    ) -> Result<CallToolResult, ErrorData> {
-        blocking(move || {
-            netease::playlist_tracks(
-                input.id,
-                input.offset.unwrap_or(0),
-                input.limit.unwrap_or(30),
-            )
-        })
-        .await
-        .and_then(output)
-    }
-
-    #[tool(description = "立即播放指定网易云曲目。")]
-    async fn play_song(
-        &self,
-        Parameters(input): Parameters<Song>,
-    ) -> Result<CallToolResult, ErrorData> {
-        let media = blocking(move || netease::resolve(input.id)).await?;
-        self.player(Action::Play(media)).await
-    }
-
-    #[tool(description = "将指定网易云曲目加入队列。队列为空时立即播放。")]
-    async fn enqueue_song(
-        &self,
-        Parameters(input): Parameters<Song>,
-    ) -> Result<CallToolResult, ErrorData> {
-        let media = blocking(move || netease::resolve(input.id)).await?;
-        self.player(Action::Enqueue(media)).await
     }
 
     #[tool(description = "读取本机最近播放过的曲目，按时间倒序，最多 100 条。")]
@@ -815,5 +703,37 @@ impl ServerHandler for PlayerTools {
             .with_instructions(
                 "选歌和控制本机 MusicX 播放器。导入个人歌单前，请在音乐来源设置中关联账号。",
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PlayerTools;
+
+    #[test]
+    fn music_tools_require_an_explicit_plugin() {
+        let tools = PlayerTools::tool_router().list_all();
+        for name in ["plugin_search", "plugin_play"] {
+            let tool = tools.iter().find(|tool| tool.name == name).unwrap();
+            assert!(
+                tool.input_schema["required"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|field| field == "plugin")
+            );
+        }
+        for name in [
+            "search_songs",
+            "play_song",
+            "enqueue_song",
+            "my_playlists",
+            "playlist_tracks",
+        ] {
+            assert!(
+                !tools.iter().any(|tool| tool.name == name),
+                "implicit source tool: {name}"
+            );
+        }
     }
 }

@@ -25,7 +25,6 @@ pub enum Action {
         index: usize,
         context: crate::protocol::QueueContext,
     },
-    #[cfg(target_os = "macos")]
     PlayLocalPlaylist {
         id: String,
         index: usize,
@@ -37,8 +36,6 @@ pub enum Action {
     },
     #[cfg(target_os = "macos")]
     Quality(crate::protocol::Quality),
-    #[cfg_attr(target_os = "macos", allow(dead_code))] // Shared phone link action.
-    PlayId(u64),
 }
 pub type Reply = Option<oneshot::Sender<Result<Status>>>;
 fn read_token() -> Result<String> {
@@ -49,12 +46,10 @@ type Request = (Option<UiAction>, Reply);
 static REQUESTS: OnceLock<mpsc::Sender<Request>> = OnceLock::new();
 static CONNECTION: OnceLock<(Client, String)> = OnceLock::new();
 
-#[cfg(target_os = "macos")]
 pub fn mcp_endpoint() -> String {
     format!("http://{}/mcp", address())
 }
 
-#[cfg(target_os = "macos")]
 pub fn mcp_token() -> Option<&'static str> {
     CONNECTION.get().map(|(_, token)| token.as_str())
 }
@@ -107,7 +102,10 @@ fn request(client: &Client, token: &str, action: Option<&UiAction>) -> Result<St
     let request = match action {
         Some(action) => {
             let request = client.post(format!("{base}/ui/action")).json(action);
-            if matches!(action, UiAction::PlayPlaylist { .. }) {
+            if matches!(
+                action,
+                UiAction::PlayLocalPlaylist { .. } | UiAction::PlayList { .. }
+            ) {
                 request.timeout(Duration::from_secs(180))
             } else {
                 request
@@ -163,20 +161,17 @@ pub fn submit(action: Action, reply: Reply) {
             index,
             context,
         }),
-        #[cfg(target_os = "macos")]
         Action::PlayLocalPlaylist { id, index } => Some(UiAction::PlayLocalPlaylist { id, index }),
         #[cfg(target_os = "macos")]
         Action::PlayQueue { index, revision } => Some(UiAction::PlayQueue { index, revision }),
         #[cfg(target_os = "macos")]
         Action::Quality(quality) => Some(UiAction::Quality { quality }),
-        Action::PlayId(id) => Some(UiAction::Play { id }),
     };
     // Preparing an entire saved playlist must not delay pause/seek requests.
     if matches!(
         action,
         Some(
             UiAction::PlayList { .. }
-                | UiAction::PlayPlaylist { .. }
                 | UiAction::PlayLocalPlaylist { .. }
                 | UiAction::Quality { .. }
         )
@@ -193,37 +188,6 @@ pub fn submit(action: Action, reply: Reply) {
     } else {
         send(action, reply);
     }
-}
-
-/// Accept a numeric ID or a canonical NetEase song link, without fetching pasted URLs.
-#[cfg_attr(target_os = "macos", allow(dead_code))]
-pub fn song_id(input: &str) -> Result<u64> {
-    let input = input.trim();
-    let id = if input.chars().all(|c| c.is_ascii_digit()) {
-        input.parse::<u64>()?
-    } else {
-        let url = reqwest::Url::parse(input).context("请粘贴完整的网易云歌曲链接或歌曲 ID")?;
-        anyhow::ensure!(
-            url.scheme() == "https" && url.host_str() == Some("music.163.com"),
-            "目前支持 music.163.com 的完整歌曲链接"
-        );
-        let song = match url.fragment() {
-            Some(fragment) => reqwest::Url::parse(&format!(
-                "https://music.163.com/{}",
-                fragment.trim_start_matches('/')
-            ))?,
-            None => url,
-        };
-        anyhow::ensure!(
-            song.path().trim_end_matches('/') == "/song",
-            "请使用歌曲链接"
-        );
-        song.query_pairs()
-            .find_map(|(key, value)| (key == "id").then(|| value.parse::<u64>().ok()).flatten())
-            .context("链接缺少歌曲 ID")?
-    };
-    anyhow::ensure!(id > 0, "歌曲 ID 必须大于 0");
-    Ok(id)
 }
 
 #[cfg(target_os = "macos")]
@@ -286,31 +250,5 @@ pub fn cancel_source_login(job: String) {
             .bearer_auth(token.trim())
             .json(&crate::protocol::MusicSourceAction::Cancel { job })
             .send();
-    }
-}
-
-#[cfg(test)]
-mod link_tests {
-    use super::song_id;
-    #[test]
-    fn accepts_both_shared_link_forms_and_numeric_ids() {
-        for link in [
-            "29723011",
-            "https://music.163.com/#/song?id=29723011",
-            "https://music.163.com/song?id=29723011&userid=1",
-        ] {
-            assert_eq!(song_id(link).unwrap(), 29723011);
-        }
-    }
-    #[test]
-    fn rejects_other_resources_and_hosts() {
-        for link in [
-            "0",
-            "https://example.com/song?id=1",
-            "https://music.163.com/playlist?id=1",
-            "https://music.163.com/#/album?id=1",
-        ] {
-            assert!(song_id(link).is_err(), "{link}");
-        }
     }
 }

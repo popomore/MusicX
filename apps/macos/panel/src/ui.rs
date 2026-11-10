@@ -9,8 +9,6 @@ use crate::{
 };
 #[cfg(target_os = "ios")]
 use nsh_base::button;
-#[cfg(target_os = "ios")]
-use nsh_base::input;
 use nsh_base::theme;
 #[cfg(target_os = "ios")]
 use nsh_base::{SliderValue, slider};
@@ -111,7 +109,7 @@ fn header(model: Model) -> impl IntoElement {
                     Page::Info => "歌曲信息",
                     Page::History => "播放历史",
                     Page::Album => "专辑曲目",
-                    Page::Link => "打开歌曲",
+                    Page::Sources => "音乐来源",
                     Page::Library => "我的歌单",
                     Page::Player => model.status.with(|s| match s.state {
                         State::Playing => "正在播放",
@@ -128,7 +126,12 @@ fn header(model: Model) -> impl IntoElement {
             ),
         )
         .child(when(
-            move || !matches!(model.page.get(), Page::Player | Page::Link | Page::Library),
+            move || {
+                !matches!(
+                    model.page.get(),
+                    Page::Player | Page::Sources | Page::Library
+                )
+            },
             move || nav_action("刷新", move || model.open(model.page.get())),
         ))
         .child(when(
@@ -446,7 +449,7 @@ fn player(model: Model) -> impl IntoElement {
                     .flex_row()
                     .justify_center()
                     .child(action("我的歌单", move || model.open(Page::Library)))
-                    .child(action("打开歌曲链接", move || model.open(Page::Link)))
+                    .child(action("音乐来源", move || model.open(Page::Sources)))
             }))
             .child(
                 text(move || {
@@ -748,67 +751,6 @@ fn info(model: Model) -> impl IntoElement {
     )
 }
 
-fn library(model: Model) -> impl IntoElement {
-    #[cfg(target_os = "ios")]
-    {
-        crate::library::library_view(move |track| model.play(track))
-    }
-    #[cfg(target_os = "macos")]
-    {
-        crate::library::library_view(model)
-    }
-}
-
-#[cfg(target_os = "ios")]
-fn open_link(model: Model) -> impl IntoElement {
-    view()
-        .flex_1()
-        .pt(px(28.0))
-        .gap(px(18.0))
-        .child(
-            text("粘贴歌曲链接，即可在这台 iPhone 上播放。")
-                .text_size(px(16.0))
-                .text_color(move || theme().foreground),
-        )
-        .child(
-            input()
-                .value(move || model.link.get())
-                .placeholder("网易云歌曲链接或歌曲 ID")
-                .on_change(move |text: &str| model.link.set(text.to_owned()))
-                .h(px(48.0))
-                .px(px(12.0))
-                .rounded(px(8.0))
-                .bg(move || theme().muted)
-                .text_color(move || theme().foreground),
-        )
-        .child(
-            button()
-                .on_press(move || model.play_link())
-                .disabled(move || model.starting.get() || model.link.with(|v| v.trim().is_empty()))
-                .h(px(48.0))
-                .items_center()
-                .justify_center()
-                .rounded(px(8.0))
-                .bg(move || theme().primary)
-                .child(
-                    text(move || {
-                        if model.starting.get() {
-                            "正在打开…"
-                        } else {
-                            "播放"
-                        }
-                    })
-                    .text_size(px(16.0))
-                    .text_color(move || theme().primary_foreground),
-                ),
-        )
-        .child(
-            text("播放历史保存在这台 iPhone。")
-                .text_size(px(12.0))
-                .text_color(move || theme().muted_foreground),
-        )
-}
-
 #[component]
 /// Native playback screen with on-demand album, lyrics and local history.
 pub fn App() -> impl IntoElement {
@@ -868,12 +810,12 @@ pub fn App() -> impl IntoElement {
                     move || album(model),
                 ))
                 .child(when(
-                    move || model.page.get() == Page::Link,
-                    move || open_link(model),
+                    move || model.page.get() == Page::Sources,
+                    move || crate::sources_ui::settings_view(model),
                 ))
                 .child(when(
                     move || model.page.get() == Page::Library,
-                    move || library(model),
+                    move || crate::library::library_view(model),
                 ))
                 .child(when(
                     move || model.page.get() != Page::Player && model.is_loading(),

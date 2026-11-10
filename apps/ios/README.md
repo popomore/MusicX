@@ -38,6 +38,6 @@ cargo check --locked --target aarch64-apple-ios
 
 ## Local data and MCP
 
-The app stores account data, playlists, playback history, and its MCP token in the sandbox's `Library/Application Support/MusicX/`. On upgrade, the app moves the legacy directory into place if the new path is absent. Sign in on the phone to use personal playlists.
+The app stores account data, playlists, playback history, and its MCP token in the sandbox's `Library/Application Support/MusicX/`. On upgrade, the app moves the legacy directory into place if the new path is absent. Open **Music Sources** to add a plugin and use its supported sign-in and playlist import actions. **My Playlists** contains local snapshots. There is no default source or provider-specific link/ID playback.
 
 The Streamable HTTP endpoint listens on the phone's loopback interface at `http://127.0.0.1:45968/mcp`. It uses the device's own bearer token and playback session.

@@ -1,7 +1,7 @@
 use musicx_core::{protocol, storage};
 use musicx_mcp as mcp;
 use musicx_platform_apple::{desktop, player};
-use musicx_plugins::{MYGO, WEB_AUTH_APP_NAME, configure_web_auth, mygo, netease};
+use musicx_plugins::{MYGO, WEB_AUTH_APP_NAME, configure_web_auth, mygo};
 
 use anyhow::{Context, Result, bail};
 use std::{net::TcpListener, process::ExitCode};
@@ -40,7 +40,7 @@ fn run() -> Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
     if args.next().is_some() {
-        bail!("用法：mini-cloudmusic [start|login|logout|mcp-token|plugin-install <目录>]");
+        bail!("用法：mini-cloudmusic [start|mcp-token|plugin-install <目录>]");
     }
     match command.as_deref() {
         None | Some("start") => {
@@ -55,25 +55,14 @@ fn run() -> Result<ExitCode> {
             })?;
             return Ok(desktop::run(runtime));
         }
-        Some("login") => {
-            migrate_data_dir()?;
-            let runtime = desktop::prepare_runtime(WEB_AUTH_APP_NAME)?;
-            configure_web_auth(runtime.web_auth_executable)?;
-            netease::login()?;
-        }
-        Some("logout") => {
-            migrate_data_dir()?;
-            netease::logout()?;
-            println!("已清除本地网易云登录会话。");
-        }
         Some("mcp-token") => {
             migrate_data_dir()?;
             println!("{}", mcp::read_token()?);
         }
         Some("--help" | "-h") => {
-            println!("用法：mini-cloudmusic [start|login|logout|mcp-token|plugin-install <目录>]")
+            println!("用法：mini-cloudmusic [start|mcp-token|plugin-install <目录>]")
         }
-        _ => bail!("用法：mini-cloudmusic [start|login|logout|mcp-token|plugin-install <目录>]"),
+        _ => bail!("用法：mini-cloudmusic [start|mcp-token|plugin-install <目录>]"),
     }
     Ok(ExitCode::SUCCESS)
 }

@@ -420,7 +420,7 @@ pub(super) fn shell(model: Model) -> impl IntoElement {
                         ))
                         .child(when(
                             move || model.page.get() == Page::Library,
-                            move || super::library(model),
+                            move || crate::library::library_view(model),
                         ))
                         .child(when(
                             move || model.is_loading() || model.starting.get(),
@@ -1196,7 +1196,7 @@ pub(super) fn song_info(model: Model) -> impl IntoElement {
                             s.track.as_ref().map_or_else(String::new, |t| {
                                 t.source
                                     .as_ref()
-                                    .map_or_else(|| "netease".into(), |src| src.plugin.clone())
+                                    .map_or_else(String::new, |src| src.plugin.clone())
                             })
                         })
                     }))
@@ -1215,7 +1215,7 @@ pub(super) fn song_info(model: Model) -> impl IntoElement {
                                                     .track
                                                     .source
                                                     .as_ref()
-                                                    .map_or("netease", |src| src.plugin.as_str());
+                                                    .map_or("", |src| src.plugin.as_str());
                                                 crate::controls::source_name(source, &i.source_name)
                                             },
                                         )

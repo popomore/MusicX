@@ -12,7 +12,7 @@ pub fn artwork(
     const FALLBACK: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="4" fill="#e9e7e1"/><path d="M18 8v14a4 4 0 1 1-2-3.46V10l8-2v4z" fill="#939087"/></svg>"##;
     let source = computed(move || {
         url()
-            .and_then(|value| thumbnail_url(&value, (size * 2.0) as u32))
+            .and_then(|value| thumbnail_url(&value))
             .map_or_else(|| ImageSrc::svg_markup(FALLBACK), ImageSrc::from)
     });
     image(move || source.get())
@@ -24,21 +24,10 @@ pub fn artwork(
         .placeholder(ImageSrc::svg_markup(FALLBACK))
         .label(move || SharedString::from(label()))
 }
-fn thumbnail_url(value: &str, pixels: u32) -> Option<String> {
-    let mut url = reqwest::Url::parse(value).ok()?;
+fn thumbnail_url(value: &str) -> Option<String> {
+    let url = reqwest::Url::parse(value).ok()?;
     if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some() {
         return None;
-    }
-    if url.domain().is_some_and(|host| host.ends_with(".126.net")) {
-        let pairs: Vec<_> = url
-            .query_pairs()
-            .filter(|(k, _)| k != "param")
-            .map(|(k, v)| (k.into_owned(), v.into_owned()))
-            .collect();
-        url.query_pairs_mut()
-            .clear()
-            .extend_pairs(pairs)
-            .append_pair("param", &format!("{pixels}y{pixels}"));
     }
     Some(url.to_string())
 }
@@ -107,17 +96,14 @@ pub fn primary(
         )
 }
 pub fn source_name(id: &str, fallback: &str) -> String {
-    match id.strip_prefix("mygo:").unwrap_or(id) {
-        "netease" => "网易云音乐",
-        "bodian" => "波点音乐",
-        "kugou-lite" => "酷狗概念版",
-        _ => fallback,
+    if fallback.trim().is_empty() {
+        id.strip_prefix("mygo:").unwrap_or(id).to_owned()
+    } else {
+        fallback.to_owned()
     }
-    .to_owned()
 }
 
 pub fn source_badge(id: impl Fn() -> String + 'static) -> impl IntoElement {
-    use nsh_core::element::ImageSrc;
     view()
         .w(px(28.0))
         .min_w(px(28.0))
@@ -127,17 +113,17 @@ pub fn source_badge(id: impl Fn() -> String + 'static) -> impl IntoElement {
         .items_center()
         .justify_center()
         .child(
-            svg(move || {
+            text(move || {
                 let id = id();
-                ImageSrc::svg_markup(match id.strip_prefix("mygo:").unwrap_or(&id) {
-                    "netease" => r##"<svg viewBox="0 0 24 24"><path d="M12 4a8 8 0 1 0 8 8m-1-5-5 2v5a2 2 0 1 1-2-2" fill="none" stroke="#b43b48" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>"##,
-                    "bodian" => r##"<svg viewBox="0 0 24 24"><path d="M4 11v3m4-6v9m4-13v17m4-13v9m4-6v3" fill="none" stroke="#876327" stroke-width="2" stroke-linecap="round"/></svg>"##,
-                    "kugou" | "kugou-lite" => r##"<svg viewBox="0 0 24 24"><path d="M5 14v-2a7 7 0 0 1 14 0v2M5 13h2a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H6a2 2 0 0 1-2-2v-2a2 2 0 0 1 1-2Zm14 0h-2a1 1 0 0 0-1 1v4a1 1 0 0 0 1 1h1a2 2 0 0 0 2-2v-2a2 2 0 0 0-1-2Z" fill="none" stroke="#336e91" stroke-width="1.8" stroke-linecap="round"/></svg>"##,
-                    _ => r#"<svg viewBox="0 0 24 24"><path d="M11 16V6l7-2v10m-7 2a2.5 2.5 0 1 1-2.5-2.5H11m7 .5a2.5 2.5 0 1 1-2.5-2.5H18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>"#,
-                })
+                id.strip_prefix("mygo:")
+                    .unwrap_or(&id)
+                    .chars()
+                    .next()
+                    .map(|letter| letter.to_uppercase().to_string())
+                    .unwrap_or_else(|| "♪".into())
             })
-            .w(px(16.0))
-            .h(px(16.0))
+            .text_size(px(12.0))
+            .font_weight(FontWeight::SEMIBOLD)
             .text_color(move || theme().muted_foreground),
         )
 }
