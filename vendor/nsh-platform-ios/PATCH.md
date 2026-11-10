@@ -9,4 +9,5 @@ An opt-in `set_image_transport` bridge routes native UIKit remote image download
 through the core loader and the application's transport, including disk misses.
 This allows MusicX's helper to fetch authenticated artwork. The returned core
 tickets preserve cancellation and progress; callers that do not install an
-override retain NSURLSession behavior. Authenticated image responses use no-store.
+override retain NSURLSession behavior. Artwork fetched by MusicX's helper uses
+no-store.
