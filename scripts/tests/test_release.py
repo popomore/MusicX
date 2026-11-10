@@ -13,6 +13,7 @@ SCRIPTS = Path(__file__).resolve().parents[1]
 
 class ReleaseTests(unittest.TestCase):
     def setUp(self):
+        """Prepare an isolated commit, installer, and fake GitHub service."""
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
@@ -58,6 +59,7 @@ class ReleaseTests(unittest.TestCase):
         return json.loads(self.state_path.read_text())
 
     def run_script(self, name, *args, success=True):
+        """Run the actual script while confining GitHub calls to the fixture."""
         result = subprocess.run(["bash", str(SCRIPTS / name), *map(str, args)],
                                 cwd=self.root, env=self.env, text=True, capture_output=True)
         if success:
@@ -100,6 +102,7 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(self.state()["refs"][self.tag], self.sha)
 
     def test_release_type_depends_on_tag_and_signing(self):
+        """Check release metadata across stable and preview signing combinations."""
         cases = [
             (self.tag, "ad-hoc", True),
             (self.tag, "developer-id", True),

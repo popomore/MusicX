@@ -15,14 +15,17 @@ state["calls"].append(args)
 
 
 def flag(name, default=None):
+    """Read an option value from the simulated gh invocation."""
     return args[args.index(name) + 1] if name in args else default
 
 
 def field(name):
+    """Read a key=value payload field from the simulated gh invocation."""
     return next(value.split("=", 1)[1] for value in args if value.startswith(name + "="))
 
 
 def execute():
+    """Apply one supported GitHub operation to the local fixture state."""
     if args[0] == "api":
         endpoint = next(value for value in args if value.startswith("repos/"))
         prefix = "repos/test/musicx/"
