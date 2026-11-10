@@ -6,16 +6,25 @@ Building from source requires macOS 14 or later, Rust 1.97 or later, and the Xco
 
 From the repository root, run `./run`. The launcher builds the helper, NSH panel, and web sign-in component separately so each process uses its own Cargo dependency features. It prepares signed app bundles under `~/Library/Application Support/MusicX/runtime/` and starts the helper.
 
-Set `CARGO_TARGET_DIR` to store build artifacts elsewhere. To try a change in a separate session, use an empty state directory and an unused port.
+Set `CARGO_TARGET_DIR` to store build artifacts elsewhere. For native testing alongside an installed copy, build with a separate application identity, an empty state directory, and an unused loopback address.
 
 ```sh
-test_data=$(mktemp -d)
-MUSICX_DATA_DIR="$test_data" MUSICX_PORT=45969 ./run
+qa_root=$(mktemp -d)
+export CARGO_TARGET_DIR="$qa_root/build"
+export MUSICX_BUILD_APP_NAME="MusicX QA"
+export MUSICX_BUILD_APP_ID="local.musicx.qa"
+export MUSICX_BUILD_ADDRESS="127.0.0.1:45969"
+export MUSICX_DATA_DIR="$qa_root/data"
+./run
 ```
 
-Use the same data directory and port when connecting to the test session. To read its token, pass `MUSICX_DATA_DIR` to the `mcp-token` command. The test session starts with no plugins; add test sources explicitly.
+Use unique application names and IDs for concurrent test builds. These three `MUSICX_BUILD_*` settings are compiled into the executables: they scope the playback, panel, and web sign-in bundle IDs, the panel's NSH cache identity, the reopen notification, the default data directory, and the listener. Packaged test apps retain their identity when opened from Finder. The visible player's bundle filename matches its application name, including inside the packaged app.
 
-The environment variables are `MUSICX_DATA_DIR`, `MUSICX_PORT`, and `MUSICX_WEB_AUTH`. Only these current names are supported; previous names are ignored, and previous data directories are not migrated.
+The test helper and UI use the same compiled address and state root, forming their own backend/UI pair alongside the installed app. UI storage and image caches stay under that instance's data directory.
+
+Use the same build settings and data directory when connecting to the test session or running `./run mcp-token`. The test session starts with no plugins; add test sources explicitly.
+
+Runtime overrides are `MUSICX_DATA_DIR`, `MUSICX_PORT`, and `MUSICX_WEB_AUTH`. Only these current names are supported; previous names are ignored, and previous data directories are not migrated. Production builds leave `MUSICX_BUILD_*` unset and use the MusicX name, `local.musicx` IDs, and the default listener.
 
 ## Package the macOS app
 

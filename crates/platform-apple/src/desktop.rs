@@ -20,11 +20,10 @@ use crate::{
     player::{self, State},
     system_media::SystemMedia,
 };
+pub use musicx_core::protocol::APP_NAME;
+use musicx_core::protocol::component_app_id;
 
-const APP_NAME: &str = "MusicX";
-const BACKGROUND_NAME: &str = "MusicX Helper";
-const APP_BUNDLE_VERSION: &str = "6";
-const PANEL_APP: &str = "Panel.app";
+const APP_BUNDLE_VERSION: &str = "7";
 const WEB_AUTH_APP: &str = "WebAuth.app";
 const PANEL_BIN: &str = "musicx-panel";
 const WEB_AUTH_BIN: &str = "musicx-webauth";
@@ -192,18 +191,26 @@ fn build_component(executable: &Path, name: &str) -> anyhow::Result<PathBuf> {
 }
 
 pub fn package_app(bundle: &Path, web_auth_name: &str) -> anyhow::Result<()> {
-    anyhow::ensure!(!bundle.exists(), "目标应用包已存在：{}", bundle.display());
     let executable = std::env::current_exe()?;
-    let panel = build_component(&executable, PANEL_BIN)?;
-    let webauth = build_component(&executable, WEB_AUTH_BIN)?;
-    let helpers = bundle.join("Contents/Helpers");
     let signing = std::env::var_os("MUSICX_CODESIGN_IDENTITY").filter(|id| !id.is_empty());
-    let signing = signing.as_deref();
+    package_app_from_executable(&executable, bundle, web_auth_name, signing.as_deref())
+}
+
+fn package_app_from_executable(
+    executable: &Path,
+    bundle: &Path,
+    web_auth_name: &str,
+    signing: Option<&OsStr>,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(!bundle.exists(), "目标应用包已存在：{}", bundle.display());
+    let panel = build_component(executable, PANEL_BIN)?;
+    let webauth = build_component(executable, WEB_AUTH_BIN)?;
+    let helpers = bundle.join("Contents/Helpers");
     package(
         &panel,
-        &helpers.join(PANEL_APP),
+        &helpers.join(format!("{APP_NAME}.app")),
         APP_NAME,
-        "local.musicx.panel",
+        &component_app_id("panel"),
         PANEL_BIN,
         false,
         signing,
@@ -212,16 +219,16 @@ pub fn package_app(bundle: &Path, web_auth_name: &str) -> anyhow::Result<()> {
         &webauth,
         &helpers.join(WEB_AUTH_APP),
         web_auth_name,
-        "local.musicx.webauth",
+        &component_app_id("webauth"),
         WEB_AUTH_BIN,
         true,
         signing,
     )?;
     package(
-        &executable,
+        executable,
         bundle,
-        BACKGROUND_NAME,
-        "local.musicx.playback",
+        &format!("{APP_NAME} Helper"),
+        &component_app_id("playback"),
         "musicx",
         true,
         signing,
@@ -236,7 +243,7 @@ pub fn prepare_runtime(web_auth_name: &str) -> anyhow::Result<DesktopRuntime> {
     {
         let helpers = contents.join("Helpers");
         if helpers.is_dir() {
-            let panel_bundle = helpers.join(PANEL_APP);
+            let panel_bundle = helpers.join(format!("{APP_NAME}.app"));
             let web_auth_executable = app_executable(&helpers.join(WEB_AUTH_APP), WEB_AUTH_BIN);
             anyhow::ensure!(
                 app_executable(&panel_bundle, PANEL_BIN).is_file() && web_auth_executable.is_file(),
@@ -280,7 +287,7 @@ pub fn prepare_runtime(web_auth_name: &str) -> anyhow::Result<DesktopRuntime> {
             &webauth,
             &web_auth_bundle,
             web_auth_name,
-            "local.musicx.webauth",
+            &component_app_id("webauth"),
             WEB_AUTH_BIN,
             true,
             None,
@@ -291,7 +298,7 @@ pub fn prepare_runtime(web_auth_name: &str) -> anyhow::Result<DesktopRuntime> {
             &panel,
             &panel_bundle,
             APP_NAME,
-            "local.musicx.panel",
+            &component_app_id("panel"),
             PANEL_BIN,
             false,
             None,
@@ -299,8 +306,8 @@ pub fn prepare_runtime(web_auth_name: &str) -> anyhow::Result<DesktopRuntime> {
         package(
             &executable,
             &core_bundle,
-            BACKGROUND_NAME,
-            "local.musicx.playback",
+            &format!("{APP_NAME} Helper"),
+            &component_app_id("playback"),
             "musicx",
             true,
             None,
@@ -397,7 +404,7 @@ pub fn reveal_panel(process_id: u32) {
     unsafe {
         NSDistributedNotificationCenter::defaultCenter()
             .postNotificationName_object_userInfo_deliverImmediately(
-                &NSString::from_str(musicx_core::protocol::PANEL_REOPEN_NOTIFICATION),
+                &NSString::from_str(&musicx_core::protocol::panel_reopen_notification()),
                 Some(&NSString::from_str(&process_id.to_string())),
                 None,
                 true,
@@ -420,7 +427,9 @@ fn show_panel() {
         let panel_executable = app_executable(&bundle, PANEL_BIN);
         anyhow::ensure!(panel_executable.is_file(), "缺少 MusicX 播放面板");
         NSApplication::sharedApplication(MainThreadMarker::new().expect("main thread"))
-            .yieldActivationToApplicationWithBundleIdentifier(ns_string!("local.musicx.panel"));
+            .yieldActivationToApplicationWithBundleIdentifier(&NSString::from_str(
+                &component_app_id("panel"),
+            ));
         let child = std::process::Command::new(panel_executable)
             .current_dir(&desktop.working_dir)
             .arg("panel")
@@ -525,4 +534,72 @@ fn stop_application() {
             NSEventType::ApplicationDefined, NSPoint::new(0.0, 0.0), NSEventModifierFlags::empty(), 0.0, 0, None, 0, 0, 0) {
             app.postEvent_atStart(&event, true);
         }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{fs, process::Command, time::SystemTime};
+
+    #[test]
+    fn packaged_player_name_and_component_identities() -> anyhow::Result<()> {
+        let nonce = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)?
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("musicx-package-{}-{nonce}", std::process::id()));
+        let build = root.join("build");
+        fs::create_dir_all(&build)?;
+        for binary in ["musicx", PANEL_BIN, WEB_AUTH_BIN] {
+            fs::copy("/usr/bin/true", build.join(binary))?;
+        }
+        let bundle = root.join(format!("{APP_NAME}.app"));
+        let web_auth_name = format!("{APP_NAME} 网页登录");
+        package_app_from_executable(&build.join("musicx"), &bundle, &web_auth_name, None)?;
+
+        // The Dock can use the bundle filename; the visible child must carry
+        // the product name even when its Info.plist already has the right name.
+        let panel = bundle
+            .join("Contents/Helpers")
+            .join(format!("{APP_NAME}.app"));
+        assert!(
+            panel.is_dir(),
+            "visible player is still packaged as Panel.app"
+        );
+        assert!(!bundle.join("Contents/Helpers/Panel.app").exists());
+
+        for (path, component, name) in [
+            (bundle.clone(), "playback", format!("{APP_NAME} Helper")),
+            (panel, "panel", APP_NAME.to_owned()),
+            (
+                bundle.join("Contents/Helpers").join(WEB_AUTH_APP),
+                "webauth",
+                web_auth_name,
+            ),
+        ] {
+            for (key, expected) in [
+                ("CFBundleIdentifier", component_app_id(component)),
+                ("CFBundleName", name.clone()),
+                ("CFBundleDisplayName", name.clone()),
+            ] {
+                let result = Command::new("/usr/bin/plutil")
+                    .args(["-extract", key, "raw", "-o", "-"])
+                    .arg(path.join("Contents/Info.plist"))
+                    .output()?;
+                assert!(result.status.success());
+                assert_eq!(String::from_utf8(result.stdout)?.trim(), expected);
+            }
+        }
+        let verify = Command::new("/usr/bin/codesign")
+            .args(["--verify", "--deep", "--strict"])
+            .arg(&bundle)
+            .output()?;
+        assert!(
+            verify.status.success(),
+            "{}",
+            String::from_utf8_lossy(&verify.stderr)
+        );
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
 }
