@@ -28,12 +28,15 @@ fn source(action: &Action) -> String {
     }
 }
 impl Browser {
-    fn load(self, action: Action, append: bool) {
+    fn load(self, mut action: Action, append: bool) {
         if self.busy.get() {
             return;
         }
         self.busy.set(true);
         self.error.set(String::new());
+        if !append && let Action::Show { offset, .. } = &mut action {
+            *offset = 0;
+        }
         self.action.set(action.clone());
         if !append {
             self.page.set(SourcePage::default());

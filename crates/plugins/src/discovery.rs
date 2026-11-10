@@ -35,10 +35,19 @@ pub fn import(source: &str, liked: bool) -> Result<Value> {
     let export = if liked { "liked" } else { "recent" };
     let mut all = Vec::new();
     let mut seen = HashSet::new();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
     // Fetch the complete snapshot before touching the local library. A broken
     // pagination contract must not silently save the first page as complete.
     loop {
+        ensure!(
+            std::time::Instant::now() < deadline,
+            "来源导入超时，未保存不完整副本"
+        );
         let value = mygo::invoke(plugin, export, json!({"offset":all.len()}))?;
+        ensure!(
+            std::time::Instant::now() < deadline,
+            "来源导入超时，未保存不完整副本"
+        );
         let rows = if liked {
             value["tracks"].as_array()
         } else {

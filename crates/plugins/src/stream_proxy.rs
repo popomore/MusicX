@@ -157,7 +157,7 @@ fn serve(mut socket: TcpStream, streams: &Mutex<BTreeMap<String, Stream>>) -> Re
                     .to_str()?,
             )?;
             ensure!(
-                musicx_core::metadata::public_url(next.as_str()).is_some(),
+                crate::assets::valid_redirect_target(&next),
                 "音频跳转地址不支持"
             );
             if next.host_str() != stream.url.host_str() {

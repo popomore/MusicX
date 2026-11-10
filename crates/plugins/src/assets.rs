@@ -6,6 +6,10 @@ use reqwest::{Url, blocking::Client, redirect::Policy};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, fs, io::Read, time::Duration};
 
+pub(crate) fn valid_redirect_target(url: &Url) -> bool {
+    url.scheme() == "https" && metadata::public_url(url.as_str()).is_some()
+}
+
 fn replacement(value: &str, settings: &Value, stored: &Value) -> Option<String> {
     let mut out = value.to_owned();
     for (prefix, values) in [("setting", settings), ("storage", stored)] {
@@ -33,7 +37,16 @@ pub fn headers(plugin: &str, url: &Url, kind: &str) -> Result<BTreeMap<String, S
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or(json!({}))
     };
-    let settings = read(mygo::plugin_root()?.join(plugin).join("settings.json"));
+    let mut settings = read(mygo::plugin_root()?.join(plugin).join("settings.json"));
+    for field in &m.settings {
+        if let Some(value) = &field.value {
+            settings
+                .as_object_mut()
+                .context("来源设置格式无效")?
+                .entry(&field.key)
+                .or_insert(json!(value));
+        }
+    }
     let stored = read(storage::state_dir()?.join(format!("mygo-{plugin}-storage.json")));
     let mut result = BTreeMap::new();
     for rule in m
@@ -122,7 +135,7 @@ pub fn image(plugin: &str, value: &str) -> Result<Vec<u8>> {
         .redirect(Policy::custom(move |r| {
             if r.previous().len() < 4
                 && r.url().host_str() == Some(&host)
-                && metadata::public_url(r.url().as_str()).is_some()
+                && valid_redirect_target(r.url())
             {
                 r.follow()
             } else {
@@ -143,4 +156,21 @@ pub fn image(plugin: &str, value: &str) -> Result<Vec<u8>> {
     response.take(4 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
     ensure!(bytes.len() <= 4 * 1024 * 1024, "封面超过4MiB");
     Ok(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn private_requests_reject_https_downgrades() {
+        assert!(!valid_redirect_target(
+            &"http://example.com/audio".parse().unwrap()
+        ));
+        assert!(!valid_redirect_target(
+            &"https://example.com:8443/audio".parse().unwrap()
+        ));
+        assert!(valid_redirect_target(
+            &"https://example.com/audio".parse().unwrap()
+        ));
+    }
 }

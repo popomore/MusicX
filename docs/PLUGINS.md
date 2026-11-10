@@ -20,7 +20,7 @@ Capabilities come from the installed script's exports. A service may require an 
 | `recent` | Imports the provider's returned recent tracks as a new local playlist. |
 | `shows`, `show` | Lists podcasts and paginated episodes. Episodes play through the normal queue, retain show ID, description and publication date, and participate in local history/session restore. |
 
-MusicX's heart and local playlist editor remain local. Importing likes does not enable cloud liking, and importing provider history does not create synthetic local playback events or upload local history. A recent-track import is a playlist, without provider play timestamps. Repeated imports create independent snapshots. Imports deduplicate source track identities while preserving order; failures and incomplete pagination do not save a partial playlist. The import limit is 10,000 tracks.
+MusicX's heart and local playlist editor remain local. Importing likes does not enable cloud liking, and importing provider history does not create synthetic local playback events or upload local history. A recent-track import is a playlist, without provider play timestamps. Repeated imports create independent snapshots. Imports deduplicate source track identities while preserving order; failures and incomplete pagination do not save a partial playlist. The import limit is 10,000 tracks, with a two-minute budget checked between bounded source calls.
 
 Selecting a track on an artist, source album, or podcast page plays a snapshot of that page's **loaded** tracks in order. Loading another podcast page does not mutate the active queue; select a track again to play the enlarged snapshot.
 

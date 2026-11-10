@@ -50,8 +50,8 @@ fn public_exports_child() {
         "id":"fixture-source", "name":"Public contract fixture", "version":"9.9.9", "main":"index.js", "playback":"stream",
         "repository":"https://github.com/example/fixture-source"
         ,"permissions":{"network":["*.example.com"]}
-        ,"settings":[{"key":"oauthPort","label":"OAuth port"}]
-        ,"requestHeaders":[{"hosts":["private.example.com"],"kinds":["image","audio"],"headers":{"authorization":"Bearer {storage:apiToken}"}}]
+        ,"settings":[{"key":"oauthPort","label":"OAuth port"},{"key":"defaultHost","label":"Default host","value":"https://private.example.com"},{"key":"headerValue","label":"Header value","value":"default-fixture"}]
+        ,"requestHeaders":[{"hosts":["{setting:defaultHost}"],"kinds":["image","audio"],"headers":{"authorization":"Bearer {storage:apiToken}","x-default":"{setting:headerValue}"}}]
     })).unwrap()).unwrap();
     fs::create_dir(fixture.join("locales")).unwrap();
     fs::write(
@@ -234,6 +234,21 @@ export function account() {
     )
     .unwrap();
     assert_eq!(headers["authorization"], "Bearer fixture-private");
+    assert_eq!(headers["x-default"], "default-fixture");
+    music_sources::configure(
+        "mygo:fixture-source",
+        std::collections::BTreeMap::from([("headerValue".into(), "saved-override".into())]),
+    )
+    .unwrap();
+    assert_eq!(
+        musicx_plugins::assets::headers(
+            "fixture-source",
+            &"https://private.example.com/image".parse().unwrap(),
+            "image"
+        )
+        .unwrap()["x-default"],
+        "saved-override"
+    );
     assert!(
         musicx_plugins::assets::headers(
             "fixture-source",
