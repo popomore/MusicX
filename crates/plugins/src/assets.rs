@@ -110,16 +110,7 @@ pub fn headers(plugin: &str, url: &Url, kind: &str) -> Result<BTreeMap<String, S
 
 pub(crate) fn artwork(plugin: &str, value: &str) -> Option<String> {
     let mut url = Url::parse(&metadata::artwork_url(value)?).ok()?;
-    if mygo::plugin_root()
-        .ok()
-        .and_then(|root| mygo::manifest(&root.join(plugin)).ok())
-        .is_some_and(|m| {
-            m.metadata
-                .get("requestHeaders")
-                .and_then(Value::as_array)
-                .is_some_and(|rules| !rules.is_empty())
-        })
-    {
+    if headers(plugin, &url, "image").is_ok_and(|headers| !headers.is_empty()) {
         url.set_fragment(Some(&format!("musicx-plugin={plugin}")));
     }
     Some(url.into())

@@ -27,6 +27,21 @@ fn source(action: &Action) -> String {
         _ => String::new(),
     }
 }
+fn append_page(old: &mut SourcePage, mut page: SourcePage) -> Result<(), &'static str> {
+    let mut seen: std::collections::HashSet<_> =
+        old.tracks.iter().map(crate::protocol::track_key).collect();
+    page.tracks
+        .retain(|track| seen.insert(crate::protocol::track_key(track)));
+    if old.tracks.len() + page.tracks.len() > crate::protocol::MAX_QUEUE_TRACKS
+        || (page.more && (page.tracks.is_empty() || page.next_offset <= old.next_offset))
+    {
+        return Err("来源分页没有前进，或曲目超过10000首");
+    }
+    old.tracks.extend(page.tracks);
+    old.more = page.more;
+    old.next_offset = old.next_offset.max(page.next_offset);
+    Ok(())
+}
 impl Browser {
     fn load(self, mut action: Action, append: bool) {
         if self.busy.get() {
@@ -55,27 +70,13 @@ impl Browser {
                 match result {
                     Ok(Ok(page)) => {
                         if append {
-                            let mut seen: std::collections::HashSet<_> = self.page.with(|old| {
-                                old.tracks.iter().map(crate::protocol::track_key).collect()
-                            });
-                            let mut page = page;
-                            page.tracks
-                                .retain(|track| seen.insert(crate::protocol::track_key(track)));
-                            let valid = self.page.with(|old| {
-                                !page.tracks.is_empty()
-                                    && old.tracks.len() + page.tracks.len()
-                                        <= crate::protocol::MAX_QUEUE_TRACKS
-                                    && page.next_offset > old.next_offset
-                            });
-                            if !valid {
-                                self.error.set("来源分页没有前进，或曲目超过10000首".into());
-                                return;
-                            }
+                            let mut error = None;
                             self.page.update(|old| {
-                                old.tracks.extend(page.tracks);
-                                old.more = page.more;
-                                old.next_offset = page.next_offset;
+                                error = append_page(old, page).err();
                             });
+                            if let Some(error) = error {
+                                self.error.set(error.into());
+                            }
                         } else {
                             self.page.set(page);
                         }
@@ -359,4 +360,35 @@ pub fn browse(model: Model) -> impl IntoElement {
                 )
             },
         ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_terminal_page_finishes_podcast_pagination() {
+        let track = serde_json::from_value(serde_json::json!({
+            "id":1,"title":"Episode","artist":"Podcast","duration":60.0
+        }))
+        .unwrap();
+        let mut old = SourcePage {
+            tracks: vec![track],
+            more: true,
+            next_offset: 1,
+            ..Default::default()
+        };
+        let mut terminal = SourcePage {
+            next_offset: 1,
+            ..Default::default()
+        };
+        terminal.more = true;
+        assert!(append_page(&mut old, terminal.clone()).is_err());
+        assert!(old.more);
+        terminal.more = false;
+        append_page(&mut old, terminal).unwrap();
+        assert!(!old.more);
+        assert_eq!(old.tracks.len(), 1);
+        assert_eq!(old.next_offset, 1);
+    }
 }

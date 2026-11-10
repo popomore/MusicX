@@ -113,6 +113,7 @@ fn track(id: u64) -> Track {
 }
 fn media(track: Track) -> Media {
     Media {
+        lease: None,
         track,
         url: "https://example.invalid/expiring-audio?secret=not-persisted"
             .parse()
@@ -180,6 +181,11 @@ fn run_scenario(phases: &[&str]) {
         run_worker(&directory, phase);
     }
     std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn loaded_media_resources_live_until_replacement_or_shutdown() {
+    run_scenario(&["media_lease"]);
 }
 
 #[test]
@@ -350,6 +356,46 @@ fn session_worker() {
     let mut player = Player::<Audio>::new(dispatch, &SOURCE);
     let action = |player: &mut Player<Audio>, action| player.handle(Message::Action(action, None));
     match phase.as_str() {
+        "media_lease" => {
+            let lease = Arc::new(());
+            let weak = Arc::downgrade(&lease);
+            let mut current = media(track(1));
+            current.lease = Some(lease);
+            command(&mut player, Action::Play(current)).unwrap();
+            assert!(
+                weak.upgrade().is_some(),
+                "loaded URL resources must survive resolution"
+            );
+            let queued = Arc::new(());
+            let queued_weak = Arc::downgrade(&queued);
+            let mut pending = media(track(2));
+            pending.lease = Some(queued);
+            command(&mut player, Action::Enqueue(pending)).unwrap();
+            assert!(
+                queued_weak.upgrade().is_none(),
+                "unused enqueue resources must be released"
+            );
+            assert!(weak.upgrade().is_some());
+            FAIL_LOAD.store(true, Ordering::Relaxed);
+            assert!(command(&mut player, Action::Play(media(track(3)))).is_err());
+            FAIL_LOAD.store(false, Ordering::Relaxed);
+            assert!(
+                weak.upgrade().is_some(),
+                "failed replacement must keep the current lease"
+            );
+            command(&mut player, Action::Play(media(track(3)))).unwrap();
+            assert!(weak.upgrade().is_none());
+            let lease = Arc::new(());
+            let weak = Arc::downgrade(&lease);
+            let mut current = media(track(4));
+            current.lease = Some(lease);
+            command(&mut player, Action::Play(current)).unwrap();
+            player.shutdown();
+            assert!(
+                weak.upgrade().is_none(),
+                "shutdown must release the loaded URL resources"
+            );
+        }
         "save" => {
             action(
                 &mut player,

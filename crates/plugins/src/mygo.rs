@@ -1045,12 +1045,16 @@ pub fn resolve_with_quality(mut track: Track, quality: crate::protocol::Quality)
         }
     }
     let mut user_agent = request_headers.get("user-agent").cloned();
+    let mut lease = None;
     if request_headers.keys().any(|k| k != "user-agent") {
-        url = crate::stream_proxy::register(url, request_headers)?;
+        let registration = crate::stream_proxy::register(url, request_headers)?;
+        url = registration.0;
+        lease = Some(registration.1 as std::sync::Arc<dyn Send + Sync>);
         user_agent = None;
     }
     fill_artwork(&mut track);
     Ok(Media {
+        lease,
         track,
         url,
         user_agent,

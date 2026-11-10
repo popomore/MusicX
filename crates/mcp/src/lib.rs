@@ -791,6 +791,7 @@ mod tests {
             self.seen.lock().unwrap().push(track.clone());
             anyhow::ensure!(!self.fail, "fixture source unavailable");
             Ok(Media {
+                lease: None,
                 gain_db: None,
                 peak: None,
                 track,

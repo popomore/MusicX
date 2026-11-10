@@ -61,10 +61,10 @@ fn public_exports_child() {
     )
     .unwrap();
     fs::write(fixture.join("index.js"), r#"
-export function search({kind='tracks'}={}) {
+export function search({kind='tracks',query}={}) {
   if(kind!=='tracks') return {[kind]:[{id:kind+':one',name:'Fixture '+kind}],more:false};
   return {tracks:[{id:'track:123',name:'公开接口曲名',artists:[{id:'artist:one',name:'歌手'}],duration:60000,
-    album:{id:'album',name:'专辑',imageUrl:'https://example.com/cover.jpg'}}],total:1,hasMore:false};
+    album:{id:'album',name:'专辑',imageUrl:query==='private-cover'?'https://private.example.com/cover.jpg':'https://example.com/cover.jpg'}}],total:1,hasMore:false};
 }
 export function stream({id,quality}) {
   host.storage.set('stream',{id,quality});
@@ -117,7 +117,7 @@ export function account() {
     assert_eq!(track.duration, 60.0);
     assert_eq!(
         track.cover_url.as_deref(),
-        Some("https://example.com/cover.jpg#musicx-plugin=fixture-source")
+        Some("https://example.com/cover.jpg")
     );
     assert_eq!(track.source.as_ref().unwrap().id, "track:123");
     assert_eq!(track.artists[0].id, "artist:one");
@@ -236,6 +236,11 @@ export function account() {
     .unwrap();
     assert_eq!(headers["authorization"], "Bearer fixture-private");
     assert_eq!(headers["x-default"], "default-fixture");
+    let private_cover = mygo::search("fixture-source", "private-cover", 0).unwrap();
+    assert_eq!(
+        private_cover["tracks"][0]["cover_url"],
+        "https://private.example.com/cover.jpg#musicx-plugin=fixture-source"
+    );
     music_sources::configure(
         "mygo:fixture-source",
         std::collections::BTreeMap::from([("headerValue".into(), "saved-override".into())]),
@@ -429,5 +434,19 @@ export function account() {
             .unwrap()
             .name,
         "fixture-defaults"
+    );
+
+    let audio_only = root.join("audio-only");
+    fs::create_dir(&audio_only).unwrap();
+    fs::write(audio_only.join("plugin.json"), serde_json::to_vec(&json!({
+        "id":"fixture-audio-only","permissions":{"network":["example.com"]},
+        "requestHeaders":[{"hosts":["example.com"],"kinds":["audio"],"headers":{"x-token":"fixture"}}]
+    })).unwrap()).unwrap();
+    fs::write(audio_only.join("index.js"), "export function search() { return {tracks:[{id:'one',name:'Public cover',album:{imageUrl:'https://example.com/cover.jpg'}}]}; }").unwrap();
+    mygo::install(&audio_only).unwrap();
+    let result = mygo::search("fixture-audio-only", "fixture", 0).unwrap();
+    assert_eq!(
+        result["tracks"][0]["cover_url"],
+        "https://example.com/cover.jpg"
     );
 }

@@ -90,6 +90,7 @@ pub enum Message {
 
 pub struct Player<A: AudioOutput> {
     audio: Option<A>,
+    audio_lease: Option<Arc<dyn Send + Sync>>,
     dispatch: fn(Message),
     source: &'static dyn DataSource,
     volume: f32,
@@ -117,6 +118,7 @@ impl<A: AudioOutput> Player<A> {
     pub fn new(dispatch: fn(Message), source: &'static dyn DataSource) -> Self {
         let mut player = Self {
             audio: None,
+            audio_lease: None,
             volume: 1.0,
             dispatch,
             source,
@@ -179,6 +181,7 @@ impl<A: AudioOutput> Player<A> {
         self.flush_history();
         self.save_session(true);
         self.audio.take();
+        self.audio_lease.take();
     }
 
     pub fn status(&self) -> Status {
@@ -271,6 +274,7 @@ impl<A: AudioOutput> Player<A> {
     fn load_with_play(&mut self, media: &Media, play: bool) -> Result<()> {
         self.flush_history();
         A::load(&mut self.audio, media, play, self.volume)?;
+        self.audio_lease = media.lease.clone();
         self.seek_serial += 1;
         self.pending_seek = None;
         self.audio_quality = Some(media.quality.clone());

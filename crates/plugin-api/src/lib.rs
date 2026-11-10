@@ -1,6 +1,7 @@
 //! Typed data-source contract shared by the player and its source adapters.
 use anyhow::Result;
 use musicx_protocol::{AlbumPage, AudioQuality, Quality, Track, TrackInfo};
+use std::sync::Arc;
 use url::Url;
 
 #[derive(Clone)]
@@ -11,6 +12,8 @@ pub struct Media {
     pub quality: AudioQuality,
     pub gain_db: Option<f32>,
     pub peak: Option<f32>,
+    /// Resources required by this URL; retain while its native audio item is loaded.
+    pub lease: Option<Arc<dyn Send + Sync>>,
 }
 
 /// Supplies playable media and metadata for explicitly identified source tracks. Implementations

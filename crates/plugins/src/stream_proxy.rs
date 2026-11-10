@@ -6,7 +6,7 @@ use std::{
     io::{BufRead, BufReader, Read, Write},
     net::{TcpListener, TcpStream},
     sync::{
-        Arc, Mutex, OnceLock,
+        Arc, Mutex, OnceLock, Weak,
         atomic::{AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
@@ -17,6 +17,7 @@ struct Stream {
     url: Url,
     headers: BTreeMap<String, String>,
     used: Instant,
+    lease: Weak<()>,
 }
 struct Proxy {
     port: u16,
@@ -63,7 +64,7 @@ fn start() -> Result<Proxy> {
     Ok(Proxy { port, streams })
 }
 
-pub(crate) fn register(url: Url, headers: BTreeMap<String, String>) -> Result<Url> {
+pub(crate) fn register(url: Url, headers: BTreeMap<String, String>) -> Result<(Url, Arc<()>)> {
     let proxy = PROXY
         .get_or_init(|| start().map_err(|_| "无法启动音频传输".into()))
         .as_ref()
@@ -76,24 +77,29 @@ pub(crate) fn register(url: Url, headers: BTreeMap<String, String>) -> Result<Ur
     while streams.len() >= 64 {
         if let Some(oldest) = streams
             .iter()
+            .filter(|(_, stream)| stream.lease.strong_count() == 0)
             .min_by_key(|(_, s)| s.used)
             .map(|(k, _)| k.clone())
         {
             streams.remove(&oldest);
+        } else {
+            anyhow::bail!("音频传输繁忙，请稍后重试");
         }
     }
+    let lease = Arc::new(());
     streams.insert(
         key.clone(),
         Stream {
             url,
             headers,
             used: Instant::now(),
+            lease: Arc::downgrade(&lease),
         },
     );
-    Ok(Url::parse(&format!(
-        "http://127.0.0.1:{}/{key}",
-        proxy.port
-    ))?)
+    Ok((
+        Url::parse(&format!("http://127.0.0.1:{}/{key}", proxy.port))?,
+        lease,
+    ))
 }
 
 fn serve(mut socket: TcpStream, streams: &Mutex<BTreeMap<String, Stream>>) -> Result<()> {
@@ -203,6 +209,32 @@ fn serve(mut socket: TcpStream, streams: &Mutex<BTreeMap<String, Stream>>) -> Re
 mod tests {
     use super::*;
     #[test]
+    fn loaded_registration_survives_unused_resolutions() {
+        let (url, lease) = register(
+            "https://example.com/loaded.mp3".parse().unwrap(),
+            BTreeMap::new(),
+        )
+        .unwrap();
+        for _ in 0..70 {
+            register(
+                "https://example.com/queued.mp3".parse().unwrap(),
+                BTreeMap::new(),
+            )
+            .unwrap();
+        }
+        let proxy = PROXY.get().unwrap().as_ref().unwrap();
+        assert!(proxy.streams.lock().unwrap().contains_key(&url.path()[1..]));
+        drop(lease);
+        for _ in 0..70 {
+            register(
+                "https://example.com/queued.mp3".parse().unwrap(),
+                BTreeMap::new(),
+            )
+            .unwrap();
+        }
+        assert!(!proxy.streams.lock().unwrap().contains_key(&url.path()[1..]));
+    }
+    #[test]
     fn progressing_audio_can_outlive_the_read_timeout() {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let address = listener.local_addr().unwrap();
@@ -262,7 +294,7 @@ mod tests {
             assert!(request.contains("range: bytes=2-4"));
             socket.write_all(b"HTTP/1.1 206 Partial Content\r\nContent-Length: 3\r\nContent-Range: bytes 2-4/6\r\n\r\ncde").unwrap();
         });
-        let url = register(
+        let (url, _lease) = register(
             format!("http://{address}/audio").parse().unwrap(),
             BTreeMap::from([
                 ("authorization".into(), "fixture".into()),
@@ -360,7 +392,7 @@ mod tests {
                 }
             }
         });
-        let url = register(
+        let (url, _lease) = register(
             format!("http://{address}/fixture.wav").parse().unwrap(),
             BTreeMap::from([("authorization".into(), "native-fixture".into())]),
         )
