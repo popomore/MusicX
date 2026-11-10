@@ -10,7 +10,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub const APP_NAME: &str = "MusicX 网页登录";
 static EXECUTABLE: OnceLock<PathBuf> = OnceLock::new();
 
 pub fn configure(executable: PathBuf) -> Result<()> {

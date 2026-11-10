@@ -10,11 +10,13 @@ pub const APP_NAME: &str = match option_env!("MUSICX_BUILD_APP_NAME") {
     Some(name) => name,
     None => "MusicX",
 };
+/// Base namespace for this build's native application components.
 pub const APP_ID: &str = match option_env!("MUSICX_BUILD_APP_ID") {
     Some(id) => id,
     None => "local.musicx",
 };
 
+/// Scope component bundle IDs and notification names to the same build.
 pub fn component_app_id(component: &str) -> String {
     format!("{APP_ID}.{component}")
 }

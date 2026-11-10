@@ -105,7 +105,7 @@ The helper wires the player core to the Apple `AudioOutput` and MyGo `DataSource
 
 Connect the client to the running helper first. [MCP setup](../README.md#connect-an-mcp-client)
 
-The settings panel copies a configuration for clients that use the `mcpServers` format. For CLI testing, retrieve the token with `cargo run --release --locked -- mcp-token`. Send it as an `Authorization: Bearer <token>` header to `http://127.0.0.1:45967/mcp` over Streamable HTTP.
+The settings panel copies a configuration for clients that use the `mcpServers` format. For CLI testing, use the helper's build settings and data directory when running `./run mcp-token`. Send the token as an `Authorization: Bearer <token>` header over Streamable HTTP to the address shown in **Settings → MCP Connection**. The production default is `http://127.0.0.1:45967/mcp`; the QA example above uses `http://127.0.0.1:45969/mcp`. A valid, nonzero `MUSICX_PORT` overrides the build's port, so the client must use the helper's configured port.
 
 | Tools | What they do |
 | --- | --- |
