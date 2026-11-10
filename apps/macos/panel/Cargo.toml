@@ -26,3 +26,5 @@ tokio = { version = "1", features = ["sync"] }
 
 [dev-dependencies]
 musicx-platform-apple = { path = "../../../crates/platform-apple" }
+nsh-engine = { version = "=0.4.0", default-features = false }
+nsh-testing = { version = "=0.4.0", default-features = false }

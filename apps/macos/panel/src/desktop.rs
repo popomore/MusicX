@@ -1,3 +1,4 @@
+pub use crate::drawer::{DETAILS_GAP, DETAILS_WIDTH, EXPANDED_WIDTH, PLAYER_WIDTH};
 use nsh_platform_macos::objc2_app_kit::*;
 use nsh_platform_macos::{AppOptions, AppView, Root, set_ui_sets};
 use objc2::{
@@ -11,10 +12,6 @@ use objc2_foundation::{
     NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, ns_string,
 };
 use std::{cell::RefCell, process::ExitCode, rc::Rc};
-pub const PLAYER_WIDTH: f32 = 320.0;
-pub const DETAILS_WIDTH: f32 = 296.0;
-pub const DETAILS_GAP: f32 = 12.0;
-pub const EXPANDED_WIDTH: f32 = PLAYER_WIDTH + DETAILS_GAP + DETAILS_WIDTH;
 thread_local! { static PANEL: RefCell<Option<Panel>> = const { RefCell::new(None) }; }
 struct Panel {
     window: Retained<NSWindow>,
