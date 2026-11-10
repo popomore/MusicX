@@ -45,6 +45,28 @@ const METADATA_TIMEOUT: Duration = Duration::from_secs(3);
 static PLUGIN_CALL: Mutex<()> = Mutex::new(());
 static METADATA: Mutex<VecDeque<(String, String, Track)>> = Mutex::new(VecDeque::new());
 
+/// Normalize source results at the adapter boundary so players receive one Track type.
+pub fn search(plugin: &str, query: &str, offset: u64) -> Result<Value> {
+    let query = query.trim();
+    ensure!(
+        !query.is_empty() && query.chars().count() <= 120,
+        "请输入 1 到 120 个字符"
+    );
+    let mut result = invoke(
+        plugin,
+        "search",
+        json!({"query":query,"kind":"tracks","offset":offset}),
+    )?;
+    let rows = result["tracks"].as_array().context("来源未返回歌曲列表")?;
+    let tracks: Vec<_> = rows
+        .iter()
+        .filter_map(|row| catalog_track(plugin, row))
+        .collect();
+    remember_artwork(plugin, &result);
+    result["tracks"] = serde_json::to_value(tracks)?;
+    Ok(result)
+}
+
 /// Keep a small metadata-only window of plugin search covers, never image bytes.
 pub fn remember_artwork(plugin: &str, result: &Value) {
     let Some(tracks) = result["tracks"].as_array() else {
@@ -724,9 +746,6 @@ fn invoke_inner(
     })
 }
 
-pub fn resolve(track: Track) -> Result<Media> {
-    resolve_with_quality(track, crate::audio_quality::preferred())
-}
 pub fn resolve_with_quality(mut track: Track, quality: crate::protocol::Quality) -> Result<Media> {
     let source = track.source.as_ref().context("缺少插件曲目标识")?;
     let stream = invoke(

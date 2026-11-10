@@ -9,7 +9,7 @@ mod source_catalog;
 mod web_auth;
 
 use anyhow::Result;
-use musicx_core::{audio_quality, local_library, protocol};
+use musicx_core::{local_library, protocol};
 use musicx_plugin_api::{DataSource, Media};
 use protocol::{AlbumPage, LocalLibraryAction, Quality, Track, TrackInfo};
 use serde_json::Value;

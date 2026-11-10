@@ -5,5 +5,9 @@ edition = "2024"
 rust-version = "1.97"
 publish = false
 
+[features]
+schema = ["dep:schemars"]
+
 [dependencies]
 serde = { version = "1", features = ["derive", "rc"] }
+schemars = { version = "1", optional = true }

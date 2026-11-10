@@ -92,7 +92,8 @@ The settings panel copies a configuration for clients that use the `mcpServers` 
 
 | Tools | What they do |
 | --- | --- |
-| `list_music_plugins`, `plugin_search`, `plugin_play` | List installed plugins, search with an explicit plugin ID, or play/enqueue a plugin track |
+| `list_music_plugins`, `plugin_search` | List installed source plugins and search a selected plugin; results contain standard `Track` objects |
+| `play_song`, `enqueue_song` | Play or queue a complete `Track` through the configured `DataSource` |
 | `manage_music_sources` | Browse sources, configure plugins, connect accounts, and import playlists |
 | `manage_local_playlists` | Create, edit, pin, or play local playlists |
 | `player_status`, `control_player` | Inspect and control the current session |
@@ -103,7 +104,11 @@ The settings panel copies a configuration for clients that use the `mcpServers` 
 
 MusicX starts with the locally installed plugins, including an empty installation. Startup and listing installed sources do not install plugins or contact the catalog. Add a source in **Settings → Music Sources** on macOS or **Music Sources** on iPhone. Account sign-in, sign-out, configuration, and playlist import use that selected plugin's capabilities. MCP clients use `manage_music_sources` with `source=mygo:<plugin-id>`.
 
-Search with `plugin_search` and an explicit `plugin` ID. Use the returned track ID and metadata with `plugin_play`; set `enqueue=true` to queue it. Generic playback, lyrics, and album requests carry the track's `source.plugin` and `source.id`. Legacy NetEase-only tools, account routes, link/ID playback, and the `login`/`logout` CLI commands have been removed. No source is inferred from a bare numeric ID. Existing local records are retained; re-add tracks without source metadata from a selected plugin to play them.
+Search with `plugin_search` and an explicit `plugin` ID. Its `tracks` array contains the shared `Track` wire type: title, artist, duration in seconds, available cover/album/source-link metadata, and the original string ID under `source.id`. The adapter normalizes the plugin's native search response and preserves its top-level pagination fields.
+
+Playback is independent of the source tools. Pass a complete item from `tracks` unchanged in the `track` parameter of `play_song` or `enqueue_song`. These tools resolve through the injected `DataSource` and submit a player action only after successful resolution. They do not invoke MyGo directly or reconstruct a partial track. `plugin_play` has been removed. The `play_song`/`enqueue_song` names now use this full-Track contract; the old bare `id` parameter is not supported.
+
+The MyGo adapter routes playback, lyrics, and album requests by `source.plugin` and `source.id`. NetEase-only search/playlist tools, dedicated account routes, link/ID playback, and the `login`/`logout` CLI commands have been removed. No source is inferred from a bare numeric ID. Existing local records are retained; re-add tracks without source metadata from a selected plugin to play them.
 
 Install a compatible single-file JavaScript plugin from a local directory.
 

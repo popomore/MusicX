@@ -1779,6 +1779,7 @@ dependencies = [
  "musicx-core",
  "musicx-plugin-api",
  "musicx-plugins",
+ "musicx-protocol",
  "rmcp",
  "serde",
  "serde_json",
@@ -1841,6 +1842,7 @@ dependencies = [
 name = "musicx-protocol"
 version = "0.2.0"
 dependencies = [
+ "schemars",
  "serde",
 ]
 

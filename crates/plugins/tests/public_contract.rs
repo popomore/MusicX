@@ -53,7 +53,7 @@ fn public_exports_child() {
     fs::write(fixture.join("index.js"), r#"
 export function search() {
   return {tracks:[{id:'track:123',name:'公开接口曲名',artists:[{name:'歌手'}],duration:60000,
-    album:{id:'album',name:'专辑',imageUrl:'https://example.com/cover.jpg'}}]};
+    album:{id:'album',name:'专辑',imageUrl:'https://example.com/cover.jpg'}}],total:1,hasMore:false};
 }
 export function stream({id,quality}) {
   host.storage.set('stream',{id,quality});
@@ -85,18 +85,17 @@ export function account() {
 "#).unwrap();
     mygo::install(&fixture).unwrap();
 
-    let result = mygo::invoke(
-        "fixture-source",
-        "search",
-        json!({"query":"fixture","kind":"tracks"}),
-    )
-    .unwrap();
-    mygo::remember_artwork("fixture-source", &result);
-    let track: musicx_core::protocol::Track = serde_json::from_value(json!({
-        "id":0,"title":result["tracks"][0]["name"],"artist":result["tracks"][0]["artists"][0]["name"],"duration":60.0,
-        "source":{"plugin":"fixture-source","id":"track:123"}
-    }))
-    .unwrap();
+    let result = mygo::search("fixture-source", "fixture", 0).unwrap();
+    assert_eq!(result["total"], 1);
+    assert_eq!(result["hasMore"], false);
+    let track: musicx_core::protocol::Track =
+        serde_json::from_value(result["tracks"][0].clone()).unwrap();
+    assert_eq!(track.duration, 60.0);
+    assert_eq!(
+        track.cover_url.as_deref(),
+        Some("https://example.com/cover.jpg")
+    );
+    assert_eq!(track.source.as_ref().unwrap().id, "track:123");
     let media = MYGO
         .resolve_selection(track.clone(), Default::default())
         .unwrap();

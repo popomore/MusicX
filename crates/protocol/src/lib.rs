@@ -40,18 +40,21 @@ pub fn legacy_data_dir() -> Option<std::path::PathBuf> {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Album {
     pub id: String,
     pub name: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Source {
     pub plugin: String,
     pub id: String,
 }
 
 #[derive(Clone, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Track {
     pub id: u64,
     pub title: String,
