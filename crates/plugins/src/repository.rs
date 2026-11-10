@@ -136,11 +136,14 @@ fn latest(repo: &str, api: &str) -> Result<Release> {
 }
 
 fn pick_asset(names: &[&str], os: &str, arch: &str) -> Option<usize> {
-    let os = if os == "macos" { "darwin" } else { os };
-    let arch = match arch {
-        "aarch64" => "arm64",
-        "x86_64" => "amd64",
-        other => other,
+    let operating_systems = match os {
+        "macos" | "darwin" => ["darwin", "macos"],
+        _ => [os, os],
+    };
+    let architectures = match arch {
+        "aarch64" | "arm64" => ["aarch64", "arm64"],
+        "x86_64" | "amd64" => ["x86_64", "amd64"],
+        _ => [arch, arch],
     };
     let mut general = None;
     for (at, name) in names.iter().enumerate() {
@@ -148,7 +151,9 @@ fn pick_asset(names: &[&str], os: &str, arch: &str) -> Option<usize> {
         if !name.ends_with(".zip") {
             continue;
         }
-        if name.contains(os) && name.contains(arch) {
+        if operating_systems.iter().any(|os| name.contains(os))
+            && architectures.iter().any(|arch| name.contains(arch))
+        {
             return Some(at);
         }
         if ![
@@ -334,6 +339,44 @@ mod tests {
         assert_eq!(pick_asset(&names, "ios", "aarch64"), Some(1));
         assert_eq!(
             pick_asset(&["plugin-linux-arm64.zip"], "macos", "aarch64"),
+            None
+        );
+    }
+
+    #[test]
+    fn release_assets_accept_every_mac_platform_and_architecture_alias() {
+        for os in ["darwin", "macos"] {
+            for arch in ["arm64", "aarch64"] {
+                let name = format!("plugin-{os}-{arch}.zip");
+                assert_eq!(
+                    pick_asset(
+                        &["plugin-linux-arm64.zip", "plugin.zip", &name],
+                        "macos",
+                        "aarch64"
+                    ),
+                    Some(2),
+                    "{name}"
+                );
+            }
+            for arch in ["amd64", "x86_64"] {
+                let name = format!("plugin-{os}-{arch}.zip");
+                assert_eq!(
+                    pick_asset(
+                        &["plugin-linux-amd64.zip", "plugin.zip", &name],
+                        "macos",
+                        "x86_64"
+                    ),
+                    Some(2),
+                    "{name}"
+                );
+            }
+        }
+        assert_eq!(
+            pick_asset(
+                &["plugin-darwin-x86_64.zip", "plugin-linux-aarch64.zip"],
+                "macos",
+                "aarch64"
+            ),
             None
         );
     }
