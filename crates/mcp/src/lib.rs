@@ -42,7 +42,7 @@ pub struct Services {
 
 pub fn read_token() -> Result<String> {
     fs::read_to_string(storage::state_dir()?.join("mcp-token"))
-        .context("请先启动播放器，再运行 mini-cloudmusic mcp-token")
+        .context("请先启动播放器，再运行 musicx mcp-token")
 }
 
 async fn authorize(State(expected): State<Arc<String>>, request: Request, next: Next) -> Response {

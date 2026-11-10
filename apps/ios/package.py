@@ -9,7 +9,7 @@ args.add_argument('--target', choices=['ios', 'ios-simulator'], default='ios-sim
 target = args.parse_args().target
 destination = root / '.nsh/out' / target
 subprocess.run([os.environ.get('NSH_BIN', 'nsh'), 'package', '--target', target, '--out', str(destination)], cwd=root, check=True)
-app = destination / '迷你云音乐.app'
+app = destination / 'MusicX.app'
 path = app / 'Info.plist'
 info = plistlib.loads(path.read_bytes())
 info['UIBackgroundModes'] = ['audio']

@@ -117,7 +117,7 @@ fn header(model: Model) -> impl IntoElement {
                         State::Loading => "正在缓冲",
                         State::Ended => "播放结束",
                         State::Error => "播放出错",
-                        State::Idle => "迷你云音乐",
+                        State::Idle => "MusicX",
                     }),
                 })
                 .text_size(px(11.0))

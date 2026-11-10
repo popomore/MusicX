@@ -154,7 +154,7 @@ fn command(player: &mut Player<Audio>, action: Action) -> Result<Status> {
 fn run_worker(directory: &std::path::Path, phase: &str) {
     let output = Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "session_worker", "--nocapture"])
-        .env("MINI_CLOUDMUSIC_DATA_DIR", directory)
+        .env("MUSICX_DATA_DIR", directory)
         .env("MUSICX_SESSION_TEST_PHASE", phase)
         .output()
         .unwrap();
@@ -233,7 +233,7 @@ fn startup_session_allows_upgrade_handoff_until_user_control() {
         for step in ["save", phase] {
             let output = Command::new(std::env::current_exe().unwrap())
                 .args(["--exact", "session_worker", "--nocapture"])
-                .env("MINI_CLOUDMUSIC_DATA_DIR", &directory)
+                .env("MUSICX_DATA_DIR", &directory)
                 .env("MUSICX_SESSION_TEST_PHASE", step)
                 .output()
                 .unwrap();
@@ -258,7 +258,7 @@ fn session_survives_process_restart() {
     for phase in ["save", "restore"] {
         let output = Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "session_worker", "--nocapture"])
-            .env("MINI_CLOUDMUSIC_DATA_DIR", &directory)
+            .env("MUSICX_DATA_DIR", &directory)
             .env("MUSICX_SESSION_TEST_PHASE", phase)
             .output()
             .unwrap();
@@ -281,7 +281,7 @@ fn session_survives_process_restart() {
     .unwrap();
     let output = Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "session_worker", "--nocapture"])
-        .env("MINI_CLOUDMUSIC_DATA_DIR", &directory)
+        .env("MUSICX_DATA_DIR", &directory)
         .env("MUSICX_SESSION_TEST_PHASE", "restore")
         .output()
         .unwrap();
@@ -297,7 +297,7 @@ fn session_survives_process_restart() {
         std::fs::write(directory.join("playback-session.json"), invalid).unwrap();
         let output = Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "session_worker", "--nocapture"])
-            .env("MINI_CLOUDMUSIC_DATA_DIR", &directory)
+            .env("MUSICX_DATA_DIR", &directory)
             .env("MUSICX_SESSION_TEST_PHASE", "corrupt")
             .output()
             .unwrap();

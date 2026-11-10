@@ -10,10 +10,12 @@ Set `CARGO_TARGET_DIR` to store build artifacts elsewhere. To try a change in a 
 
 ```sh
 test_data=$(mktemp -d)
-MINI_CLOUDMUSIC_DATA_DIR="$test_data" MINI_CLOUDMUSIC_PORT=45969 ./run
+MUSICX_DATA_DIR="$test_data" MUSICX_PORT=45969 ./run
 ```
 
-Use the same data directory and port when connecting to the test session. To read its token, pass `MINI_CLOUDMUSIC_DATA_DIR` to the `mcp-token` command. The test session starts with no plugins; add test sources explicitly.
+Use the same data directory and port when connecting to the test session. To read its token, pass `MUSICX_DATA_DIR` to the `mcp-token` command. The test session starts with no plugins; add test sources explicitly.
+
+The current environment variables are `MUSICX_DATA_DIR`, `MUSICX_PORT`, and `MUSICX_WEB_AUTH`. Previous names remain accepted as upgrade aliases; a current name always takes precedence.
 
 ## Package the macOS app
 
@@ -160,4 +162,4 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 
 For UI changes, include the macOS version and describe the window, playback, or source flow you tested. The vendored NSH patch notes describe platform changes. [macOS patches](../vendor/nsh-platform-macos/PATCH.md) · [iOS patches](../vendor/nsh-platform-ios/PATCH.md)
 
-In an interactive macOS session, run the native window lifecycle regression with `MUSICX_NATIVE_UI_TEST=1 cargo test --locked -p mini-cloudmusic-panel --test window_lifecycle`. It checks first-launch activation and reopening a minimized or hidden window; ordinary workspace tests skip this UI run.
+In an interactive macOS session, run the native window lifecycle regression with `MUSICX_NATIVE_UI_TEST=1 cargo test --locked -p musicx-panel --test window_lifecycle`. It checks first-launch activation and reopening a minimized or hidden window; ordinary workspace tests skip this UI run.

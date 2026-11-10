@@ -48,7 +48,7 @@ jobs:
             exit 1
           fi
           metadata=$(cargo metadata --locked --no-deps --format-version 1)
-          version=$(jq -er '.packages[] | select(.name == "mini-cloudmusic") | .version' <<< "$metadata")
+          version=$(jq -er '.packages[] | select(.name == "musicx") | .version' <<< "$metadata")
           bundle_version=$(jq -er '.packages[] | select(.name == "musicx-platform-apple") | .version' <<< "$metadata")
           if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ||
                 "$GITHUB_REF_NAME" != "v$version" || "$version" != "$bundle_version" ]]; then

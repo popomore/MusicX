@@ -29,7 +29,7 @@ pub fn sign_in(
     ensure!(cfg!(target_os = "macos"), "网页登录目前仅支持Mac");
     validate(&request, grants)?;
     request["name"] = json!(name.chars().take(80).collect::<String>());
-    let executable = std::env::var_os("MINI_CLOUDMUSIC_WEB_AUTH")
+    let executable = crate::protocol::env_var("MUSICX_WEB_AUTH")
         .map(PathBuf::from)
         .or_else(|| EXECUTABLE.get().cloned())
         .context("缺少 MusicX 网页登录组件")?;

@@ -26,8 +26,8 @@ const BACKGROUND_NAME: &str = "MusicX Helper";
 const APP_BUNDLE_VERSION: &str = "6";
 const PANEL_APP: &str = "Panel.app";
 const WEB_AUTH_APP: &str = "WebAuth.app";
-const PANEL_BIN: &str = "mini-cloudmusic-panel";
-const WEB_AUTH_BIN: &str = "mini-cloudmusic-webauth";
+const PANEL_BIN: &str = "musicx-panel";
+const WEB_AUTH_BIN: &str = "musicx-webauth";
 
 thread_local! {
     static DESKTOP: RefCell<Option<Desktop>> = const { RefCell::new(None) };
@@ -204,7 +204,7 @@ pub fn package_app(bundle: &Path, web_auth_name: &str) -> anyhow::Result<()> {
         &panel,
         &helpers.join(PANEL_APP),
         APP_NAME,
-        "local.mini-cloudmusic.panel",
+        "local.musicx.panel",
         PANEL_BIN,
         false,
         signing,
@@ -213,7 +213,7 @@ pub fn package_app(bundle: &Path, web_auth_name: &str) -> anyhow::Result<()> {
         &webauth,
         &helpers.join(WEB_AUTH_APP),
         web_auth_name,
-        "local.mini-cloudmusic.webauth",
+        "local.musicx.webauth",
         WEB_AUTH_BIN,
         true,
         signing,
@@ -223,7 +223,7 @@ pub fn package_app(bundle: &Path, web_auth_name: &str) -> anyhow::Result<()> {
         bundle,
         BACKGROUND_NAME,
         "local.musicx.playback",
-        "mini-cloudmusic",
+        "musicx",
         true,
         signing,
     )
@@ -253,7 +253,7 @@ pub fn prepare_runtime(web_auth_name: &str) -> anyhow::Result<DesktopRuntime> {
     }
     let base = runtime_dir()?;
     let core_bundle = base.join(format!("{APP_NAME}.app"));
-    let private_executable = app_executable(&core_bundle, "mini-cloudmusic");
+    let private_executable = app_executable(&core_bundle, "musicx");
     let panel_bundle = base.join("panel").join(format!("{APP_NAME}.app"));
     let web_auth_bundle = base.join(format!("{web_auth_name}.app"));
     if executable == private_executable {
@@ -281,7 +281,7 @@ pub fn prepare_runtime(web_auth_name: &str) -> anyhow::Result<DesktopRuntime> {
             &webauth,
             &web_auth_bundle,
             web_auth_name,
-            "local.mini-cloudmusic.webauth",
+            "local.musicx.webauth",
             WEB_AUTH_BIN,
             true,
             None,
@@ -292,7 +292,7 @@ pub fn prepare_runtime(web_auth_name: &str) -> anyhow::Result<DesktopRuntime> {
             &panel,
             &panel_bundle,
             APP_NAME,
-            "local.mini-cloudmusic.panel",
+            "local.musicx.panel",
             PANEL_BIN,
             false,
             None,
@@ -302,17 +302,14 @@ pub fn prepare_runtime(web_auth_name: &str) -> anyhow::Result<DesktopRuntime> {
             &core_bundle,
             BACKGROUND_NAME,
             "local.musicx.playback",
-            "mini-cloudmusic",
+            "musicx",
             true,
             None,
         )?;
     }
     Err(Command::new(private_executable)
         .current_dir(&base)
-        .env(
-            "MINI_CLOUDMUSIC_DATA_DIR",
-            base.parent().expect("runtime parent"),
-        )
+        .env("MUSICX_DATA_DIR", base.parent().expect("runtime parent"))
         .args(std::env::args().skip(1))
         .exec()
         .into())

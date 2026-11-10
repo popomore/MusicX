@@ -2,6 +2,13 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+mod legacy;
+
+/// Read the MusicX namespace first; old names are accepted only for upgrades.
+pub fn env_var(name: &str) -> Option<std::ffi::OsString> {
+    std::env::var_os(name).or_else(|| legacy::env_var(name))
+}
+
 /// Maximum size of a playback queue that can be persisted and restored.
 pub const MAX_QUEUE_TRACKS: usize = 10_000;
 
@@ -13,7 +20,7 @@ pub const ADDRESS: &str = "127.0.0.1:45968";
 /// Allow isolated local instances without sharing the live listener or history.
 pub fn address() -> std::net::SocketAddr {
     let mut address: std::net::SocketAddr = ADDRESS.parse().expect("loopback address");
-    if let Ok(port) = std::env::var("MINI_CLOUDMUSIC_PORT")
+    if let Some(port) = env_var("MUSICX_PORT").and_then(|value| value.into_string().ok())
         && let Ok(port) = port.parse::<u16>()
         && port != 0
     {
@@ -22,10 +29,10 @@ pub fn address() -> std::net::SocketAddr {
     address
 }
 
-const DATA_DIR_ENV: &str = "MINI_CLOUDMUSIC_DATA_DIR";
+const DATA_DIR_ENV: &str = "MUSICX_DATA_DIR";
 
 pub fn data_dir() -> Option<std::path::PathBuf> {
-    std::env::var_os(DATA_DIR_ENV)
+    env_var(DATA_DIR_ENV)
         .map(std::path::PathBuf::from)
         .or_else(|| {
             std::env::home_dir().map(|home| home.join("Library/Application Support/MusicX"))
@@ -33,10 +40,10 @@ pub fn data_dir() -> Option<std::path::PathBuf> {
 }
 
 pub fn legacy_data_dir() -> Option<std::path::PathBuf> {
-    if std::env::var_os(DATA_DIR_ENV).is_some() {
+    if env_var(DATA_DIR_ENV).is_some() {
         return None;
     }
-    Some(data_dir()?.with_file_name("Mini Cloud Music"))
+    Some(data_dir()?.with_file_name(legacy::DATA_DIR_NAME))
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

@@ -4,7 +4,7 @@ cd "$(dirname "$0")"
 build_dir=${CARGO_TARGET_DIR:-target}
 
 # Each process gets its own feature graph.
-cargo build --release --locked --target-dir "$build_dir" -p mini-cloudmusic-webauth
-cargo build --release --locked --target-dir "$build_dir" -p mini-cloudmusic-panel
-cargo build --release --locked --target-dir "$build_dir" -p mini-cloudmusic
-exec "$build_dir/release/mini-cloudmusic" "$@"
+cargo build --release --locked --target-dir "$build_dir" -p musicx-webauth
+cargo build --release --locked --target-dir "$build_dir" -p musicx-panel
+cargo build --release --locked --target-dir "$build_dir" -p musicx
+exec "$build_dir/release/musicx" "$@"

@@ -243,7 +243,7 @@ pub fn run_panel() -> ExitCode {
     ])]);
     let options = AppOptions {
         title: "MusicX".into(),
-        app_id: "local.mini-cloudmusic.panel".into(),
+        app_id: "local.musicx.panel".into(),
         size: (320, 512),
         appearance: nsh_platform_macos::Appearance::Light,
         transparent: true,

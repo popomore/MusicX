@@ -29,8 +29,8 @@ fn starts_without_plugins_or_a_catalog() {
     let result = Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "startup_child", "--nocapture"])
         .env("MUSICX_STARTUP_CHILD", "1")
-        .env("MINI_CLOUDMUSIC_DATA_DIR", &directory)
-        .env("MINI_CLOUDMUSIC_PORT", port.to_string())
+        .env("MUSICX_DATA_DIR", &directory)
+        .env("MUSICX_PORT", port.to_string())
         .env("MUSICX_PLUGIN_CATALOG_URL", "not-a-url")
         .output()
         .unwrap();

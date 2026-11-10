@@ -1,5 +1,5 @@
 [package]
-name = "mini-cloudmusic"
+name = "musicx"
 version = "0.2.0"
 edition = "2024"
 rust-version = "1.97"

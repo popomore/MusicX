@@ -4,7 +4,7 @@ Based on the published nsh-platform-macos 0.4.0 crate (Apache-2.0).
 
 - The upstream manifest always enables nsh-base/highlight and nsh-base/math.
   This copy gates them behind rich-text, enabled by default to preserve upstream
-  behavior. Mini Cloud Music disables default features.
+  behavior. MusicX disables default features.
 - AppOptions gains decorated (default true). False uses a keyboard-focusable
   borderless window with a transparent background, so a small Rust app can draw
   its own rounded content, drag region, close and minimize controls without

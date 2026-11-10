@@ -1649,50 +1649,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d5848f5a9e8117cf94f2f90faac24a87ff81600ff8628c1e3deaab572e76bfa1"
 
 [[package]]
-name = "mini-cloudmusic"
-version = "0.2.0"
-dependencies = [
- "anyhow",
- "musicx-core",
- "musicx-mcp",
- "musicx-platform-apple",
- "musicx-plugins",
-]
-
-[[package]]
-name = "mini-cloudmusic-panel"
-version = "0.2.0"
-dependencies = [
- "anyhow",
- "dispatch2",
- "musicx-protocol",
- "nsh-base",
- "nsh-core",
- "nsh-platform-macos",
- "objc2",
- "objc2-foundation",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "mini-cloudmusic-webauth"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "block2",
- "objc2",
- "objc2-app-kit",
- "objc2-foundation",
- "objc2-web-kit",
- "serde",
- "serde_json",
- "url",
-]
-
-[[package]]
 name = "minimal-lexical"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1736,6 +1692,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
 
 [[package]]
+name = "musicx"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "musicx-core",
+ "musicx-mcp",
+ "musicx-platform-apple",
+ "musicx-plugins",
+]
+
+[[package]]
 name = "musicx-core"
 version = "0.2.0"
 dependencies = [
@@ -1761,6 +1728,24 @@ dependencies = [
  "musicx-plugins",
  "musicx-protocol",
  "rmcp",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "musicx-panel"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "dispatch2",
+ "musicx-protocol",
+ "nsh-base",
+ "nsh-core",
+ "nsh-platform-macos",
+ "objc2",
+ "objc2-foundation",
+ "reqwest",
  "serde",
  "serde_json",
  "tokio",
@@ -1824,6 +1809,21 @@ version = "0.2.0"
 dependencies = [
  "schemars",
  "serde",
+]
+
+[[package]]
+name = "musicx-webauth"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "block2",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "objc2-web-kit",
+ "serde",
+ "serde_json",
+ "url",
 ]
 
 [[package]]
