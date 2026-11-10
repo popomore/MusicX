@@ -62,20 +62,28 @@ impl Bindings {
                     let receive = || -> Result<Value> {
                         while Instant::now() < until && !stop.load(Ordering::SeqCst) && !job.cancelled() {
                             if let Ok((mut socket, _)) = listener.accept() {
-                                socket.set_read_timeout(Some(Duration::from_millis(200)))?;
-                                let mut line = String::new();
-                                BufReader::new(socket.try_clone()?.take(8192)).read_line(&mut line)?;
-                                let parts: Vec<_> = line.split_whitespace().collect();
-                                if parts.len() != 3 || parts[0] != "GET" { continue; }
-                                let url = url::Url::parse(&format!("http://127.0.0.1{}", parts[1]))?;
-                                if !options.path.is_empty() && url.path() != options.path {
-                                    socket.write_all(b"HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n")?; continue;
-                                }
-                                let text = if options.page.is_empty() { "已完成登录，可以关闭此页面。" } else { &options.page };
-                                write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{text}", text.len())?;
-                                let mut query = serde_json::Map::new();
-                                for (key, value) in url.query_pairs() { query.entry(key.into_owned()).or_insert(json!(value)); }
-                                return Ok(Value::Object(query));
+                                // A speculative or malformed connection must not consume
+                                // the callback listener intended for the real redirect.
+                                let connection = (|| -> Result<Option<Value>> {
+                                    socket.set_nonblocking(false)?;
+                                    socket.set_read_timeout(Some(Duration::from_millis(500)))?;
+                                    socket.set_write_timeout(Some(Duration::from_millis(500)))?;
+                                    let mut line = String::new();
+                                    BufReader::new(socket.try_clone()?.take(8192)).read_line(&mut line)?;
+                                    let parts: Vec<_> = line.split_whitespace().collect();
+                                    if !line.ends_with('\n') || parts.len() != 3 || parts[0] != "GET" || !parts[1].starts_with('/') { return Ok(None); }
+                                    let url = url::Url::parse(&format!("http://127.0.0.1{}", parts[1]))?;
+                                    if !options.path.is_empty() && url.path() != options.path {
+                                        let _ = socket.write_all(b"HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+                                        return Ok(None);
+                                    }
+                                    let text = if options.page.is_empty() { "已完成登录，可以关闭此页面。" } else { &options.page };
+                                    let _ = write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{text}", text.len());
+                                    let mut query = serde_json::Map::new();
+                                    for (key, value) in url.query_pairs() { query.entry(key.into_owned()).or_insert(json!(value)); }
+                                    Ok(Some(Value::Object(query)))
+                                })();
+                                if let Ok(Some(query)) = connection { return Ok(query); }
                             }
                             std::thread::sleep(Duration::from_millis(25));
                         }

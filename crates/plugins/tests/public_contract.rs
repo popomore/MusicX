@@ -304,6 +304,18 @@ export function account() {
             .timeout(Duration::from_millis(500))
             .build()
             .unwrap();
+        let mut idle = None;
+        for _ in 0..200 {
+            if let Ok(socket) = std::net::TcpStream::connect(("127.0.0.1", port)) {
+                idle = Some(socket);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(idle.is_some(), "callback listener did not start");
+        // Browsers may speculate a connection before sending a request.
+        std::thread::sleep(Duration::from_millis(300));
+        drop(idle);
         let mut answered = false;
         for _ in 0..200 {
             if let Ok(response) = client

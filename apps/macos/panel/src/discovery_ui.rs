@@ -337,7 +337,9 @@ pub fn browse(model: Model) -> impl IntoElement {
             .label("来源作品与播客"),
         )
         .child(when(
-            move || this.page.with(|p| p.more),
+            move || {
+                this.page.with(|p| p.more) && this.action.with(|a| matches!(a, Action::Show { .. }))
+            },
             move || {
                 action(
                     "加载更多单集",

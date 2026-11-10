@@ -28,7 +28,18 @@ impl Timeline {
                 ms: line.start.min(i64::MAX as u64) as i64,
                 text: line.text.clone(),
                 translation: line.translation.clone(),
-                words: line.words.clone(),
+                words: if !line.text.is_empty()
+                    && line
+                        .words
+                        .iter()
+                        .map(|word| word.text.as_str())
+                        .collect::<String>()
+                        == line.text
+                {
+                    line.words.clone()
+                } else {
+                    Vec::new()
+                },
             })
             .collect();
         cues.sort_by_key(|cue| cue.ms);
@@ -189,6 +200,39 @@ fn parse(input: &str) -> Vec<Cue> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn structured_words_preserve_punctuation_and_full_lines() {
+        use crate::protocol::{LyricLine, LyricWord, Lyrics};
+        let words = vec![
+            LyricWord {
+                start: 1000,
+                end: 1500,
+                text: "Hello".into(),
+            },
+            LyricWord {
+                start: 1500,
+                end: 2000,
+                text: " world".into(),
+            },
+        ];
+        let mut lyrics = Lyrics {
+            lines: vec![LyricLine {
+                start: 1000,
+                text: "Hello, world!".into(),
+                words: words.clone(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let timeline = Timeline::from_lyrics(&lyrics);
+        assert_eq!(timeline.cues[0].text, "Hello, world!");
+        assert!(
+            timeline.cues[0].words.is_empty(),
+            "incomplete words would hide the full line in the timed view"
+        );
+        lyrics.lines[0].text = "Hello world".into();
+        assert_eq!(Timeline::from_lyrics(&lyrics).cues[0].words.len(), 2);
+    }
     #[test]
     fn fractions_multitags_and_backward_seek() {
         let t = Timeline::parse("[ar:test]\n[00:02.35][00:05.007]second\n[00:01]first", "");
