@@ -183,8 +183,26 @@ enum Want {
 
 /// One download (or file read) per URI, whatever it is for.
 struct Download {
-    task: Option<Retained<NSURLSessionDataTask>>,
+    task: Option<DownloadTask>,
     wants: Vec<Want>,
+}
+
+static TRANSPORT: std::sync::OnceLock<std::sync::Arc<dyn nsh_core::image::loader::Transport>> =
+    std::sync::OnceLock::new();
+pub(crate) fn set_transport(transport: std::sync::Arc<dyn nsh_core::image::loader::Transport>) {
+    let _ = TRANSPORT.set(transport);
+}
+enum DownloadTask {
+    Native(Retained<NSURLSessionDataTask>),
+    Custom(nsh_core::image::loader::Ticket),
+}
+impl DownloadTask {
+    fn cancel(self) {
+        match self {
+            Self::Native(task) => task.cancel(),
+            Self::Custom(ticket) => drop(ticket),
+        }
+    }
 }
 
 /// Result of a request.
@@ -337,7 +355,7 @@ impl ImageLoader {
             // The disk cache is read off the main thread; the download
             // starts from there (`LoadEvent::Download`) unless it holds a
             // fresh copy.
-            Some(Source::Url(_)) if remote && self.disk.is_some() => {
+            Some(Source::Url(_)) if remote && self.disk.is_some() && TRANSPORT.get().is_none() => {
                 let cache = self.disk.clone().expect("a disk cache");
                 let uri = uri.to_owned();
                 DispatchQueue::global_queue(GlobalQueueIdentifier::Priority(
@@ -362,7 +380,7 @@ impl ImageLoader {
                 &url,
                 uri.to_owned(),
                 &[],
-                None,
+                self.disk.clone(),
                 notify,
                 self.access.clone(),
             )),
@@ -539,10 +557,9 @@ impl ImageLoader {
             .wants
             .retain(|w| !matches!(w, Want::Decode(k) if k == key));
         if download.wants.is_empty() {
-            if let Some(task) = &download.task {
+            if let Some(task) = self.downloads.remove(&uri).and_then(|d| d.task) {
                 task.cancel();
             }
-            self.downloads.remove(&uri);
         }
     }
 
@@ -853,7 +870,54 @@ fn download(
     cache: Option<DiskCache>,
     notify: Notify,
     access: std::sync::Arc<nsh_engine::Access>,
-) -> Retained<NSURLSessionDataTask> {
+) -> DownloadTask {
+    if let Some(transport) = TRANSPORT.get() {
+        use nsh_core::image::loader::{Context, Priority, loader};
+        let context = Context {
+            asset_base: None,
+            read_asset: None,
+            access,
+            disk: cache,
+            transport: Some(transport.clone()),
+        };
+        let Some(location) = context.resolve(&uri) else {
+            on_main(
+                &notify,
+                LoadEvent::Bytes {
+                    uri,
+                    result: Err("unsupported image URL".into()),
+                },
+            );
+            return DownloadTask::Custom(nsh_core::image::loader::Ticket::done());
+        };
+        let progress_uri = uri.clone();
+        let progress_notify = notify.clone();
+        let ticket = loader().read(
+            location,
+            &context,
+            Priority::Normal,
+            Some(std::sync::Arc::new(move |loaded, total| {
+                on_main(
+                    &progress_notify,
+                    LoadEvent::Progress {
+                        uri: progress_uri.clone(),
+                        loaded,
+                        total,
+                    },
+                );
+            })),
+            Box::new(move |result| {
+                on_main(
+                    &notify,
+                    LoadEvent::Bytes {
+                        uri,
+                        result: result.map(|data| ns_data(&data)),
+                    },
+                );
+            }),
+        );
+        return DownloadTask::Custom(ticket);
+    }
     let cached = cache.is_some();
     let delegate = ImageDownload::alloc().set_ivars(DownloadIvars {
         uri,
@@ -882,7 +946,7 @@ fn download(
     // The task keeps its delegate until it completes.
     task.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
     task.resume();
-    task
+    DownloadTask::Native(task)
 }
 
 /// Frames of an animated image decoded at most (longer ones play the

@@ -24,6 +24,16 @@ struct Proxy {
 }
 static PROXY: OnceLock<std::result::Result<Proxy, String>> = OnceLock::new();
 
+fn upstream_client(idle_timeout: Duration) -> Result<Client> {
+    // reqwest::blocking::Response applies this timeout separately to each
+    // Read operation, rather than to the entire body transfer.
+    Ok(Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(idle_timeout)
+        .redirect(Policy::none())
+        .build()?)
+}
+
 fn start() -> Result<Proxy> {
     let listener = TcpListener::bind(("127.0.0.1", 0))?;
     let port = listener.local_addr()?.port();
@@ -131,10 +141,7 @@ fn serve(mut socket: TcpStream, streams: &Mutex<BTreeMap<String, Stream>>) -> Re
         )?;
         return Ok(());
     };
-    let client = Client::builder()
-        .timeout(Duration::from_secs(120))
-        .redirect(Policy::none())
-        .build()?;
+    let client = upstream_client(Duration::from_secs(120))?;
     for _ in 0..5 {
         let mut request = if head {
             client.head(stream.url.clone())
@@ -195,6 +202,44 @@ fn serve(mut socket: TcpStream, streams: &Mutex<BTreeMap<String, Stream>>) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn progressing_audio_can_outlive_the_read_timeout() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(socket.try_clone().unwrap());
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\n")
+                .unwrap();
+            for byte in b"abcdefgh" {
+                socket.write_all(&[*byte]).unwrap();
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        });
+        let timeout = Duration::from_millis(250);
+        let started = Instant::now();
+        let mut response = upstream_client(timeout)
+            .unwrap()
+            .get(format!("http://{address}/audio"))
+            .send()
+            .unwrap();
+        let mut bytes = Vec::new();
+        response.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, b"abcdefgh");
+        assert!(
+            started.elapsed() > timeout,
+            "fixture must exceed the timeout in total"
+        );
+        server.join().unwrap();
+    }
     #[test]
     fn forwards_private_headers_and_seek_ranges() {
         let upstream = TcpListener::bind(("127.0.0.1", 0)).unwrap();

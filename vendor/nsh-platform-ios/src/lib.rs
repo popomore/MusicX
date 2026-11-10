@@ -30,6 +30,12 @@ pub mod dev;
 pub mod embed;
 mod fps;
 mod image;
+
+/// Overrides native remote image downloads before mounting the first surface.
+/// The core loader supplies cancellation, progress, and disk-cache handling.
+pub fn set_image_transport(transport: std::sync::Arc<dyn nsh_core::image::loader::Transport>) {
+    image::set_transport(transport);
+}
 mod input;
 mod interaction;
 mod keymap;

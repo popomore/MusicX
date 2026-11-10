@@ -25,6 +25,7 @@ fn all_sources_are_explicit_plugins() {
         .env("MUSICX_PUBLIC_CONTRACT_CHILD", "1")
         .env("MUSICX_PUBLIC_CONTRACT_ROOT", &directory)
         .env("MUSICX_DATA_DIR", directory.join("state"))
+        .env("MUSICX_LANGUAGE", "zh-CN")
         .env("MUSICX_PLUGIN_CATALOG_URL", "not-a-url")
         .output()
         .unwrap();

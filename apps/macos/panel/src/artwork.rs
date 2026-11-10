@@ -14,7 +14,10 @@ use std::{
 
 struct Images;
 pub fn install() {
-    set_transport(Arc::new(Images));
+    let transport: Arc<dyn Transport> = Arc::new(Images);
+    set_transport(transport.clone());
+    #[cfg(target_os = "ios")]
+    nsh_platform_ios::set_image_transport(transport);
 }
 impl Transport for Images {
     fn get(&self, get: Get<'_>) -> Result<Fetched, String> {
@@ -33,7 +36,11 @@ impl Transport for Images {
                 let bytes = base64::engine::general_purpose::STANDARD
                     .decode(result["data"].as_str().unwrap_or_default())?;
                 anyhow::ensure!(bytes.len() <= 4 * 1024 * 1024, "封面过大");
-                return Ok(Fetched::new(200, Default::default(), bytes));
+                return Ok(Fetched::new(
+                    200,
+                    nsh_core::image::CacheHeaders::from_pairs([("cache-control", "no-store")]),
+                    bytes,
+                ));
             }
             let client = Client::builder()
                 .timeout(Duration::from_secs(15))
@@ -58,11 +65,17 @@ impl Transport for Images {
                     continue;
                 }
                 let status = response.status().as_u16();
+                let headers = nsh_core::image::CacheHeaders::from_pairs(
+                    response
+                        .headers()
+                        .iter()
+                        .filter_map(|(name, value)| Some((name.as_str(), value.to_str().ok()?))),
+                );
                 let mut bytes = Vec::new();
                 response.take(4 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
                 anyhow::ensure!(bytes.len() <= 4 * 1024 * 1024, "封面过大");
                 (get.progress)(bytes.len() as u64, bytes.len() as u64);
-                return Ok(Fetched::new(status, Default::default(), bytes));
+                return Ok(Fetched::new(status, headers, bytes));
             }
             anyhow::bail!("封面跳转过多")
         };
