@@ -15,7 +15,6 @@ pub enum Page {
     Info,
     History,
     Album,
-    #[cfg_attr(target_os = "macos", allow(dead_code))] // Phone sources entry.
     Sources,
     Library,
     #[cfg(target_os = "macos")]
@@ -30,6 +29,8 @@ pub enum Page {
 pub struct Model {
     owner: Owner,
     pub status: Signal<Status>,
+    #[cfg(target_os = "macos")]
+    pub status_ready: Signal<bool>,
     pub page: Signal<Page>,
     #[cfg(target_os = "macos")]
     pub drawer_open: Signal<bool>,
@@ -82,6 +83,8 @@ impl Model {
         Self {
             owner: Owner::current(),
             status: signal(Status::default()),
+            #[cfg(target_os = "macos")]
+            status_ready: signal(false),
             page: signal(Page::Player),
             #[cfg(target_os = "macos")]
             drawer_open: signal(false),
@@ -272,6 +275,8 @@ impl Model {
             self.cover_failed.set(false);
         }
         self.status.set(status);
+        #[cfg(target_os = "macos")]
+        self.status_ready.set(true);
         #[cfg(target_os = "macos")]
         if changed || library_changed {
             if changed {

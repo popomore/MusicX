@@ -365,6 +365,7 @@ pub(super) fn shell(model: Model) -> impl IntoElement {
                                             Page::Info => "歌曲信息",
                                             Page::Lyrics => "歌词",
                                             Page::Settings => "设置",
+                                            Page::Sources => "音乐来源",
                                             Page::History => "播放历史",
                                             Page::Library => "我的歌单",
                                             Page::Queue => "正在播放",
@@ -401,6 +402,17 @@ pub(super) fn shell(model: Model) -> impl IntoElement {
                         .child(when(
                             move || model.page.get() == Page::Settings,
                             move || crate::sources_ui::settings_view(model),
+                        ))
+                        .child(when(
+                            move || model.page.get() == Page::Sources,
+                            move || {
+                                crate::source_browser::sources_view(
+                                    move || model.open(Page::Player),
+                                    move || model.open(Page::Library),
+                                    None,
+                                    crate::source_browser::Start::Catalog,
+                                )
+                            },
                         ))
                         .child(when(
                             move || model.page.get() == Page::Info,
@@ -450,6 +462,131 @@ pub(super) fn shell(model: Model) -> impl IntoElement {
 }
 
 pub(super) fn player(model: Model) -> impl IntoElement {
+    when(
+        move || model.status_ready.get(),
+        move || {
+            when(
+                move || model.status.with(|s| s.track.is_some()),
+                move || active_player(model),
+            )
+            .otherwise(move || empty_player(model))
+        },
+    )
+    .otherwise(move || {
+        view()
+            .flex_1()
+            .items_center()
+            .justify_center()
+            .gap(px(12.0))
+            .child(crate::controls::caption("正在连接播放器…"))
+            .child(when(
+                move || model.error.with(|error| !error.is_empty()),
+                move || crate::controls::caption(move || model.error.get()),
+            ))
+    })
+}
+
+fn setup_action(
+    label: &'static str,
+    primary: bool,
+    press: impl Fn() + 'static,
+) -> impl IntoElement {
+    button()
+        .accessibility_label(Some(label.into()))
+        .on_press(press)
+        .w_full()
+        .h(px(40.0))
+        .items_center()
+        .justify_center()
+        .rounded(px(7.0))
+        .bg(move || {
+            if primary {
+                theme().primary
+            } else {
+                theme().muted.opacity(0.55)
+            }
+        })
+        .hover(|s| s.opacity(0.86))
+        .active(|s| s.opacity(0.65))
+        .child(
+            text(label)
+                .text_size(px(13.0))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(move || {
+                    if primary {
+                        theme().primary_foreground
+                    } else {
+                        theme().foreground
+                    }
+                }),
+        )
+}
+
+fn empty_player(model: Model) -> impl IntoElement {
+    // This is an empty listening session, not an album or lyrics loading state.
+    view()
+        .flex_1()
+        .justify_center()
+        .pb(px(24.0))
+        .child(
+            view()
+                .items_center()
+                .child(
+                    svg(|| {
+                        ImageSrc::svg_markup(
+                            &include_str!("../../../../assets/musicx-mark.svg")
+                                .replace("#1b2421", "currentColor"),
+                        )
+                    })
+                    .w(px(56.0))
+                    .h(px(56.0))
+                    .text_color(move || theme().foreground)
+                    .label("MusicX"),
+                )
+                .child(
+                    text("从一首喜欢的歌开始")
+                        .mt(px(24.0))
+                        .text_size(px(22.0))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(move || theme().foreground),
+                )
+                .child(
+                    text("添加音乐来源，连接 Agent，\n让它为你选一首歌。")
+                        .mt(px(10.0))
+                        .text_size(px(13.0))
+                        .text_center()
+                        .number_of_lines(2)
+                        .text_color(move || theme().muted_foreground),
+                ),
+        )
+        .child(
+            view()
+                .mt(px(28.0))
+                .gap(px(8.0))
+                .child(setup_action("添加音乐来源", true, move || {
+                    model.open(Page::Sources)
+                }))
+                .child(setup_action("连接 Agent", false, move || {
+                    model.open(Page::Settings)
+                })),
+        )
+        .child(
+            view()
+                .items_center()
+                .mt(px(12.0))
+                .child(crate::controls::action(
+                    "打开我的歌单",
+                    || false,
+                    move || model.open(Page::Library),
+                )),
+        )
+        .child(when(
+            move || model.error.with(|error| !error.is_empty()),
+            move || crate::controls::caption(move || model.error.get()),
+        ))
+}
+
+fn active_player(model: Model) -> impl IntoElement {
     let playing = move || {
         model
             .status

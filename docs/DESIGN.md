@@ -5,6 +5,7 @@ MusicX keeps the current track in focus. The macOS panel is a transient view of 
 ## macOS layout
 
 - Use the warm surface and text colors in `assets/theme.json`, with system typography and album artwork as the main visual. The compact window is 320 × 512 points, with 24-point content insets and 248-point square artwork.
+- Before the first session snapshot arrives, show a connection state. A confirmed empty session shows the MusicX mark, a short introduction, and actions to add a music source, connect an agent, or open local playlists. Hide artwork placeholders, track metadata, lyrics and transport controls until there is a current track. Keep these actions available for returning users with an empty queue as well.
 - Keep track titles prominent. Place the artist and the linked album on one line and anchor the audio quality badge at the trailing edge. Use a tint on hover and a pressed state to identify clickable text. The title opens song information and the large cover opens the album.
 - Use a solid circular play or pause button and monochrome symbols for adjacent controls. Provide accessible labels and visible selected, pressed, and disabled states.
 - The MusicX mark consists of two crossing audio tracks. Its menu bar version is a fixed-width monochrome symbol. A small dot indicates playback and the tooltip carries the track and playback state. Regenerate the artwork with `sh assets/build-icons.sh`.
