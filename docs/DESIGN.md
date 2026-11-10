@@ -34,6 +34,40 @@ My Playlists opens in browse mode. Show the name, track count, and common play o
 
 Settings groups controls under Playback, MCP Connection, and Music Sources. MCP Connection shows the local endpoint and lets users copy a client configuration or bearer token. Source details show configuration fields, account actions, and import options according to capabilities. The add-source catalog shows compatibility and reasons an action is unavailable. Use secure fields for credentials and offer replacement controls for saved secrets. Cancel an unfinished sign-in when its view closes. Web sign-in runs in a temporary WebKit process and shows the website's domain.
 
+## Data models
+
+The source adapter, player, local library, and UI have different ownership. Shared wire types live in `crates/protocol`; a UI snapshot is not another owner of the listening session.
+
+| Model | Responsibility | Owner |
+| --- | --- | --- |
+| `Source` | A track locator: plugin ID plus the original string track ID. | Shared protocol |
+| `Track`, `Album`, `SourceLink` | Stable music metadata: title, artist, duration in seconds, artwork, album and source references. No resolved audio URL or credentials. | Shared protocol |
+| `Media` | A resolved playback request: full `Track`, temporary audio URL, supported headers and actual stream quality. | `crates/plugin-api` |
+| `Quality`, `AudioQuality` | Listener preference versus the actual source-reported format, bitrate, sample rate and bit depth. A preference never substitutes for measured/reported metadata. | Shared protocol / `crates/core` |
+| `Player`, `Action`, `Message` | The authoritative listening session and its commands: queue, current position, volume, playback transitions and asynchronous resolution. | `crates/core` |
+| `Status`, `QueueContext` | A session snapshot for clients and the origin of its independent queue snapshot. | Shared protocol |
+| `Session` | Durable queue, index, context, position and volume checkpoint. A restart restores paused and obtains a fresh stream on Play. | `crates/core` |
+| `LocalPlaylist`, `PlaylistOrigin` | Player-owned saved tracks, revisions, favorite/pinned state and optional import provenance. A local edit never changes the source playlist. | `crates/core` / shared protocol |
+| `HistoryEntry`, `HistoryProgress` | Each recorded play and its position, duration and completion state, separate from the current queue. | `crates/core` / shared protocol |
+| `MusicSource`, `MusicSourceCatalog` | Plugin descriptions, installation/compatibility state, capabilities, settings and discovery refresh state. | `crates/plugins` / shared protocol |
+| `SourceAccount`, `SourceLogin`, `SourcePlaylist` | Source-provided account state, temporary sign-in jobs and remote playlist descriptions. These do not own the player's session. | `crates/plugins` / shared protocol |
+
+`Source` identifies a track, `MusicSource` describes an installed or discoverable plugin, and `PlaylistOrigin` records where a local import came from. They are not interchangeable. The numeric `Track.id` remains for existing records; current source identity is carried by `Source(plugin, id)`, and a bare number never selects a source.
+
+```mermaid
+flowchart LR
+    Search[Source plugin search] --> Track
+    Track --> Commands[play_song / enqueue_song]
+    Commands --> Resolver[DataSource]
+    Resolver --> Media
+    Media --> Player
+    Player --> Audio[AudioOutput]
+    Player --> Status
+    Player --> Session
+```
+
+`DataSource` resolves playable media and supplies track/album information; it does not control the queue. `AudioOutput` implements platform playback without knowing plugin installation or account flows. The player also uses `DataSource` to obtain fresh media when resuming, advancing or changing quality. The panel's `Model` and browser signals are disposable view state, not a second player or persistent library.
+
 ## Runtime boundaries
 
 - `crates/core` owns session state and persistence. The core drives audio through `AudioOutput` and obtains media through `DataSource`. `crates/protocol` holds the shared types.
