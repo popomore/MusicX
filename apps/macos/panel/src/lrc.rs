@@ -17,7 +17,12 @@ pub struct Timeline {
 
 impl Timeline {
     pub fn from_lyrics(lyrics: &crate::protocol::Lyrics) -> Self {
-        if lyrics.lines.is_empty() {
+        if lyrics
+            .lines
+            .iter()
+            .take(MAX_CUES)
+            .all(|line| line.text.trim().is_empty())
+        {
             return Self::parse(&lyrics.text, &lyrics.translation);
         }
         let mut cues: Vec<_> = lyrics
@@ -200,6 +205,36 @@ fn parse(input: &str) -> Vec<Cue> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn textless_structured_lines_fall_back_to_lrc() {
+        use crate::protocol::{LyricLine, Lyrics};
+        let mut lyrics = Lyrics {
+            text: "[00:01]Hello".into(),
+            translation: "[00:01]你好".into(),
+            lines: vec![LyricLine {
+                start: 1000,
+                ..Default::default()
+            }],
+        };
+        for text in ["", " \t\n"] {
+            lyrics.lines[0].text = text.into();
+            let timeline = Timeline::from_lyrics(&lyrics);
+            assert_eq!(timeline.cues.len(), 1);
+            assert_eq!(timeline.cues[0].text, "Hello");
+            assert_eq!(timeline.cues[0].translation, "你好");
+        }
+        lyrics.lines[0].text.clear();
+        lyrics.lines.push(LyricLine {
+            start: 2250,
+            text: "Structured lyrics".into(),
+            ..Default::default()
+        });
+        let timeline = Timeline::from_lyrics(&lyrics);
+        assert_eq!(timeline.cues.len(), 2);
+        assert!(timeline.cues[0].text.is_empty());
+        assert_eq!(timeline.cues[1].text, "Structured lyrics");
+        assert_eq!(timeline.cues[1].ms, 2250);
+    }
     #[test]
     fn structured_words_preserve_punctuation_and_full_lines() {
         use crate::protocol::{LyricLine, LyricWord, Lyrics};
