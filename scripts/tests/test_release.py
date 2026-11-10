@@ -35,13 +35,20 @@ class ReleaseTests(unittest.TestCase):
             "GIT_COMMITTER_DATE": "2026-11-10T11:17:05+08:00",
         }
         self.env.pop("RELEASE_TAG", None)
+        self.manifest = self.root / "Cargo.toml"
+        self.manifest.write_text(
+            '[package]\nname = "musicx"\nversion = "0.2.0"\nedition = "2021"\n'
+            '[lib]\npath = "lib.rs"\n'
+        )
+        (self.root / "lib.rs").touch()
         self.git("init", "--quiet")
+        self.git("add", "Cargo.toml", "lib.rs")
         self.git("-c", "user.name=Release tests", "-c", "user.email=test@example.invalid",
                  "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false",
                  "commit", "--allow-empty", "--quiet", "-m", "Test source")
         self.sha = self.git("rev-parse", "HEAD").stdout.strip()
         self.env["SOURCE_SHA"] = self.sha
-        self.tag = self.sha[:4] + "-20261110031705"
+        self.tag = "v0.2.0.preview-20261110031705-" + self.sha[:4]
         self.dmg = self.root / "MusicX.dmg"
         self.dmg.write_bytes(b"installer fixture")
         digest = hashlib.sha256(self.dmg.read_bytes()).hexdigest()
@@ -68,10 +75,29 @@ class ReleaseTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         return result
 
-    def test_preview_tag_uses_four_commit_characters_and_utc_commit_time(self):
+    def test_preview_tag_uses_version_utc_commit_time_and_four_commit_characters(self):
         self.run_script("create-preview-tag.sh")
         self.assertEqual(self.state()["refs"], {self.tag: self.sha})
         self.assertEqual(self.output.read_text(), f"tag={self.tag}\n")
+
+    def test_preview_tag_follows_the_package_version(self):
+        self.manifest.write_text(self.manifest.read_text().replace('"0.2.0"', '"2.3.4"'))
+        self.git("add", "Cargo.toml")
+        self.git("-c", "user.name=Release tests", "-c", "user.email=test@example.invalid",
+                 "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false",
+                 "commit", "--quiet", "-m", "Bump version")
+        sha = self.git("rev-parse", "HEAD").stdout.strip()
+        self.env["SOURCE_SHA"] = sha
+        self.run_script("create-preview-tag.sh")
+        tag = "v2.3.4.preview-20261110031705-" + sha[:4]
+        self.assertEqual(self.state()["refs"], {tag: sha})
+        self.assertEqual(self.output.read_text(), f"tag={tag}\n")
+
+    def test_preview_tag_requires_the_musicx_package(self):
+        self.manifest.write_text(self.manifest.read_text().replace('"musicx"', '"other"'))
+        self.run_script("create-preview-tag.sh", success=False)
+        self.assertEqual(self.state()["calls"], [])
+        self.assertFalse(self.output.exists())
 
     def test_preview_tag_rerun_reuses_existing_ref(self):
         self.run_script("create-preview-tag.sh")
