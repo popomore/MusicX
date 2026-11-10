@@ -71,7 +71,7 @@ The macOS job validates the tagged commit and both package versions, then builds
 
 If publication fails after a successful build, rerun the failed jobs to reuse the same installer. Preview installers are retained for 14 days; tagged release installers are retained for seven days. The publisher reuses matching uploads and stops if the draft contains conflicting assets. After configuring Apple credentials, use the next version tag for the signed release.
 
-The local release automation tests require Python 3, Git, Bash, `jq`, and `sha256sum` (GNU coreutils) on `PATH`; the GitHub CLI fixture uses `jq` to filter responses. Run them with `python3 -m unittest discover -s scripts/tests -v`. They use a local Git repository and a file-backed GitHub CLI fixture, without creating remote tags or releases.
+The local release automation tests require Python 3.9 or later, Git, Bash, `jq`, and `sha256sum` (GNU coreutils) on `PATH`; the GitHub CLI fixture uses `jq` to filter responses. Run them with `python3 -m unittest discover -s scripts/tests -v`. They use a local Git repository and a file-backed GitHub CLI fixture, without creating remote tags or releases.
 
 ## Repository layout
 
