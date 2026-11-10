@@ -31,11 +31,34 @@ fn plugin(source: &str) -> Result<&str> {
 }
 
 fn script_words(source: &str) -> Vec<String> {
+    // Template text is inert, but every ${...} expression is JavaScript again.
+    // Keep those contexts on a heap stack rather than recursively scanning input.
+    enum Context {
+        Code(Option<usize>),
+        Template,
+    }
     let bytes = source.as_bytes();
+    let mut contexts = vec![Context::Code(None)];
     let mut at = 0;
     let mut words = Vec::new();
     while at < bytes.len() {
         let c = bytes[at];
+        if matches!(contexts.last(), Some(Context::Template)) {
+            match c {
+                b'\\' => at = (at + 2).min(bytes.len()),
+                b'`' => {
+                    contexts.pop();
+                    at += 1;
+                }
+                b'$' if bytes.get(at + 1) == Some(&b'{') => {
+                    contexts.push(Context::Code(Some(1)));
+                    words.push("{".into());
+                    at += 2;
+                }
+                _ => at += 1,
+            }
+            continue;
+        }
         if c == b'/' && bytes.get(at + 1) == Some(&b'/') {
             while at < bytes.len() && bytes[at] != b'\n' {
                 at += 1;
@@ -50,7 +73,14 @@ fn script_words(source: &str) -> Vec<String> {
             at = (at + 2).min(bytes.len());
             continue;
         }
-        if b"'\"`".contains(&c) {
+        if c == b'`' {
+            words.push("<literal>".into());
+            contexts.push(Context::Template);
+            at += 1;
+            continue;
+        }
+        if b"'\"".contains(&c) {
+            words.push("<literal>".into());
             at += 1;
             while at < bytes.len() {
                 if bytes[at] == b'\\' {
@@ -64,6 +94,60 @@ fn script_words(source: &str) -> Vec<String> {
             }
             continue;
         }
+        // Skip regular-expression contents where an expression can begin.
+        let expression_start = words.last().is_none_or(|word: &String| {
+            matches!(
+                word.as_str(),
+                "(" | "["
+                    | "{"
+                    | "="
+                    | ":"
+                    | ","
+                    | ";"
+                    | "!"
+                    | "?"
+                    | "&"
+                    | "|"
+                    | "return"
+                    | "throw"
+                    | "case"
+            )
+        });
+        if c == b'/' && expression_start {
+            words.push("<literal>".into());
+            at += 1;
+            let mut class = false;
+            while at < bytes.len() {
+                match bytes[at] {
+                    b'\\' => {
+                        at = (at + 2).min(bytes.len());
+                        continue;
+                    }
+                    b'[' => class = true,
+                    b']' => class = false,
+                    b'/' if !class => {
+                        at += 1;
+                        break;
+                    }
+                    _ => {}
+                }
+                at += 1;
+            }
+            while at < bytes.len() && bytes[at].is_ascii_alphabetic() {
+                at += 1;
+            }
+            continue;
+        }
+        if c.is_ascii_digit() {
+            words.push("<literal>".into());
+            at += 1;
+            while at < bytes.len()
+                && (bytes[at].is_ascii_alphanumeric() || b"._".contains(&bytes[at]))
+            {
+                at += 1;
+            }
+            continue;
+        }
         if c.is_ascii_alphabetic() || c == b'_' || c == b'$' {
             let start = at;
             at += 1;
@@ -74,8 +158,19 @@ fn script_words(source: &str) -> Vec<String> {
             }
             words.push(String::from_utf8_lossy(&bytes[start..at]).into_owned());
         } else {
-            if b"{}*,;.(".contains(&c) {
+            if b"{}[]()*,;.:=!?&|".contains(&c) {
                 words.push((c as char).to_string());
+            }
+            if let Some(Context::Code(Some(depth))) = contexts.last_mut() {
+                if c == b'{' {
+                    *depth += 1;
+                }
+                if c == b'}' {
+                    *depth -= 1;
+                    if *depth == 0 {
+                        contexts.pop();
+                    }
+                }
             }
             at += 1;
         }
@@ -95,9 +190,41 @@ pub(crate) fn declared_exports(source: &str) -> Vec<String> {
             if words.get(i).is_some_and(|v| v == "async") {
                 i += 1;
             }
-            if words.get(i).is_some_and(|v| {
-                matches!(v.as_str(), "function" | "const" | "let" | "class" | "var")
-            }) {
+            if words
+                .get(i)
+                .is_some_and(|v| matches!(v.as_str(), "const" | "let" | "var"))
+            {
+                i += 1;
+                let mut nesting = 0usize;
+                let mut binding = true;
+                while let Some(word) = words.get(i) {
+                    if nesting == 0
+                        && matches!(word.as_str(), ";" | "export" | "const" | "let" | "var")
+                    {
+                        break;
+                    }
+                    if nesting == 0 && binding {
+                        if word
+                            .as_bytes()
+                            .first()
+                            .is_some_and(|c| c.is_ascii_alphabetic() || b"_$".contains(c))
+                        {
+                            out.push(word.clone());
+                        }
+                        binding = false;
+                    }
+                    match word.as_str() {
+                        "{" | "[" | "(" => nesting += 1,
+                        "}" | "]" | ")" => nesting = nesting.saturating_sub(1),
+                        "," if nesting == 0 => binding = true,
+                        _ => {}
+                    }
+                    i += 1;
+                }
+            } else if words
+                .get(i)
+                .is_some_and(|v| matches!(v.as_str(), "function" | "class"))
+            {
                 i += 1;
                 if words.get(i).is_some_and(|v| v == "*") {
                     i += 1;
@@ -142,7 +269,14 @@ fn uses_module_imports(source: &str) -> bool {
     let words = script_words(source);
     words.iter().enumerate().any(|(at, word)| {
         if word == "import" {
-            return at == 0 || words[at - 1] != ".";
+            if words.get(at.wrapping_sub(1)).is_some_and(|v| v == ".")
+                || words
+                    .get(at + 1)
+                    .is_some_and(|v| matches!(v.as_str(), ":" | "."))
+            {
+                return false;
+            }
+            return true;
         }
         if word == "export" {
             if words.get(at + 1).is_some_and(|v| v == "*") {
@@ -158,6 +292,15 @@ fn uses_module_imports(source: &str) -> bool {
         }
         false
     })
+}
+
+fn check_single_file_script(source: &str) -> Result<()> {
+    check_script_syntax(source)?;
+    ensure!(
+        !uses_module_imports(source),
+        "此插件需要多个模块，当前支持单文件入口"
+    );
+    Ok(())
 }
 
 fn check_script_syntax(source: &str) -> Result<()> {
@@ -525,14 +668,10 @@ pub fn install(repository: &str) -> Result<MusicSource> {
         "来源超出当前宿主支持范围"
     );
     let code = std::str::from_utf8(&script).context("插件入口不是有效的 UTF-8")?;
-    check_script_syntax(code)?;
+    check_single_file_script(code)?;
     if row.discovered {
         row.manifest = serde_json::from_slice(&manifest)?;
         row.exports = declared_exports(code);
-        ensure!(
-            !uses_module_imports(code),
-            "此插件需要多个模块，当前支持单文件入口"
-        );
         ensure_installable(&row)?;
     } else {
         ensure!(
@@ -875,6 +1014,57 @@ mod tests {
             "// import 'fake';\nconst text = 'export * from fake'; export function search() { return Array.from([]); }"
         ));
         assert!(!uses_module_imports("const from = 1; export { from };"));
+    }
+
+    #[test]
+    fn imports_in_template_interpolations_are_rejected() {
+        for code in [
+            "export const stream = () => `${import('./helper.js')}`;",
+            "export const stream = () => `outer ${`inner ${import('./helper.js')}`}`;",
+            "export const stream = () => `${({ text: '}', module: import('./helper.js') })}`;",
+        ] {
+            assert!(check_script_syntax(code).is_ok(), "{code}");
+            assert!(uses_module_imports(code), "{code}");
+        }
+        assert!(!uses_module_imports(
+            "const text = `import('./helper.js') \\${ignored}`; export function stream() {}"
+        ));
+    }
+
+    #[test]
+    fn import_property_names_do_not_require_other_modules() {
+        for code in [
+            "const options = { import: false }; export function stream() {}",
+            "const options = { import: () => false }; export function stream() { return options.import(); }",
+            "export function stream() { return import.meta.url; }",
+        ] {
+            assert!(check_script_syntax(code).is_ok(), "{code}");
+            assert!(!uses_module_imports(code), "{code}");
+        }
+    }
+
+    #[test]
+    fn exported_variable_declarations_include_later_bindings() {
+        for declaration in ["const", "let", "var"] {
+            let code = format!(
+                "export {declaration} version = '1', options = {{a: [1,2]}}, stream = () => ({{url:'https://example.com/a.mp3'}}), search = () => [];"
+            );
+            assert!(check_script_syntax(&code).is_ok());
+            assert_eq!(
+                declared_exports(&code),
+                ["options", "search", "stream", "version"]
+            );
+        }
+        assert_eq!(
+            declared_exports("export const ratio = 4 / 2, stream = () => ({});"),
+            ["ratio", "stream"]
+        );
+    }
+
+    #[test]
+    fn installation_validation_rejects_dependencies_without_catalog_import_metadata() {
+        let code = "export function stream() { return import('./helper.js'); }";
+        assert!(check_single_file_script(code).is_err());
     }
 
     #[test]
