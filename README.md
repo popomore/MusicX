@@ -8,6 +8,10 @@
 
 MusicX is a native macOS menu bar player with support for media keys and macOS Now Playing.
 
+<p align="center">
+  <img src="assets/musicx-player.jpg" width="320" alt="MusicX player showing album artwork, synced lyrics, and playback controls">
+</p>
+
 ## Highlights
 
 - **Control playback through MCP.** Ask your agent to find songs, play or queue tracks, pause, skip, or adjust the volume. [Connect an MCP client](#connect-an-mcp-client)
