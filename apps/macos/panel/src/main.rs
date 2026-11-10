@@ -1,5 +1,6 @@
 mod controls;
 mod desktop;
+mod drawer;
 mod library;
 mod model;
 use musicx_protocol as protocol;

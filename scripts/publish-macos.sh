@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-tag=${GITHUB_REF_NAME:?}
+tag=${RELEASE_TAG:-${GITHUB_REF_NAME:?}}
 repo=${GITHUB_REPOSITORY:?}
 source_sha=${SOURCE_SHA:?}
 signing_mode=${SIGNING_MODE:?}
@@ -12,20 +12,24 @@ manifest='release-manifest.json'
 
 title="MusicX ${tag#v}"
 notes="Download MusicX for Apple Silicon and drag the app to Applications. Requires macOS 14 or later."
+prerelease=true
 case "$signing_mode" in
     ad-hoc)
-        prerelease=true
-        title+=" (Preview)"
         notes+=$'\n\nThis preview uses ad hoc signing. macOS may block it on first launch because it lacks Apple notarization.'
         ;;
     developer-id)
-        prerelease=false
+        if [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            prerelease=false
+        fi
         ;;
     *)
         echo "::error::Unknown macOS signing mode."
         exit 1
         ;;
 esac
+if [[ "$prerelease" == true ]]; then
+    title+=" (Preview)"
+fi
 
 sha256sum --check "$checksum"
 verify_tag() {
@@ -62,7 +66,7 @@ if [[ "$release" == null ]]; then
         jq -c '{id: .databaseId, draft: .isDraft, prerelease: .isPrerelease}')
 fi
 if ! jq -e --argjson prerelease "$prerelease" '.prerelease == $prerelease' <<< "$release" > /dev/null; then
-    echo "::error::The existing release type does not match this build's signing mode."
+    echo "::error::The existing release type does not match this tag and signing mode."
     exit 1
 fi
 release_id=$(jq -er .id <<< "$release")

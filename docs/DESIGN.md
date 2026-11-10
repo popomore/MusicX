@@ -16,7 +16,7 @@ The compact title bar uses the current track's thumbnail to open Now Playing. Us
 
 The 296-point details pane opens beside the 320-point player with a 12-point transparent gap. Both panes share one native window. Choose the side with more room on the current display, preferring the right on a tie. Keep the selected side while switching views and keep the main controls available throughout.
 
-Expand the host before sliding the pane in, and shrink it after the pane slides out. Escape, the close control, and the gap dismiss details. The thumbnail also toggles the pane when Now Playing is selected. An interrupted entrance returns to the compact size. Honor the system Reduce Motion setting.
+Expand the host before sliding the pane outward from the player: left details move left to open and right to close; right details do the reverse. Clip motion to the details region so the player and transparent gap stay clear, and shrink the host after the pane slides back toward the player. Escape, the close control, and the gap dismiss details. The thumbnail also toggles the pane when Now Playing is selected. An interrupted entrance returns to the compact size. Honor the system Reduce Motion setting.
 
 Both the NSWindow and its NSH host container must be transparent so the desktop shows through the rounded corners and the gap. Check this on a colored desktop or with native layer inspection.
 

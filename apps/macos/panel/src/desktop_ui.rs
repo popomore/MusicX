@@ -5,7 +5,7 @@ use crate::{
     protocol::{State, Track},
     remote::{Action, submit},
 };
-use nsh_base::{SliderValue, button, sheet, slider, theme};
+use nsh_base::{SliderValue, button, slider, theme};
 use nsh_core::{element::ImageSrc, prelude::*};
 
 #[derive(Clone, Copy)]
@@ -304,37 +304,14 @@ pub(super) fn shell(model: Model) -> impl IntoElement {
                 .child(player(model)),
         )
         .child(
-            sheet()
+            crate::drawer::details_drawer()
                 .open(move || {
-                    Some(
-                        model.drawer_open.get()
-                            && window().width.0 >= crate::desktop::EXPANDED_WIDTH - 1.0,
-                    )
+                    model.drawer_open.get()
+                        && window().width.0 >= crate::desktop::EXPANDED_WIDTH - 1.0
                 })
-                .side(move || {
-                    if model.details_left.get() {
-                        Placement::Left
-                    } else {
-                        Placement::Right
-                    }
-                })
-                .popup_style(move |s| {
-                    s.top(px(0.0))
-                        .w(px(crate::desktop::DETAILS_WIDTH))
-                        .bg(theme().background)
-                        .rounded(px(16.0))
-                })
-                // Only the outside gap is a dismiss target. The complete
-                // player stays visible and interactive beside the details.
-                .backdrop_style(move |s| {
-                    if model.details_left.get() {
-                        s.right(px(crate::desktop::PLAYER_WIDTH))
-                    } else {
-                        s.left(px(crate::desktop::PLAYER_WIDTH))
-                    }
-                })
-                .on_open_change(move |event: &nsh_base::SheetEvent| {
-                    if matches!(event, nsh_base::SheetEvent::OpenChange(false, _)) {
+                .left(move || model.details_left.get())
+                .on_open_change(move |open: &bool| {
+                    if !open {
                         model.open(Page::Player);
                     }
                 })

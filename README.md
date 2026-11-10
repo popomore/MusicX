@@ -11,7 +11,7 @@ MusicX is a native macOS menu bar player with support for media keys and macOS N
 ## Highlights
 
 - **Control playback through MCP.** Ask your agent to find songs, play or queue tracks, pause, skip, or adjust the volume. [Connect an MCP client](#connect-an-mcp-client)
-- **Add music sources with MyGo plugins.** Browse the catalog or enter a GitHub repository to add a compatible source. Install them from **Settings → Music Sources**.
+- **Add music sources with MyGo plugins.** Browse [MyGo music plugins](https://github.com/topics/mygo-music-plugin) or enter a GitHub repository to add a compatible source. Install them from **Settings → Music Sources**.
 - **Low memory usage.** Closing the player window frees its UI memory while a lightweight helper keeps playback and MCP available.
 
 > “Play a track by Jay Chou and queue two more.”
@@ -47,3 +47,11 @@ MusicX uses only its current data directory and application identity. Previous a
 ## Project guides
 
 [Development guide](docs/DEVELOPMENT.md) · [Design guide](docs/DESIGN.md) · [Product overview](docs/PRODUCT.md) · [iPhone build guide](apps/ios/README.md)
+
+## Acknowledgments
+
+Thank you to [MyGo Music](https://github.com/egoist/mygo-music), its authors, and the plugin contributors for the plugin APIs and ecosystem that MusicX supports. Browse [MyGo music plugins](https://github.com/topics/mygo-music-plugin) or read the [MyGo plugin development guide](https://github.com/egoist/mygo-music#plugins).
+
+## License
+
+MusicX is licensed under the [MIT License](LICENSE). Third-party dependencies and vendored code retain their respective licenses.

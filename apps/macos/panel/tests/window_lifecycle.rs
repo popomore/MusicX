@@ -6,6 +6,8 @@ mod controls;
 #[path = "../src/desktop.rs"]
 #[allow(dead_code)] // The custom harness doesn't run embedded geometry unit tests.
 mod desktop;
+#[path = "../src/drawer.rs"]
+mod drawer;
 #[path = "../src/library.rs"]
 mod library;
 #[path = "../src/model.rs"]

@@ -41,9 +41,13 @@ xcrun stapler validate target/distribution/MusicX-release.dmg
 
 ## Build and publish with GitHub Actions
 
-The macOS CI workflow runs formatting and workspace tests on pull requests and pushes to `main`. Download the Apple Silicon DMG and its SHA-256 checksum from the successful run's **Artifacts** section. These builds use ad hoc signing for testing. [macOS CI](../.github/workflows/ci-macos.yml)
+The macOS CI workflow runs formatting, workspace tests, and release automation tests on pull requests and pushes to `main`. Download the Apple Silicon DMG and its SHA-256 checksum from the successful run's **Artifacts** section. These builds use ad hoc signing for testing. Pull requests do not publish releases. [macOS CI](../.github/workflows/ci-macos.yml)
 
-The release workflow runs when a stable version tag is pushed. GitHub Actions supplies the repository token for publishing. [Release workflow](../.github/workflows/release-macos.yml)
+After a successful push to `main`, CI reuses that run's installer to create a tag and publish a GitHub **Pre-release**. The tag combines the first four commit characters and the commit's UTC timestamp as `<commit>-<YYYYMMDDHHMMSS>`, for example `4e76-20261110031705`. Rerunning the same commit reuses its tag and verified uploads; a tag pointing to a different commit fails. New main builds do not cancel earlier main runs, and publishing is queued with formal releases.
+
+GitHub Actions supplies the repository token for creating tags and publishing. The preview is published in the same workflow: [tags created using `GITHUB_TOKEN` do not trigger another push workflow](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow#triggering-a-workflow-from-a-workflow).
+
+The separate release workflow runs when a stable version tag is pushed. [Release workflow](../.github/workflows/release-macos.yml)
 
 With all six Apple secrets unset, the workflow builds an ad hoc signed DMG and publishes it as a GitHub prerelease. macOS may block this preview on first launch because it lacks notarization. Configure all six repository Actions secrets to sign and notarize future tagged releases with Developer ID. A partial configuration fails before the build.
 
@@ -56,7 +60,7 @@ With all six Apple secrets unset, the workflow builds an ad hoc signed DMG and p
 | `APPLE_API_KEY` | App Store Connect API key ID |
 | `APPLE_API_ISSUER` | App Store Connect API issuer ID |
 
-MusicX uses manual stable tags. Tag a commit on `main` with a version that matches `apps/macos/helper/Cargo.toml` and `crates/platform-apple/Cargo.toml`. For version 0.2.0, push `v0.2.0`.
+Formal releases use manual stable tags. Tag a commit on `main` with a version that matches `apps/macos/helper/Cargo.toml` and `crates/platform-apple/Cargo.toml`. For version 0.2.0, push `v0.2.0`. Only a stable `vX.Y.Z` tag with a Developer ID signed and notarized installer becomes a regular release. Non-stable tags and ad hoc signed builds are always marked **Pre-release**.
 
 ```sh
 git tag -a v0.2.0 -m "MusicX 0.2.0"
@@ -65,7 +69,9 @@ git push origin v0.2.0
 
 The macOS job validates the tagged commit and both package versions, then builds the DMG for the selected signing mode. For Developer ID builds it signs, notarizes, and staples the installer. The publish job verifies the checksum and uploads the installer, checksum, and `release-manifest.json` to a draft. It checks the GitHub asset digests before publishing and retains a copy of the manifest for 90 days. The manifest records the signing mode.
 
-If publication fails after a successful build, rerun the failed jobs to reuse the same installer. The build artifact is retained for seven days. The publisher reuses matching uploads and stops if the draft contains conflicting assets. After configuring Apple credentials, use the next version tag for the signed release.
+If publication fails after a successful build, rerun the failed jobs to reuse the same installer. Preview installers are retained for 14 days; tagged release installers are retained for seven days. The publisher reuses matching uploads and stops if the draft contains conflicting assets. After configuring Apple credentials, use the next version tag for the signed release.
+
+The local release automation tests require Python 3.9 or later, Git, Bash, `jq`, and `sha256sum` (GNU coreutils) on `PATH`; the GitHub CLI fixture uses `jq` to filter responses. Run them with `python3 -m unittest discover -s scripts/tests -v`. They use a local Git repository and a file-backed GitHub CLI fixture, without creating remote tags or releases.
 
 ## Repository layout
 

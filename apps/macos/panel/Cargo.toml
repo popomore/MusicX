@@ -2,6 +2,7 @@
 name = "musicx-panel"
 version = "0.2.0"
 edition = "2024"
+license = "MIT"
 rust-version = "1.97"
 publish = false
 
@@ -25,3 +26,5 @@ tokio = { version = "1", features = ["sync"] }
 
 [dev-dependencies]
 musicx-platform-apple = { path = "../../../crates/platform-apple" }
+nsh-engine = { version = "=0.4.0", default-features = false }
+nsh-testing = { version = "=0.4.0", default-features = false }
