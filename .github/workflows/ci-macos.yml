@@ -55,3 +55,7 @@ jobs:
 
       - name: Test workspace
         run: cargo test --locked --workspace
+
+      - name: Check iOS workspace lockfile
+        working-directory: apps/ios
+        run: cargo metadata --locked --format-version 1 > /dev/null

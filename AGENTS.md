@@ -4,6 +4,7 @@
 - 正式发布 tag 使用 `vX.Y.Z` 格式，例如 `v1.0.0`。用户要求推送时，只推送该 tag。
 - 发布前同步 `origin/main`，确认待发布提交已在 `main` 上，且对应提交的 CI 已通过。
 - 发布版本以 tag 为唯一来源，不在 Cargo 清单、锁文件或源码中维护当前发布版本；发布时无需修改 Cargo 包版本。Cargo 的 `version` 只用于内部包元数据。依赖变更时仍须同步根目录的 `Cargo.lock` 和独立 iOS workspace 的 `apps/ios/Cargo.lock`。
+- 操作或校验 iOS 锁文件时必须在 `apps/ios` 目录内执行 Cargo，让其加载该目录的 `.cargo/config.toml` 本地补丁；从根目录使用 `--manifest-path` 不能替代这一工作目录。
 - 合法格式为正式版 `vX.Y.Z` 或预览版 `vX.Y.Z.preview-YYYYMMDDHHMMSS-SHA4`，其中 X/Y/Z 为无前导零的非负整数。预览 tag 的 UTC 时间与四位小写 SHA 必须对应源提交。
 - 根 workspace 成员通过 `rust-version.workspace = true` 继承根 `[workspace.package].rust-version` 声明的最低 Rust 版本。实际编译器版本及所需组件由根 `rust-toolchain.toml` 固定；CI 使用 `rustup toolchain install --no-self-update` 读取它，避免在 workflow 中重复声明版本。
 - `scripts/release-tag.sh` 只校验 tag 与提交身份，不读取 Cargo 版本。发布前应在待发布提交的干净检出中运行校验。
