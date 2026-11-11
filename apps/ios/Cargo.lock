@@ -1936,7 +1936,7 @@ dependencies = [
 
 [[package]]
 name = "musicx-platform-apple"
-version = "1.0.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",

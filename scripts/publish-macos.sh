@@ -6,6 +6,7 @@ repo=${GITHUB_REPOSITORY:?}
 source_sha=${SOURCE_SHA:?}
 signing_mode=${SIGNING_MODE:?}
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+channel=$(bash "$script_dir/release-tag.sh" "$source_sha" "$tag")
 cd "$(dirname "$1")"
 dmg=$(basename "$1")
 checksum="$dmg.sha256"
@@ -14,15 +15,18 @@ manifest='release-manifest.json'
 title="MusicX ${tag#v}"
 notes="Download MusicX for Apple Silicon and drag the app to Applications. Requires macOS 14 or later."
 prerelease=true
+if [[ "$channel" == stable ]]; then
+    if [[ "$signing_mode" != developer-id ]]; then
+        echo '::error::Stable tags require Developer ID signing and notarization.' >&2
+        exit 1
+    fi
+    prerelease=false
+fi
 case "$signing_mode" in
     ad-hoc)
         notes+=$'\n\nThis preview uses ad hoc signing. macOS may block it on first launch because it lacks Apple notarization.'
         ;;
-    developer-id)
-        if [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            prerelease=false
-        fi
-        ;;
+    developer-id) ;;
     *)
         echo "::error::Unknown macOS signing mode."
         exit 1
