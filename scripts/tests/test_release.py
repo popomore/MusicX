@@ -62,7 +62,26 @@ class ReleaseTests(unittest.TestCase):
         self.dmg.write_bytes(b"installer fixture")
         digest = hashlib.sha256(self.dmg.read_bytes()).hexdigest()
         self.dmg.with_suffix(".dmg.sha256").write_text(f"{digest}  {self.dmg.name}\n")
+        self.prepare_appcast()
         self.save({"refs": {}, "release": None, "calls": []})
+
+    def prepare_appcast(self):
+        import base64
+        key = self.root / "test-key.pem"
+        subprocess.run(["openssl", "genpkey", "-algorithm", "ED25519", "-out", str(key)],
+                       check=True, capture_output=True)
+        public = subprocess.run(["openssl", "pkey", "-in", str(key), "-pubout", "-outform", "DER"],
+                                check=True, capture_output=True).stdout[-32:]
+        self.env["MUSICX_SPARKLE_PUBLIC_KEY"] = base64.b64encode(public).decode()
+        signature = self.root / "signature"
+        subprocess.run(["openssl", "pkeyutl", "-sign", "-inkey", str(key), "-rawin",
+                        "-in", str(self.dmg), "-out", str(signature)], check=True, capture_output=True)
+        self.appcast = self.root / "appcast.xml"
+        self.appcast.write_text(f'''<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+<channel><item><sparkle:version>0.2.0</sparkle:version>
+<enclosure url="https://github.com/test/musicx/releases/download/v0.2.0/{self.dmg.name}"
+length="{self.dmg.stat().st_size}" sparkle:edSignature="{base64.b64encode(signature.read_bytes()).decode()}"/>
+</item></channel></rss>''')
 
     def git(self, *args):
         return subprocess.run(["git", *args], cwd=self.root, env=self.env, text=True,
@@ -199,7 +218,42 @@ class ReleaseTests(unittest.TestCase):
                 self.assertEqual(release["prerelease"], prerelease)
                 self.assertEqual("(Preview)" in release["title"], prerelease)
                 self.assertFalse(release["draft"])
-                self.assertEqual(len(release["assets"]), 3)
+                self.assertEqual(len(release["assets"]), 3 if prerelease else 4)
+
+    def test_stable_release_requires_a_signed_appcast(self):
+        self.env.update(RELEASE_TAG="v0.2.0", SIGNING_MODE="developer-id")
+        self.appcast.unlink()
+        self.run_script("publish-macos.sh", self.dmg, success=False)
+        self.assertEqual(self.state()["calls"], [])
+
+    def test_stable_release_rejects_invalid_update_feed(self):
+        self.env.update(RELEASE_TAG="v0.2.0", SIGNING_MODE="developer-id")
+        original = self.appcast.read_text()
+        variants = [
+            original.replace("releases/download/v0.2.0", "releases/download/v0.1.0"),
+            original.replace(">0.2.0<", ">0.3.0<"),
+            original.replace(f'length="{self.dmg.stat().st_size}"', 'length="0"'),
+            original.replace("<enclosure", '<sparkle:channel>preview</sparkle:channel><enclosure'),
+        ]
+        for invalid in variants:
+            self.appcast.write_text(invalid)
+            self.run_script("publish-macos.sh", self.dmg, success=False)
+            self.assertEqual(self.state()["calls"], [])
+
+    def test_stable_release_rejects_another_signing_key(self):
+        self.env.update(RELEASE_TAG="v0.2.0", SIGNING_MODE="developer-id")
+        import base64
+        self.env["MUSICX_SPARKLE_PUBLIC_KEY"] = base64.b64encode(bytes(32)).decode()
+        self.run_script("publish-macos.sh", self.dmg, success=False)
+        self.assertEqual(self.state()["calls"], [])
+
+    def test_stable_release_rejects_altered_signed_installer(self):
+        self.env.update(RELEASE_TAG="v0.2.0", SIGNING_MODE="developer-id")
+        self.dmg.write_bytes(b"Installer fixture")
+        digest = hashlib.sha256(self.dmg.read_bytes()).hexdigest()
+        self.dmg.with_suffix(".dmg.sha256").write_text(f"{digest}  {self.dmg.name}\n")
+        self.run_script("publish-macos.sh", self.dmg, success=False)
+        self.assertEqual(self.state()["calls"], [])
 
     def test_stable_workflow_can_use_github_ref_name(self):
         self.env.update(GITHUB_REF_NAME="v0.2.0", SIGNING_MODE="developer-id")

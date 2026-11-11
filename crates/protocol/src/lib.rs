@@ -27,6 +27,11 @@ pub fn panel_reopen_notification() -> String {
     component_app_id("panel.reopen")
 }
 
+#[cfg(target_os = "macos")]
+pub fn check_updates_notification() -> String {
+    component_app_id("updates.check")
+}
+
 #[cfg(not(target_os = "ios"))]
 pub const ADDRESS: &str = match option_env!("MUSICX_BUILD_ADDRESS") {
     Some(address) => address,

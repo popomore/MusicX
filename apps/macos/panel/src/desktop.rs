@@ -153,6 +153,8 @@ define_class!(
         }
         #[unsafe(method(quit:))]
         fn quit(&self, _sender: Option<&AnyObject>) { crate::remote::quit_background(); }
+        #[unsafe(method(checkForUpdates:))]
+        fn check_updates(&self, _sender: Option<&AnyObject>) { crate::updates::check(); }
     }
     unsafe impl NSApplicationDelegate for PanelDelegate {
         #[unsafe(method(applicationDidFinishLaunching:))]
@@ -238,6 +240,14 @@ pub fn run_panel() -> ExitCode {
     bar.addItem(&holder);
     let menu = NSMenu::new(mtm);
     menu.setAutoenablesItems(false);
+    item(
+        &menu,
+        &delegate,
+        "检查更新…",
+        Some(sel!(checkForUpdates:)),
+        "",
+    );
+    menu.addItem(&NSMenuItem::separatorItem(mtm));
     item(&menu, &delegate, "关闭面板", Some(sel!(closePanel:)), "w");
     item(&menu, &delegate, "退出 MusicX", Some(sel!(quit:)), "q");
     holder.setSubmenu(Some(&menu));

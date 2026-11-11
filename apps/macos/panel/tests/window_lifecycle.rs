@@ -23,6 +23,8 @@ mod source_browser;
 mod sources_ui;
 #[path = "../src/ui.rs"]
 mod ui;
+#[path = "../src/updates.rs"]
+mod updates;
 use musicx_protocol as protocol;
 use nsh_platform_macos::objc2_app_kit::*;
 use objc2::{MainThreadMarker, rc::Retained};
