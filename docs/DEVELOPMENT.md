@@ -50,15 +50,13 @@ xcrun stapler validate target/distribution/MusicX-release.dmg
 
 ## Build and publish with GitHub Actions
 
-The macOS CI workflow runs formatting, workspace tests, and release automation tests on pull requests and pushes to `main`. Download the Apple Silicon DMG and its SHA-256 checksum from the successful run's **Artifacts** section. These builds use ad hoc signing for testing. Pull requests do not publish releases. [macOS CI](../.github/workflows/ci-macos.yml)
+The macOS CI workflow runs formatting, workspace tests, and release automation tests on pull requests and pushes to `main`. [macOS CI](../.github/workflows/ci-macos.yml)
 
-After a successful push to `main`, CI reuses that run's installer to create a tag and publish a GitHub **Pre-release**. The tag combines the `musicx` package version from Cargo metadata, the commit's UTC timestamp, and the first four commit characters as `v<version>.preview-<YYYYMMDDHHMMSS>-<commit>`, for example `v0.2.0.preview-20261110085445-a87b`. Rerunning the same commit reuses its tag and verified uploads; a tag pointing to a different commit fails. New main builds do not cancel earlier main runs, and publishing is queued with formal releases.
+After CI passes for a push to `main`, the Tag macOS Preview workflow creates a tag on the tested commit. The tag combines the application version, the commit's UTC timestamp, and the first four commit characters as `v<version>.preview-<YYYYMMDDHHMMSS>-<commit>`, for example `v0.2.0.preview-20261110085445-a87b`. A rerun reuses the tag when it points to the same commit. [Tag macOS Preview](../.github/workflows/tag-macos-preview.yml)
 
-GitHub Actions supplies the repository token for creating tags and publishing. The preview is published in the same workflow: [tags created using `GITHUB_TOKEN` do not trigger another push workflow](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow#triggering-a-workflow-from-a-workflow).
+Tag macOS Preview dispatches Release macOS with the new tag as its ref because [tags created using `GITHUB_TOKEN` do not trigger another push workflow](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow#triggering-a-workflow-from-a-workflow). Manually pushing a version tag starts Release macOS through the tag push event. [Release workflow](../.github/workflows/release-macos.yml)
 
-The separate release workflow runs when a stable version tag is pushed; it excludes `v*.preview-*` tags. [Release workflow](../.github/workflows/release-macos.yml)
-
-With all six Apple secrets unset, the workflow builds an ad hoc signed DMG and publishes it as a GitHub prerelease. macOS may block this preview on first launch because it lacks notarization. Configure all six repository Actions secrets to sign and notarize future tagged releases with Developer ID. A partial configuration fails before the build.
+Release macOS builds an ad hoc signed DMG for preview tags and publishes it as a GitHub Pre-release. macOS may block it on first launch because it lacks notarization. Stable tags use Developer ID signing and notarization when all six repository Actions secrets are configured. With all six unset, a stable tag also produces an ad hoc signed Pre-release. A partial configuration fails before the build of a stable tag.
 
 | Secret | Value |
 | --- | --- |

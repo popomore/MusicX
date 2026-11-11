@@ -39,10 +39,19 @@ class ReleaseTests(unittest.TestCase):
         self.manifest.write_text(
             '[package]\nname = "musicx"\nversion = "0.2.0"\nedition = "2021"\n'
             '[lib]\npath = "lib.rs"\n'
+            '[workspace]\nmembers = ["bundle"]\n'
         )
         (self.root / "lib.rs").touch()
+        bundle = self.root / "bundle"
+        bundle.mkdir()
+        self.bundle_manifest = bundle / "Cargo.toml"
+        self.bundle_manifest.write_text(
+            '[package]\nname = "musicx-platform-apple"\nversion = "0.2.0"\nedition = "2021"\n'
+            '[lib]\npath = "lib.rs"\n'
+        )
+        (bundle / "lib.rs").touch()
         self.git("init", "--quiet")
-        self.git("add", "Cargo.toml", "lib.rs")
+        self.git("add", "Cargo.toml", "lib.rs", "bundle")
         self.git("-c", "user.name=Release tests", "-c", "user.email=test@example.invalid",
                  "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false",
                  "commit", "--allow-empty", "--quiet", "-m", "Test source")
@@ -81,8 +90,9 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(self.output.read_text(), f"tag={self.tag}\n")
 
     def test_preview_tag_follows_the_package_version(self):
-        self.manifest.write_text(self.manifest.read_text().replace('"0.2.0"', '"2.3.4"'))
-        self.git("add", "Cargo.toml")
+        for manifest in (self.manifest, self.bundle_manifest):
+            manifest.write_text(manifest.read_text().replace('"0.2.0"', '"2.3.4"'))
+        self.git("add", "Cargo.toml", "bundle/Cargo.toml")
         self.git("-c", "user.name=Release tests", "-c", "user.email=test@example.invalid",
                  "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false",
                  "commit", "--quiet", "-m", "Bump version")
@@ -126,6 +136,23 @@ class ReleaseTests(unittest.TestCase):
         self.save({"refs": {self.tag + "-other": "f" * 40}, "release": None, "calls": []})
         self.run_script("create-preview-tag.sh")
         self.assertEqual(self.state()["refs"][self.tag], self.sha)
+
+    def test_release_routes_preview_and_stable_tags(self):
+        for tag, channel in ((self.tag, "preview"), ("v0.2.0", "stable")):
+            with self.subTest(tag=tag):
+                result = self.run_script("release-tag.sh", self.sha, tag)
+                self.assertEqual(result.stdout.strip(), channel)
+
+    def test_release_rejects_tags_for_another_version_or_commit(self):
+        other_commit = "ffff" if self.sha.startswith("0000") else "0000"
+        for tag in ("v0.2.1", self.tag[:-4] + other_commit):
+            with self.subTest(tag=tag):
+                self.run_script("release-tag.sh", self.sha, tag, success=False)
+
+    def test_preview_tag_rejects_mismatched_bundle_version(self):
+        self.bundle_manifest.write_text(self.bundle_manifest.read_text().replace('"0.2.0"', '"0.2.1"'))
+        self.run_script("create-preview-tag.sh", success=False)
+        self.assertEqual(self.state()["calls"], [])
 
     def test_release_type_depends_on_tag_and_signing(self):
         """Check release metadata across stable and preview signing combinations."""

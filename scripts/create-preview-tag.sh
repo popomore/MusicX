@@ -9,10 +9,7 @@ if [[ "$(git rev-parse HEAD)" != "$source_sha" ]]; then
     echo "::error::The checkout does not match the preview build."
     exit 1
 fi
-metadata=$(cargo metadata --locked --no-deps --format-version 1)
-version=$(jq -er '.packages[] | select(.name == "musicx") | .version' <<< "$metadata")
-timestamp=$(TZ=UTC git show -s --format=%cd --date=format-local:%Y%m%d%H%M%S "$source_sha")
-tag="v$version.preview-$timestamp-${source_sha:0:4}"
+tag=$(bash "$(dirname "$0")/release-tag.sh" "$source_sha")
 
 existing=$(gh api "repos/$repo/git/matching-refs/tags/$tag" \
     --jq ".[] | select(.ref == \"refs/tags/$tag\") | .ref")

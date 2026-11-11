@@ -16,7 +16,6 @@ concurrency:
 env:
   CARGO_INCREMENTAL: '0'
   MACOSX_DEPLOYMENT_TARGET: '14.0'
-  DMG: target/distribution/MusicX-macos-arm64.dmg
 
 jobs:
   release-tests:
@@ -29,11 +28,9 @@ jobs:
       - name: Test release automation
         run: python3 -m unittest discover -s scripts/tests -v
 
-  build:
+  test:
     runs-on: macos-15
     timeout-minutes: 45
-    outputs:
-      artifact-id: ${{ steps.artifacts.outputs.artifact-id }}
     defaults:
       run:
         shell: bash
@@ -51,73 +48,3 @@ jobs:
         run: |
           cargo fmt --all -- --check
           cargo test --release --locked --workspace
-
-      - name: Package Apple Silicon DMG
-        run: |
-          test "$(uname -m)" = arm64
-          sh scripts/package-macos.sh "$DMG"
-          hdiutil verify -quiet "$DMG"
-
-      - name: Write checksum
-        run: |
-          cd "$(dirname "$DMG")"
-          name=$(basename "$DMG")
-          shasum -a 256 "$name" > "$name.sha256"
-
-      - id: artifacts
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: MusicX-macos-arm64
-          path: |
-            ${{ env.DMG }}
-            ${{ env.DMG }}.sha256
-          compression-level: 0
-          if-no-files-found: error
-          retention-days: 14
-
-  publish-preview:
-    needs: [build, release-tests]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: write
-    concurrency:
-      group: release-macos
-      cancel-in-progress: false
-      queue: max
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          artifact-ids: ${{ needs.build.outputs.artifact-id }}
-          path: target/distribution
-
-      - name: Create preview tag
-        id: tag
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SOURCE_SHA: ${{ github.sha }}
-        run: |
-          (cd "$(dirname "$DMG")" && sha256sum --check "$(basename "$DMG").sha256")
-          bash scripts/create-preview-tag.sh
-
-      - name: Verify and publish the preview
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SOURCE_SHA: ${{ github.sha }}
-          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
-          SIGNING_MODE: ad-hoc
-        run: bash scripts/publish-macos.sh "$DMG"
-
-      - name: Preserve the release manifest
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: release-manifest-macos-${{ github.run_attempt }}
-          path: target/distribution/release-manifest.json
-          if-no-files-found: error
-          retention-days: 90
