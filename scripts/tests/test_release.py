@@ -284,6 +284,26 @@ length="{self.dmg.stat().st_size}" sparkle:edSignature="{base64.b64encode(signat
         manifest = json.loads((self.root / "release-manifest.json").read_text())
         self.assertEqual(manifest["signing_mode"], "ad-hoc")
 
+    def test_ad_hoc_publication_preserves_the_signed_latest_feed(self):
+        self.env.update(RELEASE_TAG="v0.2.0", SIGNING_MODE="ad-hoc")
+        self.appcast.unlink()
+        signed = {"id": 2, "tag_name": "v0.1.0", "draft": False, "prerelease": False,
+                  "assets": [{"name": "appcast.xml"}]}
+        draft = {"id": 1, "tag_name": "v0.2.0", "draft": True, "prerelease": False,
+                 "assets": []}
+        for existing in (None, draft):
+            with self.subTest(resume_draft=existing is not None):
+                self.save({"refs": {"v0.2.0": self.sha}, "release": existing,
+                           "prior_releases": [signed], "latest_tag": "v0.1.0", "calls": []})
+                self.run_script("publish-macos.sh", self.dmg)
+                latest = subprocess.run(
+                    ["gh", "api", "repos/test/musicx/releases/latest"],
+                    env=self.env, cwd=self.root, capture_output=True, text=True, check=True,
+                )
+                release = json.loads(latest.stdout)
+                self.assertEqual(release["tag_name"], "v0.1.0")
+                self.assertIn("appcast.xml", {a["name"] for a in release["assets"]})
+
     def test_publishing_rejects_invalid_tags_before_calling_github(self):
         for tag in ("garbage", "v01.0.0", "v0.2.0-rc.1"):
             with self.subTest(tag=tag):
@@ -301,6 +321,7 @@ length="{self.dmg.stat().st_size}" sparkle:edSignature="{base64.b64encode(signat
         self.assertEqual(manifest["version"], "3.4.5")
         self.assertEqual(manifest["tag"], tag)
         self.assertFalse(self.state()["release"]["prerelease"])
+        self.assertEqual(self.state()["latest_tag"], tag)
 
     def test_stable_release_requires_a_signed_appcast(self):
         self.env.update(RELEASE_TAG="v0.2.0", SIGNING_MODE="developer-id")
