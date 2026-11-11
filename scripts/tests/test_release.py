@@ -174,7 +174,7 @@ length="{self.dmg.stat().st_size}" sparkle:edSignature="{base64.b64encode(signat
     def test_release_routes_preview_and_stable_tags(self):
         for tag, channel in ((self.tag, "preview"), ("v0.2.0", "stable")):
             with self.subTest(tag=tag):
-                result = self.run_script("release-tag.sh", self.sha, tag)
+                result = self.run_script("validate-release-tag.sh", self.sha, tag)
                 self.assertEqual(result.stdout.strip(), channel)
 
     def test_release_version_comes_only_from_the_tag_without_cargo(self):
@@ -182,14 +182,14 @@ length="{self.dmg.stat().st_size}" sparkle:edSignature="{base64.b64encode(signat
         self.bundle_manifest.unlink()
         for version in ("0.0.0", "1.0.0", "1.0.1", "12.34.56"):
             with self.subTest(version=version):
-                result = self.run_script("release-tag.sh", self.sha, f"v{version}", "--github-output")
+                result = self.run_script("validate-release-tag.sh", self.sha, f"v{version}", "--github-output")
                 self.assertEqual(result.stdout, f"sha={self.sha}\nchannel=stable\nversion={version}\n")
 
     def test_release_rejects_noncanonical_tags(self):
         for tag in ("", "1.0.0", "v1", "v1.0", "v1.0.0.0", "v01.0.0", "v1.00.0",
                     "v1.0.00", "v1.0.0-beta.1", "v1.0.0+build", "v1.0.0\n", "release/v1.0.0"):
             with self.subTest(tag=tag):
-                result = self.run_script("release-tag.sh", self.sha, tag, success=False)
+                result = self.run_script("validate-release-tag.sh", self.sha, tag, success=False)
                 self.assertIn("Invalid release tag", result.stderr)
 
     def test_release_rejects_preview_tags_for_another_commit_or_timestamp(self):
@@ -197,7 +197,7 @@ length="{self.dmg.stat().st_size}" sparkle:edSignature="{base64.b64encode(signat
         for tag in (self.tag.replace("20261110031705", "20261110031706"),
                     self.tag[:-4] + other_commit):
             with self.subTest(tag=tag):
-                self.run_script("release-tag.sh", self.sha, tag, success=False)
+                self.run_script("validate-release-tag.sh", self.sha, tag, success=False)
 
     def test_preview_tag_does_not_depend_on_matching_package_versions(self):
         self.bundle_manifest.write_text(self.bundle_manifest.read_text().replace('"0.2.0"', '"0.2.1"'))

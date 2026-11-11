@@ -6,7 +6,7 @@ repo=${GITHUB_REPOSITORY:?}
 source_sha=${SOURCE_SHA:?}
 signing_mode=${SIGNING_MODE:?}
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-channel=$(bash "$script_dir/release-tag.sh" "$source_sha" "$tag")
+channel=$(bash "$script_dir/validate-release-tag.sh" "$source_sha" "$tag")
 cd "$(dirname "$1")"
 dmg=$(basename "$1")
 checksum="$dmg.sha256"

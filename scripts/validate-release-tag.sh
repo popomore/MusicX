@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Validate a release tag and emit its version and channel.
 set -euo pipefail
 
 source_sha=${1:?}
@@ -29,7 +30,7 @@ case "${3:-}" in
     '') printf '%s\n' "$channel" ;;
     --github-output) printf 'sha=%s\nchannel=%s\nversion=%s\n' "$source_sha" "$channel" "$version" ;;
     *)
-        echo '::error::Unknown release-tag output option.' >&2
+        echo '::error::Unknown validation output option.' >&2
         exit 1
         ;;
 esac

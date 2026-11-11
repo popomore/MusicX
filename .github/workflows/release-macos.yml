@@ -42,7 +42,7 @@ jobs:
             exit 1
           fi
           source_sha=$(git rev-parse HEAD)
-          metadata=$(bash scripts/release-tag.sh "$source_sha" "$GITHUB_REF_NAME" --github-output)
+          metadata=$(bash scripts/validate-release-tag.sh "$source_sha" "$GITHUB_REF_NAME" --github-output)
           if ! git merge-base --is-ancestor "$source_sha" origin/main; then
             echo '::error::The tagged commit must be on main.'
             exit 1
