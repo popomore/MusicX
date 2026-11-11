@@ -156,7 +156,7 @@ fn update_settings() -> impl IntoElement {
             } else {
                 match channel.get() {
                     UpdateChannel::All => "包含稳定版和预览版（Preview）。".into(),
-                    UpdateChannel::Stable => "只接收稳定版更新。".into(),
+                    UpdateChannel::Stable => "仅检查稳定版。已开始的预览版更新仍可能安装。".into(),
                 }
             }
         }))
