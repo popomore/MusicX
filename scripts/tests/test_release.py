@@ -9,6 +9,10 @@ import unittest
 
 
 SCRIPTS = Path(__file__).resolve().parents[1]
+APPLE_SIGNING_FIELDS = (
+    "APPLE_CERTIFICATE", "APPLE_CERTIFICATE_PASSWORD", "APPLE_SIGNING_IDENTITY",
+    "APPLE_API_PRIVATE_KEY", "APPLE_API_KEY", "APPLE_API_ISSUER",
+)
 
 
 class ReleaseTests(unittest.TestCase):
@@ -35,6 +39,8 @@ class ReleaseTests(unittest.TestCase):
             "GIT_COMMITTER_DATE": "2026-11-10T11:17:05+08:00",
         }
         self.env.pop("RELEASE_TAG", None)
+        for name in APPLE_SIGNING_FIELDS:
+            self.env.pop(name, None)
         self.manifest = self.root / "Cargo.toml"
         self.manifest.write_text(
             '[package]\nname = "musicx"\nversion = "0.2.0"\nedition = "2021"\n'
@@ -78,10 +84,24 @@ class ReleaseTests(unittest.TestCase):
                         "-in", str(self.dmg), "-out", str(signature)], check=True, capture_output=True)
         self.appcast = self.root / "appcast.xml"
         self.appcast.write_text(f'''<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
-<channel><item><sparkle:version>0.2.0</sparkle:version>
+<channel><title>MusicX</title><item><sparkle:version>0.2.0</sparkle:version>
 <enclosure url="https://github.com/test/musicx/releases/download/v0.2.0/{self.dmg.name}"
 length="{self.dmg.stat().st_size}" sparkle:edSignature="{base64.b64encode(signature.read_bytes()).decode()}"/>
 </item></channel></rss>''')
+        self.sign_appcast()
+
+    def sign_appcast(self, key=None):
+        """Sign the exact XML bytes using Sparkle 2.10.1's trailer format."""
+        import base64
+        content = self.appcast.read_bytes().split(b"<!-- sparkle-signatures:\n")[0]
+        self.appcast.write_bytes(content)
+        signature = self.root / "feed-signature"
+        subprocess.run(["openssl", "pkeyutl", "-sign", "-inkey", str(key or self.root / "test-key.pem"),
+                        "-rawin", "-in", str(self.appcast), "-out", str(signature)],
+                       check=True, capture_output=True)
+        trailer = (f"<!-- sparkle-signatures:\nedSignature: {base64.b64encode(signature.read_bytes()).decode()}\n"
+                   f"length: {len(content)}\n-->\n").encode()
+        self.appcast.write_bytes(content + trailer)
 
     def git(self, *args):
         return subprocess.run(["git", *args], cwd=self.root, env=self.env, text=True,
@@ -183,7 +203,12 @@ length="{self.dmg.stat().st_size}" sparkle:edSignature="{base64.b64encode(signat
         for version in ("0.0.0", "1.0.0", "1.0.1", "12.34.56"):
             with self.subTest(version=version):
                 result = self.run_script("validate-release-tag.sh", self.sha, f"v{version}", "--github-output")
-                self.assertEqual(result.stdout, f"sha={self.sha}\nchannel=stable\nversion={version}\n")
+                self.assertEqual(result.stdout, f"sha={self.sha}\nchannel=stable\nversion={version}\nbundle-version={version}\n")
+
+    def test_preview_metadata_retains_the_full_display_version(self):
+        result = self.run_script("validate-release-tag.sh", self.sha, self.tag, "--github-output")
+        self.assertEqual(result.stdout,
+                         f"sha={self.sha}\nchannel=preview\nversion={self.tag[1:]}\nbundle-version=1.2.3\n")
 
     def test_release_rejects_noncanonical_tags(self):
         for tag in ("", "1.0.0", "v1", "v1.0", "v1.0.0.0", "v01.0.0", "v1.00.0",
@@ -230,14 +255,30 @@ length="{self.dmg.stat().st_size}" sparkle:edSignature="{base64.b64encode(signat
         self.run_script("dispatch-preview-release.sh", self.tag, success=False)
         self.assertEqual(self.state()["calls"], [["api", "--paginate", "repos/test/musicx/releases?per_page=100"]])
 
+    def test_no_apple_configuration_selects_ad_hoc_signing(self):
+        result = self.run_script("select-macos-signing.sh")
+        self.assertEqual(result.stdout.strip(), "ad-hoc")
+
+    def test_complete_apple_configuration_selects_developer_id_signing(self):
+        self.env.update({name: "test-value" for name in APPLE_SIGNING_FIELDS})
+        result = self.run_script("select-macos-signing.sh")
+        self.assertEqual(result.stdout.strip(), "developer-id")
+
+    def test_partial_apple_configuration_reports_missing_fields(self):
+        self.env["APPLE_CERTIFICATE"] = "test-certificate"
+        result = self.run_script("select-macos-signing.sh", success=False)
+        self.assertIn("APPLE_CERTIFICATE_PASSWORD", result.stderr)
+        self.assertNotIn("test-certificate", result.stderr)
+
     def test_release_type_is_determined_by_the_validated_tag(self):
         """The tag selects the channel; signing cannot silently change it."""
         cases = [
-            (self.tag, "ad-hoc", True),
-            (self.tag, "developer-id", True),
-            ("v0.2.0", "developer-id", False),
+            (self.tag, "ad-hoc", True, 3),
+            (self.tag, "developer-id", True, 3),
+            ("v0.2.0", "ad-hoc", False, 4),
+            ("v0.2.0", "developer-id", False, 4),
         ]
-        for tag, signing, prerelease in cases:
+        for tag, signing, prerelease, asset_count in cases:
             with self.subTest(tag=tag, signing=signing):
                 self.save({"refs": {tag: self.sha}, "release": None, "calls": []})
                 self.env.update(RELEASE_TAG=tag, SIGNING_MODE=signing)
@@ -247,13 +288,33 @@ length="{self.dmg.stat().st_size}" sparkle:edSignature="{base64.b64encode(signat
                 self.assertEqual(release["prerelease"], prerelease)
                 self.assertEqual("(Preview)" in release["title"], prerelease)
                 self.assertFalse(release["draft"])
-                self.assertEqual(len(release["assets"]), 3 if prerelease else 4)
+                self.assertEqual(len(release["assets"]), asset_count)
 
-    def test_stable_release_rejects_ad_hoc_signing(self):
+    def test_stable_ad_hoc_release_requires_a_signed_update_feed(self):
         self.env.update(RELEASE_TAG="v0.2.0", SIGNING_MODE="ad-hoc")
+        self.save({"refs": {"v0.2.0": self.sha}, "release": None, "calls": []})
+        self.appcast.unlink()
         self.run_script("publish-macos.sh", self.dmg, success=False)
         self.assertEqual(self.state()["calls"], [])
-        self.assertIsNone(self.state()["release"])
+
+    def test_ad_hoc_publication_updates_latest_with_a_signed_feed(self):
+        self.env.update(RELEASE_TAG="v0.2.0", SIGNING_MODE="ad-hoc")
+        signed = {"id": 2, "tag_name": "v0.1.0", "draft": False, "prerelease": False,
+                  "assets": [{"name": "appcast.xml"}]}
+        draft = {"id": 1, "tag_name": "v0.2.0", "draft": True, "prerelease": False,
+                 "assets": []}
+        for existing in (None, draft):
+            with self.subTest(resume_draft=existing is not None):
+                self.save({"refs": {"v0.2.0": self.sha}, "release": existing,
+                           "prior_releases": [signed], "latest_tag": "v0.1.0", "calls": []})
+                self.run_script("publish-macos.sh", self.dmg)
+                latest = subprocess.run(
+                    ["gh", "api", "repos/test/musicx/releases/latest"],
+                    env=self.env, cwd=self.root, capture_output=True, text=True, check=True,
+                )
+                release = json.loads(latest.stdout)
+                self.assertEqual(release["tag_name"], "v0.2.0")
+                self.assertIn("appcast.xml", {a["name"] for a in release["assets"]})
 
     def test_publishing_rejects_invalid_tags_before_calling_github(self):
         for tag in ("garbage", "v01.0.0", "v0.2.0-rc.1"):
@@ -266,12 +327,14 @@ length="{self.dmg.stat().st_size}" sparkle:edSignature="{base64.b64encode(signat
         tag = "v3.4.5"
         self.env.update(RELEASE_TAG=tag, SIGNING_MODE="developer-id")
         self.appcast.write_text(self.appcast.read_text().replace("0.2.0", "3.4.5"))
+        self.sign_appcast()
         self.save({"refs": {tag: self.sha}, "release": None, "calls": []})
         self.run_script("publish-macos.sh", self.dmg)
         manifest = json.loads((self.root / "release-manifest.json").read_text())
         self.assertEqual(manifest["version"], "3.4.5")
         self.assertEqual(manifest["tag"], tag)
         self.assertFalse(self.state()["release"]["prerelease"])
+        self.assertEqual(self.state()["latest_tag"], tag)
 
     def test_stable_release_requires_a_signed_appcast(self):
         self.env.update(RELEASE_TAG="v0.2.0", SIGNING_MODE="developer-id")
@@ -290,15 +353,64 @@ length="{self.dmg.stat().st_size}" sparkle:edSignature="{base64.b64encode(signat
         ]
         for invalid in variants:
             self.appcast.write_text(invalid)
+            self.sign_appcast()
             self.run_script("publish-macos.sh", self.dmg, success=False)
             self.assertEqual(self.state()["calls"], [])
 
+    def test_stable_release_rejects_unsigned_or_tampered_feed(self):
+        """A valid archive signature cannot authorize unsigned feed content."""
+        original = self.appcast.read_bytes()
+        variants = [
+            original.split(b"<!-- sparkle-signatures:\n")[0],
+            original.replace(b">MusicX<", b">Forged<"),
+        ]
+        for mode in ("ad-hoc", "developer-id"):
+            self.env.update(RELEASE_TAG="v0.2.0", SIGNING_MODE=mode)
+            for index, invalid in enumerate(variants):
+                with self.subTest(signing_mode=mode, variant=index):
+                    self.save({"refs": {"v0.2.0": self.sha}, "release": None, "calls": []})
+                    self.appcast.write_bytes(invalid)
+                    self.run_script("publish-macos.sh", self.dmg, success=False)
+                    self.assertEqual(self.state()["calls"], [])
+
+    def test_stable_release_rejects_feed_signed_by_another_key(self):
+        """Keep the DMG signature valid while signing the feed with an untrusted key."""
+        key = self.root / "other-key.pem"
+        subprocess.run(["openssl", "genpkey", "-algorithm", "ED25519", "-out", str(key)],
+                       check=True, capture_output=True)
+        self.sign_appcast(key)
+        for mode in ("ad-hoc", "developer-id"):
+            with self.subTest(signing_mode=mode):
+                self.env.update(RELEASE_TAG="v0.2.0", SIGNING_MODE=mode)
+                self.save({"refs": {"v0.2.0": self.sha}, "release": None, "calls": []})
+                self.run_script("publish-macos.sh", self.dmg, success=False)
+                self.assertEqual(self.state()["calls"], [])
+
+    def test_stable_release_rejects_malformed_feed_signature_block(self):
+        """Reject invalid trailers and any unsigned content after the trailer."""
+        self.env.update(RELEASE_TAG="v0.2.0", SIGNING_MODE="ad-hoc")
+        original = self.appcast.read_bytes()
+        variants = [
+            original.replace(b"\nlength: ", b"\nlength: 9"),
+            original.replace(b"\nedSignature: ", b"\nedSignature: !"),
+            original + b"<!-- unsigned metadata -->",
+        ]
+        for index, invalid in enumerate(variants):
+            with self.subTest(variant=index):
+                self.save({"refs": {"v0.2.0": self.sha}, "release": None, "calls": []})
+                self.appcast.write_bytes(invalid)
+                self.run_script("publish-macos.sh", self.dmg, success=False)
+                self.assertEqual(self.state()["calls"], [])
+
     def test_stable_release_rejects_another_signing_key(self):
-        self.env.update(RELEASE_TAG="v0.2.0", SIGNING_MODE="developer-id")
+        self.env.update(RELEASE_TAG="v0.2.0")
         import base64
         self.env["MUSICX_SPARKLE_PUBLIC_KEY"] = base64.b64encode(bytes(32)).decode()
-        self.run_script("publish-macos.sh", self.dmg, success=False)
-        self.assertEqual(self.state()["calls"], [])
+        for mode in ("developer-id", "ad-hoc"):
+            with self.subTest(signing_mode=mode):
+                self.env["SIGNING_MODE"] = mode
+                self.run_script("publish-macos.sh", self.dmg, success=False)
+                self.assertEqual(self.state()["calls"], [])
 
     def test_stable_release_rejects_altered_signed_installer(self):
         self.env.update(RELEASE_TAG="v0.2.0", SIGNING_MODE="developer-id")

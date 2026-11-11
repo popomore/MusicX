@@ -27,6 +27,7 @@ jobs:
       source-sha: ${{ steps.source.outputs.sha }}
       channel: ${{ steps.source.outputs.channel }}
       version: ${{ steps.source.outputs.version }}
+      bundle-version: ${{ steps.source.outputs.bundle-version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -55,6 +56,7 @@ jobs:
     timeout-minutes: 45
     env:
       MUSICX_RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+      MUSICX_BUNDLE_VERSION: ${{ needs.validate.outputs.bundle-version }}
     outputs:
       artifact-id: ${{ steps.artifacts.outputs.artifact-id }}
       source-sha: ${{ needs.validate.outputs.source-sha }}
@@ -82,20 +84,8 @@ jobs:
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: |
-          required=(APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY
-                    APPLE_API_PRIVATE_KEY APPLE_API_KEY APPLE_API_ISSUER)
-          missing=()
-          for name in "${required[@]}"; do
-            if [[ -z "${!name}" ]]; then
-              missing+=("$name")
-            fi
-          done
-
-          if (( ${#missing[@]} )); then
-            echo "::error::Incomplete Apple signing configuration. Missing: ${missing[*]}"
-            exit 1
-          fi
-          printf 'mode=developer-id\n' >> "$GITHUB_OUTPUT"
+          mode=$(bash scripts/select-macos-signing.sh)
+          printf 'mode=%s\n' "$mode" >> "$GITHUB_OUTPUT"
 
       - name: Format and test
         if: needs.validate.outputs.channel == 'stable'
@@ -146,7 +136,7 @@ jobs:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
         run: |
           test "$(uname -m)" = arm64
-          if [[ "${{ steps.signing.outputs.mode }}" == developer-id ]]; then
+          if [[ "${{ needs.validate.outputs.channel }}" == stable ]]; then
             : "${SPARKLE_PUBLIC_KEY:?Configure the Sparkle public key repository variable}"
             : "${SPARKLE_PRIVATE_KEY:?Configure the Sparkle private key repository secret}"
             export MUSICX_SPARKLE_PUBLIC_KEY="$SPARKLE_PUBLIC_KEY"
@@ -183,7 +173,7 @@ jobs:
           shasum -a 256 "$name" > "$name.sha256"
 
       - name: Generate signed automatic update feed
-        if: steps.signing.outputs.mode == 'developer-id'
+        if: needs.validate.outputs.channel == 'stable'
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
           MUSICX_SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}

@@ -3,12 +3,7 @@ use objc2_foundation::{NSDistributedNotificationCenter, NSString};
 pub fn version() -> String {
     let version =
         std::env::var("MUSICX_APP_VERSION").unwrap_or_else(|_| env!("CARGO_PKG_VERSION").into());
-    let build = std::env::var("MUSICX_APP_BUILD").unwrap_or_default();
-    if build.is_empty() || build == version {
-        format!("MusicX {version}")
-    } else {
-        format!("MusicX {version} ({build})")
-    }
+    format!("MusicX {version}")
 }
 
 pub fn check() {

@@ -16,15 +16,11 @@ title="MusicX ${tag#v}"
 notes="Download MusicX for Apple Silicon and drag the app to Applications. Requires macOS 14 or later."
 prerelease=true
 if [[ "$channel" == stable ]]; then
-    if [[ "$signing_mode" != developer-id ]]; then
-        echo '::error::Stable tags require Developer ID signing and notarization.' >&2
-        exit 1
-    fi
     prerelease=false
 fi
 case "$signing_mode" in
     ad-hoc)
-        notes+=$'\n\nThis preview uses ad hoc signing. macOS may block it on first launch because it lacks Apple notarization.'
+        notes+=$'\n\nThis build uses ad hoc signing. macOS may block it on first launch because it lacks Apple notarization.'
         ;;
     developer-id) ;;
     *)
@@ -38,9 +34,11 @@ fi
 
 sha256sum --check "$checksum"
 files=("$dmg" "$checksum")
-if [[ "$prerelease" == false ]]; then
+make_latest=false
+if [[ "$channel" == stable ]]; then
     python3 "$script_dir/validate-appcast.py" "$dmg" "$tag" "$repo"
     files+=(appcast.xml)
+    make_latest=true
 fi
 verify_tag() {
     local tag_sha
@@ -71,7 +69,7 @@ release=$(gh api --paginate "repos/$repo/releases?per_page=100" |
         [.[][] | select(.tag_name == $tag)]
         | if length > 1 then error("Multiple releases match the tag") else .[0] end')
 if [[ "$release" == null ]]; then
-    gh release create "$tag" --repo "$repo" --verify-tag --draft \
+    gh release create "$tag" --repo "$repo" --verify-tag --draft --latest=false \
         --prerelease="$prerelease" --title "$title" --notes "$notes"
     release=$(gh release view "$tag" --repo "$repo" --json databaseId,isDraft,isPrerelease |
         jq -c '{id: .databaseId, draft: .isDraft, prerelease: .isPrerelease}')
@@ -123,7 +121,8 @@ fi
 
 verify_tag
 if jq -e '.draft' <<< "$release" > /dev/null; then
-    gh api --method PATCH "repos/$repo/releases/$release_id" -F draft=false --jq .html_url
+    gh api --method PATCH "repos/$repo/releases/$release_id" -F draft=false \
+        -f make_latest="$make_latest" --jq .html_url
 else
     echo "Release $tag already contains the verified assets."
 fi
