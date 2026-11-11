@@ -82,20 +82,8 @@ jobs:
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: |
-          required=(APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY
-                    APPLE_API_PRIVATE_KEY APPLE_API_KEY APPLE_API_ISSUER)
-          missing=()
-          for name in "${required[@]}"; do
-            if [[ -z "${!name}" ]]; then
-              missing+=("$name")
-            fi
-          done
-
-          if (( ${#missing[@]} )); then
-            echo "::error::Incomplete Apple signing configuration. Missing: ${missing[*]}"
-            exit 1
-          fi
-          printf 'mode=developer-id\n' >> "$GITHUB_OUTPUT"
+          mode=$(bash scripts/select-macos-signing.sh)
+          printf 'mode=%s\n' "$mode" >> "$GITHUB_OUTPUT"
 
       - name: Format and test
         if: needs.validate.outputs.channel == 'stable'

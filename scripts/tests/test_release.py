@@ -9,6 +9,10 @@ import unittest
 
 
 SCRIPTS = Path(__file__).resolve().parents[1]
+APPLE_SIGNING_FIELDS = (
+    "APPLE_CERTIFICATE", "APPLE_CERTIFICATE_PASSWORD", "APPLE_SIGNING_IDENTITY",
+    "APPLE_API_PRIVATE_KEY", "APPLE_API_KEY", "APPLE_API_ISSUER",
+)
 
 
 class ReleaseTests(unittest.TestCase):
@@ -35,6 +39,8 @@ class ReleaseTests(unittest.TestCase):
             "GIT_COMMITTER_DATE": "2026-11-10T11:17:05+08:00",
         }
         self.env.pop("RELEASE_TAG", None)
+        for name in APPLE_SIGNING_FIELDS:
+            self.env.pop(name, None)
         self.manifest = self.root / "Cargo.toml"
         self.manifest.write_text(
             '[package]\nname = "musicx"\nversion = "0.2.0"\nedition = "2021"\n'
@@ -230,14 +236,30 @@ length="{self.dmg.stat().st_size}" sparkle:edSignature="{base64.b64encode(signat
         self.run_script("dispatch-preview-release.sh", self.tag, success=False)
         self.assertEqual(self.state()["calls"], [["api", "--paginate", "repos/test/musicx/releases?per_page=100"]])
 
+    def test_no_apple_configuration_selects_ad_hoc_signing(self):
+        result = self.run_script("select-macos-signing.sh")
+        self.assertEqual(result.stdout.strip(), "ad-hoc")
+
+    def test_complete_apple_configuration_selects_developer_id_signing(self):
+        self.env.update({name: "test-value" for name in APPLE_SIGNING_FIELDS})
+        result = self.run_script("select-macos-signing.sh")
+        self.assertEqual(result.stdout.strip(), "developer-id")
+
+    def test_partial_apple_configuration_reports_missing_fields(self):
+        self.env["APPLE_CERTIFICATE"] = "test-certificate"
+        result = self.run_script("select-macos-signing.sh", success=False)
+        self.assertIn("APPLE_CERTIFICATE_PASSWORD", result.stderr)
+        self.assertNotIn("test-certificate", result.stderr)
+
     def test_release_type_is_determined_by_the_validated_tag(self):
         """The tag selects the channel; signing cannot silently change it."""
         cases = [
-            (self.tag, "ad-hoc", True),
-            (self.tag, "developer-id", True),
-            ("v0.2.0", "developer-id", False),
+            (self.tag, "ad-hoc", True, 3),
+            (self.tag, "developer-id", True, 3),
+            ("v0.2.0", "ad-hoc", False, 3),
+            ("v0.2.0", "developer-id", False, 4),
         ]
-        for tag, signing, prerelease in cases:
+        for tag, signing, prerelease, asset_count in cases:
             with self.subTest(tag=tag, signing=signing):
                 self.save({"refs": {tag: self.sha}, "release": None, "calls": []})
                 self.env.update(RELEASE_TAG=tag, SIGNING_MODE=signing)
@@ -247,13 +269,20 @@ length="{self.dmg.stat().st_size}" sparkle:edSignature="{base64.b64encode(signat
                 self.assertEqual(release["prerelease"], prerelease)
                 self.assertEqual("(Preview)" in release["title"], prerelease)
                 self.assertFalse(release["draft"])
-                self.assertEqual(len(release["assets"]), 3 if prerelease else 4)
+                self.assertEqual(len(release["assets"]), asset_count)
 
-    def test_stable_release_rejects_ad_hoc_signing(self):
+    def test_stable_ad_hoc_release_does_not_require_an_update_feed(self):
         self.env.update(RELEASE_TAG="v0.2.0", SIGNING_MODE="ad-hoc")
-        self.run_script("publish-macos.sh", self.dmg, success=False)
-        self.assertEqual(self.state()["calls"], [])
-        self.assertIsNone(self.state()["release"])
+        self.save({"refs": {"v0.2.0": self.sha}, "release": None, "calls": []})
+        self.appcast.unlink()
+        self.run_script("publish-macos.sh", self.dmg)
+        release = self.state()["release"]
+        self.assertFalse(release["prerelease"])
+        self.assertEqual({a["name"] for a in release["assets"]}, {
+            self.dmg.name, self.dmg.name + ".sha256", "release-manifest.json",
+        })
+        manifest = json.loads((self.root / "release-manifest.json").read_text())
+        self.assertEqual(manifest["signing_mode"], "ad-hoc")
 
     def test_publishing_rejects_invalid_tags_before_calling_github(self):
         for tag in ("garbage", "v01.0.0", "v0.2.0-rc.1"):

@@ -16,15 +16,11 @@ title="MusicX ${tag#v}"
 notes="Download MusicX for Apple Silicon and drag the app to Applications. Requires macOS 14 or later."
 prerelease=true
 if [[ "$channel" == stable ]]; then
-    if [[ "$signing_mode" != developer-id ]]; then
-        echo '::error::Stable tags require Developer ID signing and notarization.' >&2
-        exit 1
-    fi
     prerelease=false
 fi
 case "$signing_mode" in
     ad-hoc)
-        notes+=$'\n\nThis preview uses ad hoc signing. macOS may block it on first launch because it lacks Apple notarization.'
+        notes+=$'\n\nThis build uses ad hoc signing. macOS may block it on first launch because it lacks Apple notarization.'
         ;;
     developer-id) ;;
     *)
@@ -38,7 +34,7 @@ fi
 
 sha256sum --check "$checksum"
 files=("$dmg" "$checksum")
-if [[ "$prerelease" == false ]]; then
+if [[ "$channel" == stable && "$signing_mode" == developer-id ]]; then
     python3 "$script_dir/validate-appcast.py" "$dmg" "$tag" "$repo"
     files+=(appcast.xml)
 fi
