@@ -31,6 +31,9 @@ jobs:
   test:
     runs-on: macos-15
     timeout-minutes: 45
+    env:
+      # CI tests don't need the release profile's size optimization and LTO.
+      CARGO_PROFILE_TEST_DEBUG: '0'
     defaults:
       run:
         shell: bash
@@ -44,7 +47,13 @@ jobs:
           rustup toolchain install 1.97.0 --profile minimal --component rustfmt
           rustup override set 1.97.0
 
-      - name: Format and test
-        run: |
-          cargo fmt --all -- --check
-          cargo test --release --locked --workspace
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          env-vars: 'CARGO CC CFLAGS CXX CMAKE RUST MACOSX_DEPLOYMENT_TARGET'
+
+      - name: Test workspace
+        run: cargo test --locked --workspace
