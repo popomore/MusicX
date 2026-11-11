@@ -3,7 +3,7 @@ name = "musicx-plugin-api"
 version = "0.2.0"
 edition = "2024"
 license = "MIT"
-rust-version = "1.97"
+rust-version.workspace = true
 publish = false
 
 [dependencies]

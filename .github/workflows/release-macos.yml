@@ -2,7 +2,7 @@ name: Release macOS
 
 on:
   push:
-    tags: ['v*']
+    tags: ['**']
   workflow_dispatch:
 
 permissions:
@@ -19,41 +19,60 @@ env:
   DMG: target/distribution/MusicX-macos-arm64.dmg
 
 jobs:
-  build:
-    if: github.ref_type == 'tag' && !github.event.deleted
-    runs-on: macos-15
-    timeout-minutes: 45
+  validate:
+    if: ${{ !github.event.deleted }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
-      artifact-id: ${{ steps.artifacts.outputs.artifact-id }}
       source-sha: ${{ steps.source.outputs.sha }}
-      signing-mode: ${{ steps.source.outputs.channel == 'preview' && 'ad-hoc' || steps.signing.outputs.mode }}
-    defaults:
-      run:
-        shell: bash
+      channel: ${{ steps.source.outputs.channel }}
+      version: ${{ steps.source.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Install Rust
-        run: |
-          rustup toolchain install 1.97.0 --profile minimal --component rustfmt
-          rustup override set 1.97.0
-
-      - name: Validate release source
+      - name: Validate release tag and source
         id: source
+        shell: bash
         run: |
-          source_sha=$(git rev-parse HEAD)
-          if ! git merge-base --is-ancestor "$source_sha" origin/main; then
-            echo "::error::The tagged commit must be on main."
+          if [[ "$GITHUB_REF_TYPE" != tag ]]; then
+            echo '::error::Release macOS must run on a tag.'
             exit 1
           fi
-          channel=$(bash scripts/release-tag.sh "$source_sha" "$GITHUB_REF_NAME")
-          printf 'sha=%s\nchannel=%s\n' "$source_sha" "$channel" >> "$GITHUB_OUTPUT"
+          source_sha=$(git rev-parse HEAD)
+          metadata=$(bash scripts/validate-release-tag.sh "$source_sha" "$GITHUB_REF_NAME" --github-output)
+          if ! git merge-base --is-ancestor "$source_sha" origin/main; then
+            echo '::error::The tagged commit must be on main.'
+            exit 1
+          fi
+          printf '%s\n' "$metadata" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: validate
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      MUSICX_RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+    outputs:
+      artifact-id: ${{ steps.artifacts.outputs.artifact-id }}
+      source-sha: ${{ needs.validate.outputs.source-sha }}
+      signing-mode: ${{ needs.validate.outputs.channel == 'preview' && 'ad-hoc' || steps.signing.outputs.mode }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.validate.outputs.source-sha }}
+          persist-credentials: false
+
+      - name: Install Rust
+        run: rustup toolchain install --no-self-update
 
       - name: Select signing mode
-        if: steps.source.outputs.channel == 'stable'
+        if: needs.validate.outputs.channel == 'stable'
         id: signing
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -72,18 +91,14 @@ jobs:
             fi
           done
 
-          if (( ${#missing[@]} == ${#required[@]} )); then
-            mode=ad-hoc
-          elif (( ${#missing[@]} == 0 )); then
-            mode=developer-id
-          else
+          if (( ${#missing[@]} )); then
             echo "::error::Incomplete Apple signing configuration. Missing: ${missing[*]}"
             exit 1
           fi
-          printf 'mode=%s\n' "$mode" >> "$GITHUB_OUTPUT"
+          printf 'mode=developer-id\n' >> "$GITHUB_OUTPUT"
 
       - name: Format and test
-        if: steps.source.outputs.channel == 'stable'
+        if: needs.validate.outputs.channel == 'stable'
         run: |
           cargo fmt --all -- --check
           cargo test --release --locked --workspace
@@ -187,7 +202,7 @@ jobs:
             target/distribution/appcast.xml
           compression-level: 0
           if-no-files-found: error
-          retention-days: ${{ steps.source.outputs.channel == 'preview' && 14 || 7 }}
+          retention-days: ${{ needs.validate.outputs.channel == 'preview' && 14 || 7 }}
 
   publish:
     needs: build

@@ -14,6 +14,9 @@ default-members = ["apps/macos/helper"]
 exclude = ["apps/ios", "vendor/nsh-platform-macos", "vendor/nsh-platform-ios"]
 resolver = "3"
 
+[workspace.package]
+rust-version = "1.97"
+
 [profile.release]
 opt-level = "z"
 lto = "thin"

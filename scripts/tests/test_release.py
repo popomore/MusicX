@@ -57,7 +57,7 @@ class ReleaseTests(unittest.TestCase):
                  "commit", "--allow-empty", "--quiet", "-m", "Test source")
         self.sha = self.git("rev-parse", "HEAD").stdout.strip()
         self.env["SOURCE_SHA"] = self.sha
-        self.tag = "v0.2.0.preview-20261110031705-" + self.sha[:4]
+        self.tag = "v1.2.3.preview-20261110031705-" + self.sha[:4]
         self.dmg = self.root / "MusicX-macos-arm64.dmg"
         self.dmg.write_bytes(b"installer fixture")
         digest = hashlib.sha256(self.dmg.read_bytes()).hexdigest()
@@ -103,12 +103,12 @@ length="{self.dmg.stat().st_size}" sparkle:edSignature="{base64.b64encode(signat
             self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         return result
 
-    def test_preview_tag_uses_version_utc_commit_time_and_four_commit_characters(self):
+    def test_preview_tag_uses_published_version_utc_commit_time_and_short_sha(self):
         self.run_script("create-preview-tag.sh")
         self.assertEqual(self.state()["refs"], {self.tag: self.sha})
         self.assertEqual(self.output.read_text(), f"tag={self.tag}\n")
 
-    def test_preview_tag_follows_the_package_version(self):
+    def test_preview_tag_ignores_package_versions(self):
         for manifest in (self.manifest, self.bundle_manifest):
             manifest.write_text(manifest.read_text().replace('"0.2.0"', '"2.3.4"'))
         self.git("add", "Cargo.toml", "bundle/Cargo.toml")
@@ -118,15 +118,30 @@ length="{self.dmg.stat().st_size}" sparkle:edSignature="{base64.b64encode(signat
         sha = self.git("rev-parse", "HEAD").stdout.strip()
         self.env["SOURCE_SHA"] = sha
         self.run_script("create-preview-tag.sh")
-        tag = "v2.3.4.preview-20261110031705-" + sha[:4]
+        tag = "v1.2.3.preview-20261110031705-" + sha[:4]
         self.assertEqual(self.state()["refs"], {tag: sha})
         self.assertEqual(self.output.read_text(), f"tag={tag}\n")
 
-    def test_preview_tag_requires_the_musicx_package(self):
-        self.manifest.write_text(self.manifest.read_text().replace('"musicx"', '"other"'))
-        self.run_script("create-preview-tag.sh", success=False)
-        self.assertEqual(self.state()["calls"], [])
+    def test_preview_tag_skips_until_a_stable_release_is_published(self):
+        self.save({"refs": {}, "release": None, "calls": [], "prior_releases": []})
+        self.run_script("create-preview-tag.sh")
+        self.assertEqual(self.state()["refs"], {})
         self.assertFalse(self.output.exists())
+
+    def test_preview_tag_uses_the_latest_valid_published_stable_version(self):
+        self.save({"refs": {}, "release": None, "calls": [], "prior_releases": [
+            {"tag_name": "legacy", "draft": False, "prerelease": False,
+             "published_at": "2026-11-13T00:00:00Z"},
+            {"tag_name": "v8.0.0", "draft": True, "prerelease": False},
+            {"tag_name": "v7.0.0", "draft": False, "prerelease": True},
+            {"tag_name": "v1.0.0", "draft": False, "prerelease": False,
+             "published_at": "2026-11-10T00:00:00Z"},
+            {"tag_name": "v4.5.6", "draft": False, "prerelease": False,
+             "published_at": "2026-11-12T00:00:00Z"},
+        ]})
+        self.run_script("create-preview-tag.sh")
+        tag = "v4.5.6.preview-20261110031705-" + self.sha[:4]
+        self.assertEqual(self.state()["refs"], {tag: self.sha})
 
     def test_preview_tag_rerun_reuses_existing_ref(self):
         self.run_script("create-preview-tag.sh")
@@ -159,19 +174,35 @@ length="{self.dmg.stat().st_size}" sparkle:edSignature="{base64.b64encode(signat
     def test_release_routes_preview_and_stable_tags(self):
         for tag, channel in ((self.tag, "preview"), ("v0.2.0", "stable")):
             with self.subTest(tag=tag):
-                result = self.run_script("release-tag.sh", self.sha, tag)
+                result = self.run_script("validate-release-tag.sh", self.sha, tag)
                 self.assertEqual(result.stdout.strip(), channel)
 
-    def test_release_rejects_tags_for_another_version_or_commit(self):
-        other_commit = "ffff" if self.sha.startswith("0000") else "0000"
-        for tag in ("v0.2.1", self.tag[:-4] + other_commit):
-            with self.subTest(tag=tag):
-                self.run_script("release-tag.sh", self.sha, tag, success=False)
+    def test_release_version_comes_only_from_the_tag_without_cargo(self):
+        self.manifest.unlink()
+        self.bundle_manifest.unlink()
+        for version in ("0.0.0", "1.0.0", "1.0.1", "12.34.56"):
+            with self.subTest(version=version):
+                result = self.run_script("validate-release-tag.sh", self.sha, f"v{version}", "--github-output")
+                self.assertEqual(result.stdout, f"sha={self.sha}\nchannel=stable\nversion={version}\n")
 
-    def test_preview_tag_rejects_mismatched_bundle_version(self):
+    def test_release_rejects_noncanonical_tags(self):
+        for tag in ("", "1.0.0", "v1", "v1.0", "v1.0.0.0", "v01.0.0", "v1.00.0",
+                    "v1.0.00", "v1.0.0-beta.1", "v1.0.0+build", "v1.0.0\n", "release/v1.0.0"):
+            with self.subTest(tag=tag):
+                result = self.run_script("validate-release-tag.sh", self.sha, tag, success=False)
+                self.assertIn("Invalid release tag", result.stderr)
+
+    def test_release_rejects_preview_tags_for_another_commit_or_timestamp(self):
+        other_commit = "ffff" if self.sha.startswith("0000") else "0000"
+        for tag in (self.tag.replace("20261110031705", "20261110031706"),
+                    self.tag[:-4] + other_commit):
+            with self.subTest(tag=tag):
+                self.run_script("validate-release-tag.sh", self.sha, tag, success=False)
+
+    def test_preview_tag_does_not_depend_on_matching_package_versions(self):
         self.bundle_manifest.write_text(self.bundle_manifest.read_text().replace('"0.2.0"', '"0.2.1"'))
-        self.run_script("create-preview-tag.sh", success=False)
-        self.assertEqual(self.state()["calls"], [])
+        self.run_script("create-preview-tag.sh")
+        self.assertEqual(self.state()["refs"], {self.tag: self.sha})
 
     def test_preview_dispatch_skips_complete_release_and_retries_incomplete_release(self):
         self.env.update(RELEASE_TAG=self.tag, SIGNING_MODE="ad-hoc")
@@ -199,14 +230,12 @@ length="{self.dmg.stat().st_size}" sparkle:edSignature="{base64.b64encode(signat
         self.run_script("dispatch-preview-release.sh", self.tag, success=False)
         self.assertEqual(self.state()["calls"], [["api", "--paginate", "repos/test/musicx/releases?per_page=100"]])
 
-    def test_release_type_depends_on_tag_and_signing(self):
-        """Check release metadata across stable and preview signing combinations."""
+    def test_release_type_is_determined_by_the_validated_tag(self):
+        """The tag selects the channel; signing cannot silently change it."""
         cases = [
             (self.tag, "ad-hoc", True),
             (self.tag, "developer-id", True),
-            ("v0.2.0", "ad-hoc", True),
             ("v0.2.0", "developer-id", False),
-            ("v0.2.0-rc.1", "developer-id", True),
         ]
         for tag, signing, prerelease in cases:
             with self.subTest(tag=tag, signing=signing):
@@ -219,6 +248,30 @@ length="{self.dmg.stat().st_size}" sparkle:edSignature="{base64.b64encode(signat
                 self.assertEqual("(Preview)" in release["title"], prerelease)
                 self.assertFalse(release["draft"])
                 self.assertEqual(len(release["assets"]), 3 if prerelease else 4)
+
+    def test_stable_release_rejects_ad_hoc_signing(self):
+        self.env.update(RELEASE_TAG="v0.2.0", SIGNING_MODE="ad-hoc")
+        self.run_script("publish-macos.sh", self.dmg, success=False)
+        self.assertEqual(self.state()["calls"], [])
+        self.assertIsNone(self.state()["release"])
+
+    def test_publishing_rejects_invalid_tags_before_calling_github(self):
+        for tag in ("garbage", "v01.0.0", "v0.2.0-rc.1"):
+            with self.subTest(tag=tag):
+                self.env.update(RELEASE_TAG=tag, SIGNING_MODE="developer-id")
+                self.run_script("publish-macos.sh", self.dmg, success=False)
+                self.assertEqual(self.state()["calls"], [])
+
+    def test_stable_manifest_and_update_feed_use_the_tag_version(self):
+        tag = "v3.4.5"
+        self.env.update(RELEASE_TAG=tag, SIGNING_MODE="developer-id")
+        self.appcast.write_text(self.appcast.read_text().replace("0.2.0", "3.4.5"))
+        self.save({"refs": {tag: self.sha}, "release": None, "calls": []})
+        self.run_script("publish-macos.sh", self.dmg)
+        manifest = json.loads((self.root / "release-manifest.json").read_text())
+        self.assertEqual(manifest["version"], "3.4.5")
+        self.assertEqual(manifest["tag"], tag)
+        self.assertFalse(self.state()["release"]["prerelease"])
 
     def test_stable_release_requires_a_signed_appcast(self):
         self.env.update(RELEASE_TAG="v0.2.0", SIGNING_MODE="developer-id")

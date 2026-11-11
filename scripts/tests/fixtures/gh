@@ -52,12 +52,17 @@ def execute():
         if endpoint == "releases?per_page=100":
             if state.get("api_error"):
                 raise RuntimeError("GitHub unavailable")
-            return [state["release"]] if state["release"] else []
+            prior = state.get("prior_releases", [
+                {"tag_name": "v1.2.3", "draft": False, "prerelease": False,
+                 "published_at": "2026-11-01T00:00:00Z", "assets": []},
+            ])
+            return ([state["release"]] if state["release"] else []) + prior
         if endpoint == "releases/1/assets?per_page=100":
             return state["release"]["assets"]
         if endpoint == "releases/1" and method == "PATCH":
             assert field("draft") == "false"
             state["release"]["draft"] = False
+            state["release"]["published_at"] = "2026-11-10T03:17:05Z"
             return {"html_url": "https://example.invalid/release"}
         raise AssertionError(f"Unsupported API operation: {args}")
 
