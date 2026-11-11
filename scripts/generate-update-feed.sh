@@ -19,10 +19,23 @@ base=missing
 if [[ "$previous" != null ]]; then
     previous_tag=$(jq -er .tag_name <<< "$previous")
     mkdir "$stage/prior"
-    gh release download "$previous_tag" --repo "$repo" --pattern appcast.xml --dir "$stage/prior"
-    prior="$stage/prior/appcast.xml"
+    name=appcast.xml
     if [[ "$previous_tag" == update-feed ]]; then
-        base=$(shasum -a 256 "$prior" | cut -d ' ' -f 1)
+        assets=$(gh api --paginate "repos/$repo/releases/$(jq -er .id <<< "$previous")/assets?per_page=100" | jq -cs '[.[][]]')
+        reference=$(jq -ec '[.[] | select(.state == "uploaded" and
+            (.name == "appcast.xml" or (.name | startswith("appcast-next-") or startswith("appcast-previous-"))))] |
+            sort_by(.id) | last // error("No recoverable update feed")' <<< "$assets")
+        name=$(jq -er .name <<< "$reference")
+        # Retain a completed staged feed after an interrupted promotion, while
+        # comparing publication against the current live bytes when available.
+        base=$(jq -er --argjson reference "$reference" '
+            ([.[] | select(.name == "appcast.xml" and .state == "uploaded")] | first) // $reference |
+            .digest | capture("^sha256:(?<digest>[0-9a-f]{64})$").digest' <<< "$assets")
+    fi
+    gh release download "$previous_tag" --repo "$repo" --pattern "$name" --dir "$stage/prior"
+    prior="$stage/prior/$name"
+    if [[ "$previous_tag" == update-feed ]]; then
+        [[ "$(shasum -a 256 "$prior" | cut -d ' ' -f 1)" == "$(jq -er .digest <<< "$reference" | cut -d : -f 2)" ]]
     fi
 fi
 python3 scripts/merge-appcast.py "$directory/appcast.xml" "$prior" "$directory/appcast-all.xml"

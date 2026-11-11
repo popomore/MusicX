@@ -529,13 +529,121 @@ length="{self.dmg.stat().st_size}" sparkle:edSignature="{base64.b64encode(signat
         (self.root / "appcast-all.xml").write_bytes(self.appcast.read_bytes())
         (self.root / "appcast-all.base").write_text("f" * 64)
         feed = {"id": 2, "tag_name": "update-feed", "draft": False, "prerelease": True,
-                "assets": [{"name": "appcast.xml", "state": "uploaded", "digest": "sha256:" + "e" * 64}]}
+                "assets": [{"id": 10, "name": "appcast.xml", "state": "uploaded", "digest": "sha256:" + "e" * 64}]}
         self.save({"refs": {}, "release": None, "feed_release": feed, "calls": []})
         self.run_script("publish-update-feed.sh", self.dmg, success=False)
         self.assertFalse(any(c[:2] == ["release", "upload"] for c in self.state()["calls"]))
         (self.root / "appcast-all.base").write_text("e" * 64)
         self.run_script("publish-update-feed.sh", self.dmg)
-        self.assertEqual(self.state()["feed_release"]["assets"][0]["digest"], "sha256:" + hashlib.sha256(self.appcast.read_bytes()).hexdigest())
+        self.assertEqual(self.live_feed()["digest"], "sha256:" + hashlib.sha256(self.appcast.read_bytes()).hexdigest())
+
+    def live_feed(self):
+        return next(a for a in self.state()["feed_release"]["assets"] if a["name"] == "appcast.xml" and a["state"] == "uploaded")
+
+    def prepare_feed_replacement(self):
+        self.env.update(RELEASE_TAG="v0.2.0")
+        current = self.appcast.read_bytes()
+        self.appcast.write_bytes(current.replace(b">1000042<", b">1000041<"))
+        self.sign_appcast()
+        previous = self.appcast.read_bytes()
+        self.appcast.write_bytes(current)
+        (self.root / "appcast-all.xml").write_bytes(current)
+        (self.root / "appcast-all.base").write_text(hashlib.sha256(previous).hexdigest())
+        feed = {"id": 2, "tag_name": "update-feed", "draft": False, "prerelease": True,
+                "assets": [{"id": 10, "name": "appcast.xml", "state": "uploaded",
+                            "digest": "sha256:" + hashlib.sha256(previous).hexdigest(), "content": previous.decode()}]}
+        self.save({"refs": {}, "release": None, "feed_release": feed, "calls": []})
+        return previous, current
+
+    def test_failed_replacement_upload_preserves_live_feed_and_can_retry(self):
+        previous, current = self.prepare_feed_replacement()
+        state = self.state()
+        state["fail_feed_upload"] = 1
+        self.save(state)
+        self.run_script("publish-update-feed.sh", self.dmg, success=False)
+        self.assertEqual(self.live_feed()["content"].encode(), previous)
+        self.run_script("publish-update-feed.sh", self.dmg)
+        self.assertEqual(self.live_feed()["content"].encode(), current)
+        self.assertFalse(any("--clobber" in c for c in self.state()["calls"]))
+
+    def test_failed_promotion_restores_live_feed_and_reuses_uploaded_candidate(self):
+        previous, current = self.prepare_feed_replacement()
+        state = self.state()
+        state["fail_feed_promotion"] = 1
+        self.save(state)
+        result = self.run_script("publish-update-feed.sh", self.dmg, success=False)
+        self.assertIn("Restored the previous signed update feed", result.stderr)
+        self.assertEqual(self.live_feed()["content"].encode(), previous)
+        self.run_script("publish-update-feed.sh", self.dmg)
+        self.assertEqual(self.live_feed()["content"].encode(), current)
+        self.assertEqual(len([c for c in self.state()["calls"] if c[:2] == ["release", "upload"]]), 1)
+
+    def test_lost_promotion_response_never_rolls_back_a_new_live_feed(self):
+        _, current = self.prepare_feed_replacement()
+        state = self.state()
+        state["fail_after_feed_promotion"] = 1
+        self.save(state)
+        self.run_script("publish-update-feed.sh", self.dmg, success=False)
+        self.assertEqual(self.live_feed()["content"].encode(), current)
+        self.run_script("publish-update-feed.sh", self.dmg)
+        self.assertEqual(self.live_feed()["content"].encode(), current)
+
+    def test_interrupted_promotion_recovers_from_remote_signed_backup(self):
+        _, current = self.prepare_feed_replacement()
+        state = self.state()
+        state["feed_release"]["assets"][0]["name"] = "appcast-previous-10.xml"
+        state["feed_release"]["assets"].append({"id": 11, "name": "appcast-next-test.xml", "state": "uploaded",
+            "digest": "sha256:" + hashlib.sha256(current).hexdigest(), "content": current.decode()})
+        state["feed_release"]["assets"].append({"id": 12, "name": "appcast.xml", "state": "starter", "digest": None})
+        self.save(state)
+        self.run_script("publish-update-feed.sh", self.dmg)
+        self.assertEqual(self.live_feed()["content"].encode(), current)
+        self.assertFalse(any(c[:2] == ["release", "upload"] for c in self.state()["calls"]))
+
+    def test_generation_recovers_staged_metadata_and_publication_can_finish(self):
+        import xml.etree.ElementTree as ET
+        _, staged = self.prepare_feed_replacement()
+        initial = self.state()
+        staged_asset = {"id": 11, "name": "appcast-next-test.xml", "state": "uploaded",
+                        "digest": "sha256:" + hashlib.sha256(staged).hexdigest(), "content": staged.decode()}
+        mirror = self.root / "generator" / "scripts"
+        mirror.mkdir(parents=True)
+        for name in ("generate-update-feed.sh", "merge-appcast.py", "validate-appcast.py", "appcast.py"):
+            shutil.copyfile(SCRIPTS / name, mirror / name)
+        (mirror / "prepare-sparkle.sh").write_text('printf "%s\\n" "$QA_SPARKLE_TOOLS"\n')
+        tools = self.root / "signer"
+        (tools / "bin").mkdir(parents=True)
+        signer = tools / "bin/sign_update"
+        signer.write_text('''#!/usr/bin/env python3
+import base64, os, pathlib, subprocess, sys
+sys.stdin.read()
+path = pathlib.Path(sys.argv[-1])
+content = path.read_bytes().split(b"<!-- sparkle-signatures:\\n")[0]
+path.write_bytes(content)
+signature = subprocess.run(["openssl", "pkeyutl", "-sign", "-inkey", os.environ["QA_SIGNING_KEY"], "-rawin", "-in", str(path)], capture_output=True, check=True).stdout
+path.write_bytes(content + ("<!-- sparkle-signatures:\\nedSignature: " + base64.b64encode(signature).decode() + "\\nlength: " + str(len(content)) + "\\n-->\\n").encode())
+''')
+        signer.chmod(0o755)
+        self.env.update(RELEASE_TAG="v0.2.1", MUSICX_BUNDLE_VERSION="1000043",
+                        SPARKLE_PRIVATE_KEY="fixture-only", QA_SPARKLE_TOOLS=str(tools), QA_SIGNING_KEY=str(self.root / "test-key.pem"))
+        self.appcast.write_bytes(staged.replace(b">1000042<", b">1000043<").replace(b"0.2.0", b"0.2.1"))
+        self.sign_appcast()
+        for live_exists in (True, False):
+            with self.subTest(live_exists=live_exists):
+                state = json.loads(json.dumps(initial))
+                if not live_exists:
+                    state["feed_release"]["assets"][0]["name"] = "appcast-previous-10.xml"
+                state["feed_release"]["assets"].append(staged_asset)
+                self.save(state)
+                result = subprocess.run(["bash", str(mirror / "generate-update-feed.sh"), str(self.dmg)], cwd=self.root, env=self.env, text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                items = ET.parse(self.root / "appcast-all.xml").findall("./channel/item")
+                ns = "{http://www.andymatuschak.org/xml-namespaces/sparkle}"
+                self.assertEqual([i.findtext(ns + "version") for i in items], ["1000043", "1000042"])
+                expected_base = initial["feed_release"]["assets"][0]["digest"] if live_exists else staged_asset["digest"]
+                self.assertEqual((self.root / "appcast-all.base").read_text().strip(), expected_base.removeprefix("sha256:"))
+                self.run_script("publish-update-feed.sh", self.dmg)
+                self.assertEqual(self.live_feed()["digest"], "sha256:" + hashlib.sha256((self.root / "appcast-all.xml").read_bytes()).hexdigest())
 
 
 if __name__ == "__main__":

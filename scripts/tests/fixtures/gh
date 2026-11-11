@@ -67,6 +67,21 @@ def execute():
             return state["feed_release"]["assets"]
         if endpoint == "releases/tags/update-feed":
             return state["feed_release"]
+        if endpoint.startswith("releases/assets/") and method == "PATCH":
+            asset_id = int(endpoint.rsplit("/", 1)[1])
+            assets = state["feed_release"]["assets"]
+            asset = next(item for item in assets if item["id"] == asset_id)
+            name = field("name")
+            promoting = asset["name"].startswith("appcast-next-") and name == "appcast.xml"
+            if promoting and state.get("fail_feed_promotion", 0):
+                state["fail_feed_promotion"] -= 1
+                raise RuntimeError("Injected promotion failure")
+            assert not any(item["name"] == name and item["id"] != asset_id for item in assets)
+            asset["name"] = name
+            if promoting and state.get("fail_after_feed_promotion", 0):
+                state["fail_after_feed_promotion"] -= 1
+                raise RuntimeError("Injected lost promotion response")
+            return asset
         if endpoint == "releases/1" and method == "PATCH":
             assert field("draft") == "false"
             state["release"]["draft"] = False
@@ -90,7 +105,8 @@ def execute():
             assert "--prerelease" in args and "--latest=false" in args
             path = Path(args[-1])
             state["feed_release"] = {"id": 2, "tag_name": tag, "draft": False, "prerelease": True,
-                "assets": [{"name": "appcast.xml", "state": "uploaded",
+                "assets": [{"id": 10, "name": "appcast.xml", "state": "uploaded",
+                            "content": path.read_text(),
                             "digest": "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()}]}
             return {}
         assert state["release"] is None and tag in state["refs"]
@@ -119,12 +135,23 @@ def execute():
             if args[2] == "update-feed" and "--clobber" in args:
                 assets[:] = [asset for asset in assets if asset["name"] != path.name]
             assert all(asset["name"] != path.name for asset in assets)
+            if args[2] == "update-feed" and state.get("fail_feed_upload", 0):
+                state["fail_feed_upload"] -= 1
+                assets.append({"id": max((a.get("id", 0) for a in assets), default=0) + 1,
+                               "name": path.name, "digest": None, "state": "starter"})
+                raise RuntimeError("Injected upload failure after asset creation")
             assets.append({
-                "id": len(assets) + 1,
+                "id": max((a.get("id", 0) for a in assets), default=0) + 1,
                 "name": path.name,
                 "digest": "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest(),
                 "state": "uploaded",
+                **({"content": path.read_text()} if args[2] == "update-feed" else {}),
             })
+        return {}
+    if args[:2] == ["release", "download"]:
+        assert args[2] == "update-feed"
+        asset = next(a for a in state["feed_release"]["assets"] if a["name"] == flag("--pattern") and a["state"] == "uploaded")
+        (Path(flag("--dir")) / asset["name"]).write_text(asset["content"])
         return {}
     raise AssertionError(f"Unsupported CLI operation: {args}")
 
