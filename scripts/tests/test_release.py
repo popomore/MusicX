@@ -162,6 +162,19 @@ length="{self.dmg.stat().st_size}" sparkle:edSignature="{base64.b64encode(signat
                 result = self.run_script("release-tag.sh", self.sha, tag)
                 self.assertEqual(result.stdout.strip(), channel)
 
+    def test_release_follows_the_inherited_workspace_version(self):
+        for manifest in (self.manifest, self.bundle_manifest):
+            manifest.write_text(manifest.read_text().replace(
+                'version = "0.2.0"', 'version.workspace = true'))
+        inherited_manifest = self.manifest.read_text()
+        for version in ("1.0.0", "1.0.1"):
+            with self.subTest(version=version):
+                self.manifest.write_text(
+                    inherited_manifest + f'\n[workspace.package]\nversion = "{version}"\n')
+                result = self.run_script("release-tag.sh", self.sha, f"v{version}")
+                self.assertEqual(result.stdout.strip(), "stable")
+        self.run_script("release-tag.sh", self.sha, "v1.0.0", success=False)
+
     def test_release_rejects_tags_for_another_version_or_commit(self):
         other_commit = "ffff" if self.sha.startswith("0000") else "0000"
         for tag in ("v0.2.1", self.tag[:-4] + other_commit):

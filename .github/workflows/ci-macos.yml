@@ -43,9 +43,7 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust
-        run: |
-          rustup toolchain install 1.97.0 --profile minimal --component rustfmt
-          rustup override set 1.97.0
+        run: rustup toolchain install --no-self-update
 
       - name: Check formatting
         run: cargo fmt --all -- --check
