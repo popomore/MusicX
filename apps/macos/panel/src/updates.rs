@@ -7,13 +7,22 @@ pub fn version() -> String {
 }
 
 pub fn check() {
+    notify(&crate::protocol::check_updates_notification());
+}
+
+pub fn channel_changed() {
+    notify(&crate::protocol::update_channel_notification());
+}
+
+fn notify(name: &str) {
     let Ok(pid) = std::env::var("MUSICX_UPDATER_PID") else {
         return;
     };
+    let name = name.to_owned();
     dispatch2::DispatchQueue::main().exec_async(move || unsafe {
         NSDistributedNotificationCenter::defaultCenter()
             .postNotificationName_object_userInfo_deliverImmediately(
-                &NSString::from_str(&crate::protocol::check_updates_notification()),
+                &NSString::from_str(&name),
                 Some(&NSString::from_str(&pid)),
                 None,
                 true,

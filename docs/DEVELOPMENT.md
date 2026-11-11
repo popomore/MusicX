@@ -42,13 +42,15 @@ Signature verification requires OpenSSL 3. On macOS, install `openssl@3` with Ho
 
 The persistent outer app owns Sparkle 2.10.1; the disposable player panel forwards update requests to its parent. Settings displays the parent app's version, and both the application menu and status icon's context menu expose **检查更新…**. Sparkle checks daily, downloads updates automatically, and manages installation and relaunch. Quitting stops playback and terminates the child panel before the outer app exits.
 
-The fixed stable feed is `https://github.com/popomore/MusicX/releases/latest/download/appcast.xml`. Each enclosure points to the DMG on its immutable version tag. Preview releases do not supply this feed. Pushing source or building a CI artifact does not make an update available; the regular GitHub Release must be published with its signed appcast.
+The updater uses `https://github.com/popomore/MusicX/releases/download/update-feed/appcast.xml`. The dedicated `update-feed` pre-release holds signed metadata, is never Latest, and is updated after each versioned installer is published. It retains the newest three stable and preview items. Stable items have no channel; previews use `sparkle:channel=preview`. Settings defaults to **稳定版**; **全部版本** allows preview in addition to stable. The preference lives in `update-channel` in the app's data directory and is shared by settings, both menus, and automatic checks. Switching back to stable does not downgrade an installed preview.
+
+The legacy stable URL `https://github.com/popomore/MusicX/releases/latest/download/appcast.xml` remains available to existing installations. Every versioned release includes its own signed single-item `appcast.xml`. Each enclosure points to that tag's installer. The publisher authenticates previous metadata before merging it, refuses decreasing or conflicting build numbers, and checks the previous feed digest before replacement so a stale retry cannot discard newer updates. The dedicated feed must remain mutable; versioned installers and tags are never overwritten. Pushing source or building a CI artifact does not make an update available.
 
 Configure repository variable `SPARKLE_PUBLIC_KEY` and repository secret `SPARKLE_PRIVATE_KEY` before the next Developer ID release. Generate and export a dedicated key with Sparkle's `bin/generate_keys --account musicx` and `bin/generate_keys --account musicx -x <private-file>`. Preserve this key for future releases; keep the private value out of Git. The packager embeds only the public key. The workflow passes the private key to `generate_appcast` through stdin, verifies the enclosure signature against the configured public key, and uploads the feed with the installer. A signed stable release fails if this configuration or feed is missing.
 
 For local packaging with updates enabled, set `MUSICX_SPARKLE_PUBLIC_KEY` to the public key before running `scripts/package-macos.sh`. The script downloads a pinned, checksum-verified Sparkle distribution and signs its nested framework components before signing the outer bundle. Omit the key for local builds with updates disabled. The CLI's private development cache is never configured as an update target.
 
-Bundle versions follow the Cargo `X.Y.Z` version, so increment both helper and platform package versions before releasing an update. The first version with Sparkle must be installed manually; older versions have no updater. A real A→B upgrade, Developer ID validation, and notarization require published builds and are separate from local tests.
+Release versions come from tags, without changing Cargo package versions. `CFBundleShortVersionString` is the tag's numeric `X.Y.Z`; `MusicXReleaseVersion` retains the full preview suffix for the settings display. `CFBundleVersion` and `sparkle:version` use `1000000 + GITHUB_RUN_NUMBER` from the single Release macOS workflow. This migrates legacy `1.0.0` installations and orders stable and preview builds together; reruns of the same workflow keep their build number. Do not recreate the workflow or reset its counter without a migration. Older preview packages without Sparkle require a manual installation of a newer build. A real published A→B upgrade, Developer ID validation, and notarization remain separate acceptance checks.
 
 For distribution, set `MUSICX_CODESIGN_IDENTITY` to your Developer ID Application identity and package to a new output path. Submit the resulting DMG using your existing notarytool Keychain profile, then staple and validate the ticket before publishing it.
 
@@ -68,11 +70,11 @@ The macOS CI workflow runs formatting, workspace tests, and release automation t
 
 Workspace tests use Cargo's test profile with debug information disabled (`CARGO_PROFILE_TEST_DEBUG=0 cargo test --locked --workspace`) to avoid release size optimization and LTO on every change. Rust dependencies and their compiled artifacts are cached by toolchain, target, manifests, lockfile, and compiler environment. Stable releases still run the workspace tests with `--release` before packaging.
 
-After CI passes for a push to `main`, the Tag macOS Preview workflow creates a tag on the tested commit. The tag combines the application version, the commit's UTC timestamp, and the first four commit characters as `v<version>.preview-<YYYYMMDDHHMMSS>-<commit>`, for example `v0.2.0.preview-20261110085445-a87b`. A rerun reuses the tag when it points to the same commit. [Tag macOS Preview](../.github/workflows/tag-macos-preview.yml)
+After CI passes for a push to `main`, the Tag macOS Preview workflow creates a tag on the tested commit. It increments the patch of the latest published stable tag and appends the commit's UTC timestamp and first four characters: after `v1.0.0`, the next preview is `v1.0.1.preview-<YYYYMMDDHHMMSS>-<commit>`. A rerun reuses the tag when it points to the same commit. [Tag macOS Preview](../.github/workflows/tag-macos-preview.yml)
 
 Tag macOS Preview dispatches Release macOS with the new tag as its ref because [tags created using `GITHUB_TOKEN` do not trigger another push workflow](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow#triggering-a-workflow-from-a-workflow). Manually pushing a version tag starts Release macOS through the tag push event. [Release workflow](../.github/workflows/release-macos.yml)
 
-Release macOS builds an ad hoc signed DMG for preview tags and publishes it as a GitHub Pre-release. macOS may block it on first launch because it lacks notarization. Stable tags use Developer ID signing and notarization when all six repository Actions secrets are configured. With all six unset, a stable tag also produces an ad hoc signed Pre-release. A partial configuration fails before the build of a stable tag.
+Release macOS builds an ad hoc signed DMG with Sparkle for preview tags and publishes it as a GitHub Pre-release. macOS may block it on first launch because it lacks notarization. Stable tags use Developer ID signing and notarization when all six repository Actions secrets are configured. With all six unset, a stable tag also produces an ad hoc signed regular release with a signed update feed. A partial configuration fails before the build of a stable tag.
 
 | Secret | Value |
 | --- | --- |
@@ -83,14 +85,14 @@ Release macOS builds an ad hoc signed DMG for preview tags and publishes it as a
 | `APPLE_API_KEY` | App Store Connect API key ID |
 | `APPLE_API_ISSUER` | App Store Connect API issuer ID |
 
-Formal releases use manual stable tags. Tag a commit on `main` with a version that matches `apps/macos/helper/Cargo.toml` and `crates/platform-apple/Cargo.toml`. For version 0.2.0, push `v0.2.0`. Only a stable `vX.Y.Z` tag with a Developer ID signed and notarized installer becomes a regular release. Non-stable tags and ad hoc signed builds are always marked **Pre-release**.
+Formal releases use manual stable `vX.Y.Z` tags on tested commits on `main`; package versions are independent. Stable tags become regular releases and Latest regardless of Apple signing mode. Preview tags remain **Pre-release**. Both require the Sparkle signing configuration.
 
 ```sh
 git tag -a v0.2.0 -m "MusicX 0.2.0"
 git push origin v0.2.0
 ```
 
-The macOS job validates the tagged commit and both package versions, then builds the DMG for the selected signing mode. For Developer ID builds it signs, notarizes, and staples the installer, then generates a signed `appcast.xml`. The publish job verifies the checksum and update signature and uploads the installer, checksum, appcast (stable releases), and `release-manifest.json` to a draft. It checks the GitHub asset digests before publishing and retains a copy of the manifest for 90 days. The manifest records the signing mode.
+The macOS job validates the tagged commit, allocates its build number, packages the DMG, and signs both the release appcast and combined feed. Developer ID builds also notarize and staple the installer. The publish job verifies the checksum and update signature and uploads the installer, checksum, single-release appcast, and `release-manifest.json` to a draft. After verifying GitHub asset digests and publishing the installer, it updates the dedicated signed feed. The manifest records the display version, build number and signing mode and is retained for 90 days.
 
 If publication fails after a successful build, rerun the failed jobs to reuse the same installer. Preview installers are retained for 14 days; tagged release installers are retained for seven days. The publisher reuses matching uploads and stops if the draft contains conflicting assets. After configuring Apple credentials, use the next version tag for the signed release.
 

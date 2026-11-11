@@ -32,6 +32,10 @@ const APP_BUNDLE_VERSION: &str = match option_env!("MUSICX_BUNDLE_VERSION") {
     Some(version) => version,
     None => env!("CARGO_PKG_VERSION"),
 };
+const APP_SHORT_VERSION: &str = match option_env!("MUSICX_SHORT_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
+};
 const WEB_AUTH_APP: &str = "WebAuth.app";
 const PANEL_BIN: &str = "musicx-panel";
 const WEB_AUTH_BIN: &str = "musicx-webauth";
@@ -101,6 +105,14 @@ define_class!(
         fn quit_from_status(&self, _sender: Option<&AnyObject>) { quit(); }
         #[unsafe(method(checkForUpdates:))]
         fn check_updates(&self, _sender: Option<&AnyObject>) { check_for_updates(); }
+        #[unsafe(method(updateChannelChanged:))]
+        fn update_channel_changed(&self, _sender: Option<&AnyObject>) {
+            DESKTOP.with_borrow(|desktop| {
+                if let Some(updater) = desktop.as_ref().and_then(|d| d.updater.as_ref()) {
+                    updater.channel_changed();
+                }
+            });
+        }
     }
 
     unsafe impl NSApplicationDelegate for Delegate {
@@ -171,7 +183,7 @@ fn package(
 <key>CFBundleDisplayName</key><string>{name}</string>
 <key>CFBundleIconFile</key><string>musicx.icns</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>{APP_BUNDLE_VERSION}</string>
+<key>CFBundleShortVersionString</key><string>{APP_SHORT_VERSION}</string>
 <key>CFBundleVersion</key><string>{APP_BUNDLE_VERSION}</string>
 <key>MusicXReleaseVersion</key><string>{APP_RELEASE_VERSION}</string>
 <key>LSUIElement</key><{ui_element}/>
@@ -372,6 +384,16 @@ pub fn run(runtime: DesktopRuntime) -> ExitCode {
     let delegate: Retained<Delegate> = unsafe { msg_send![Delegate::alloc(mtm), init] };
     app.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
     unsafe {
+        NSDistributedNotificationCenter::defaultCenter()
+            .addObserver_selector_name_object_suspensionBehavior(
+                &delegate,
+                sel!(updateChannelChanged:),
+                Some(&NSString::from_str(
+                    &musicx_core::protocol::update_channel_notification(),
+                )),
+                Some(&NSString::from_str(&std::process::id().to_string())),
+                NSNotificationSuspensionBehavior::DeliverImmediately,
+            );
         NSDistributedNotificationCenter::defaultCenter()
             .addObserver_selector_name_object_suspensionBehavior(
                 &delegate,
@@ -664,7 +686,11 @@ mod tests {
                 ("CFBundleIdentifier", component_app_id(component)),
                 ("CFBundleName", name.clone()),
                 ("CFBundleDisplayName", name.clone()),
-                ("CFBundleShortVersionString", version.clone()),
+                (
+                    "CFBundleShortVersionString",
+                    std::env::var("MUSICX_SHORT_VERSION")
+                        .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_owned()),
+                ),
                 ("CFBundleVersion", version.clone()),
                 ("MusicXReleaseVersion", release_version.clone()),
             ] {

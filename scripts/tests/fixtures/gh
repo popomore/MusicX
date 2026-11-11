@@ -56,13 +56,17 @@ def execute():
                 {"tag_name": "v1.2.3", "draft": False, "prerelease": False,
                  "published_at": "2026-11-01T00:00:00Z", "assets": []},
             ])
-            return ([state["release"]] if state["release"] else []) + prior
+            return ([state["release"]] if state["release"] else []) + prior + ([state["feed_release"]] if state.get("feed_release") else [])
         if endpoint == "releases/latest":
             candidates = ([state["release"]] if state["release"] else []) + state.get("prior_releases", [])
             return next(release for release in candidates
                         if release["tag_name"] == state.get("latest_tag"))
         if endpoint == "releases/1/assets?per_page=100":
             return state["release"]["assets"]
+        if endpoint == "releases/2/assets?per_page=100":
+            return state["feed_release"]["assets"]
+        if endpoint == "releases/tags/update-feed":
+            return state["feed_release"]
         if endpoint == "releases/1" and method == "PATCH":
             assert field("draft") == "false"
             state["release"]["draft"] = False
@@ -81,6 +85,14 @@ def execute():
         return {}
     if args[:2] == ["release", "create"]:
         tag = args[2]
+        if tag == "update-feed":
+            assert state.get("feed_release") is None
+            assert "--prerelease" in args and "--latest=false" in args
+            path = Path(args[-1])
+            state["feed_release"] = {"id": 2, "tag_name": tag, "draft": False, "prerelease": True,
+                "assets": [{"name": "appcast.xml", "state": "uploaded",
+                            "digest": "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()}]}
+            return {}
         assert state["release"] is None and tag in state["refs"]
         state["release"] = {
             "id": 1,
@@ -99,9 +111,13 @@ def execute():
             "isPrerelease": release["prerelease"],
         }
     if args[:2] == ["release", "upload"]:
-        assets = state["release"]["assets"]
+        assets = state["feed_release" if args[2] == "update-feed" else "release"]["assets"]
         for filename in args[args.index("--repo") + 2 :]:
+            if filename.startswith("--"):
+                continue
             path = Path(filename)
+            if args[2] == "update-feed" and "--clobber" in args:
+                assets[:] = [asset for asset in assets if asset["name"] != path.name]
             assert all(asset["name"] != path.name for asset in assets)
             assets.append({
                 "id": len(assets) + 1,
