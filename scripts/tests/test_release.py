@@ -189,7 +189,12 @@ length="{self.dmg.stat().st_size}" sparkle:edSignature="{base64.b64encode(signat
         for version in ("0.0.0", "1.0.0", "1.0.1", "12.34.56"):
             with self.subTest(version=version):
                 result = self.run_script("validate-release-tag.sh", self.sha, f"v{version}", "--github-output")
-                self.assertEqual(result.stdout, f"sha={self.sha}\nchannel=stable\nversion={version}\n")
+                self.assertEqual(result.stdout, f"sha={self.sha}\nchannel=stable\nversion={version}\nbundle-version={version}\n")
+
+    def test_preview_metadata_retains_the_full_display_version(self):
+        result = self.run_script("validate-release-tag.sh", self.sha, self.tag, "--github-output")
+        self.assertEqual(result.stdout,
+                         f"sha={self.sha}\nchannel=preview\nversion={self.tag[1:]}\nbundle-version=1.2.3\n")
 
     def test_release_rejects_noncanonical_tags(self):
         for tag in ("", "1.0.0", "v1", "v1.0", "v1.0.0.0", "v01.0.0", "v1.00.0",
@@ -256,7 +261,7 @@ length="{self.dmg.stat().st_size}" sparkle:edSignature="{base64.b64encode(signat
         cases = [
             (self.tag, "ad-hoc", True, 3),
             (self.tag, "developer-id", True, 3),
-            ("v0.2.0", "ad-hoc", False, 3),
+            ("v0.2.0", "ad-hoc", False, 4),
             ("v0.2.0", "developer-id", False, 4),
         ]
         for tag, signing, prerelease, asset_count in cases:
@@ -271,22 +276,15 @@ length="{self.dmg.stat().st_size}" sparkle:edSignature="{base64.b64encode(signat
                 self.assertFalse(release["draft"])
                 self.assertEqual(len(release["assets"]), asset_count)
 
-    def test_stable_ad_hoc_release_does_not_require_an_update_feed(self):
+    def test_stable_ad_hoc_release_requires_a_signed_update_feed(self):
         self.env.update(RELEASE_TAG="v0.2.0", SIGNING_MODE="ad-hoc")
         self.save({"refs": {"v0.2.0": self.sha}, "release": None, "calls": []})
         self.appcast.unlink()
-        self.run_script("publish-macos.sh", self.dmg)
-        release = self.state()["release"]
-        self.assertFalse(release["prerelease"])
-        self.assertEqual({a["name"] for a in release["assets"]}, {
-            self.dmg.name, self.dmg.name + ".sha256", "release-manifest.json",
-        })
-        manifest = json.loads((self.root / "release-manifest.json").read_text())
-        self.assertEqual(manifest["signing_mode"], "ad-hoc")
+        self.run_script("publish-macos.sh", self.dmg, success=False)
+        self.assertEqual(self.state()["calls"], [])
 
-    def test_ad_hoc_publication_preserves_the_signed_latest_feed(self):
+    def test_ad_hoc_publication_updates_latest_with_a_signed_feed(self):
         self.env.update(RELEASE_TAG="v0.2.0", SIGNING_MODE="ad-hoc")
-        self.appcast.unlink()
         signed = {"id": 2, "tag_name": "v0.1.0", "draft": False, "prerelease": False,
                   "assets": [{"name": "appcast.xml"}]}
         draft = {"id": 1, "tag_name": "v0.2.0", "draft": True, "prerelease": False,
@@ -301,7 +299,7 @@ length="{self.dmg.stat().st_size}" sparkle:edSignature="{base64.b64encode(signat
                     env=self.env, cwd=self.root, capture_output=True, text=True, check=True,
                 )
                 release = json.loads(latest.stdout)
-                self.assertEqual(release["tag_name"], "v0.1.0")
+                self.assertEqual(release["tag_name"], "v0.2.0")
                 self.assertIn("appcast.xml", {a["name"] for a in release["assets"]})
 
     def test_publishing_rejects_invalid_tags_before_calling_github(self):
@@ -344,11 +342,14 @@ length="{self.dmg.stat().st_size}" sparkle:edSignature="{base64.b64encode(signat
             self.assertEqual(self.state()["calls"], [])
 
     def test_stable_release_rejects_another_signing_key(self):
-        self.env.update(RELEASE_TAG="v0.2.0", SIGNING_MODE="developer-id")
+        self.env.update(RELEASE_TAG="v0.2.0")
         import base64
         self.env["MUSICX_SPARKLE_PUBLIC_KEY"] = base64.b64encode(bytes(32)).decode()
-        self.run_script("publish-macos.sh", self.dmg, success=False)
-        self.assertEqual(self.state()["calls"], [])
+        for mode in ("developer-id", "ad-hoc"):
+            with self.subTest(signing_mode=mode):
+                self.env["SIGNING_MODE"] = mode
+                self.run_script("publish-macos.sh", self.dmg, success=False)
+                self.assertEqual(self.state()["calls"], [])
 
     def test_stable_release_rejects_altered_signed_installer(self):
         self.env.update(RELEASE_TAG="v0.2.0", SIGNING_MODE="developer-id")

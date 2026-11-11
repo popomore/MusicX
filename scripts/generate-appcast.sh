@@ -19,4 +19,6 @@ printf '%s' "$SPARKLE_PRIVATE_KEY" | "$sparkle/bin/generate_appcast" \
     --download-url-prefix "https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/" \
     --link "https://github.com/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG" "$stage"
 test -s "$stage/appcast.xml"
+printf '%s' "$SPARKLE_PRIVATE_KEY" | "$sparkle/bin/sign_update" \
+    --verify --ed-key-file - "$stage/appcast.xml"
 cp "$stage/appcast.xml" "$(dirname "$dmg")/appcast.xml"

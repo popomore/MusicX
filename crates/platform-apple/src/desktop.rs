@@ -24,7 +24,11 @@ use crate::{
 pub use musicx_core::protocol::APP_NAME;
 use musicx_core::protocol::component_app_id;
 
-const APP_BUNDLE_VERSION: &str = match option_env!("MUSICX_RELEASE_VERSION") {
+const APP_RELEASE_VERSION: &str = match option_env!("MUSICX_RELEASE_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
+};
+const APP_BUNDLE_VERSION: &str = match option_env!("MUSICX_BUNDLE_VERSION") {
     Some(version) => version,
     None => env!("CARGO_PKG_VERSION"),
 };
@@ -169,6 +173,7 @@ fn package(
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>{APP_BUNDLE_VERSION}</string>
 <key>CFBundleVersion</key><string>{APP_BUNDLE_VERSION}</string>
+<key>MusicXReleaseVersion</key><string>{APP_RELEASE_VERSION}</string>
 <key>LSUIElement</key><{ui_element}/>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
@@ -490,11 +495,7 @@ fn show_panel() {
             .env("MUSICX_UPDATER_PID", std::process::id().to_string())
             .env(
                 "MUSICX_APP_VERSION",
-                bundle_string("CFBundleShortVersionString", APP_BUNDLE_VERSION),
-            )
-            .env(
-                "MUSICX_APP_BUILD",
-                bundle_string("CFBundleVersion", APP_BUNDLE_VERSION),
+                bundle_string("MusicXReleaseVersion", APP_RELEASE_VERSION),
             )
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
@@ -645,7 +646,9 @@ mod tests {
             "visible player is still packaged as Panel.app"
         );
         assert!(!bundle.join("Contents/Helpers/Panel.app").exists());
-        let version = std::env::var("MUSICX_RELEASE_VERSION")
+        let version = std::env::var("MUSICX_BUNDLE_VERSION")
+            .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_owned());
+        let release_version = std::env::var("MUSICX_RELEASE_VERSION")
             .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_owned());
 
         for (path, component, name) in [
@@ -663,6 +666,7 @@ mod tests {
                 ("CFBundleDisplayName", name.clone()),
                 ("CFBundleShortVersionString", version.clone()),
                 ("CFBundleVersion", version.clone()),
+                ("MusicXReleaseVersion", release_version.clone()),
             ] {
                 let result = Command::new("/usr/bin/plutil")
                     .args(["-extract", key, "raw", "-o", "-"])

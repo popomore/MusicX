@@ -35,7 +35,7 @@ fi
 sha256sum --check "$checksum"
 files=("$dmg" "$checksum")
 make_latest=false
-if [[ "$channel" == stable && "$signing_mode" == developer-id ]]; then
+if [[ "$channel" == stable ]]; then
     python3 "$script_dir/validate-appcast.py" "$dmg" "$tag" "$repo"
     files+=(appcast.xml)
     make_latest=true
