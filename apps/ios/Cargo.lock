@@ -1936,9 +1936,10 @@ dependencies = [
 
 [[package]]
 name = "musicx-platform-apple"
-version = "0.2.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "block2",
  "dispatch2",
  "musicx-core",
@@ -2164,6 +2165,8 @@ dependencies = [
 [[package]]
 name = "nsh-platform-ios"
 version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e9d6454be9fa5dea657c39d446d4a1fdc941d0c0c4952e504ce7cd9dadfacfd"
 dependencies = [
  "block2",
  "dispatch2",
