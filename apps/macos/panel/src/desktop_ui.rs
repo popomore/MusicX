@@ -468,11 +468,7 @@ pub(super) fn player(model: Model) -> impl IntoElement {
     })
 }
 
-fn setup_action(
-    label: &'static str,
-    primary: bool,
-    press: impl Fn() + 'static,
-) -> impl IntoElement {
+fn setup_action(label: &'static str, press: impl Fn() + 'static) -> impl IntoElement {
     button()
         .accessibility_label(Some(label.into()))
         .on_press(press)
@@ -481,26 +477,14 @@ fn setup_action(
         .items_center()
         .justify_center()
         .rounded(px(7.0))
-        .bg(move || {
-            if primary {
-                theme().primary
-            } else {
-                theme().muted.opacity(0.55)
-            }
-        })
+        .bg(move || theme().primary)
         .hover(|s| s.opacity(0.86))
         .active(|s| s.opacity(0.65))
         .child(
             text(label)
                 .text_size(px(13.0))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(move || {
-                    if primary {
-                        theme().primary_foreground
-                    } else {
-                        theme().foreground
-                    }
-                }),
+                .text_color(move || theme().primary_foreground),
         )
 }
 
@@ -520,22 +504,22 @@ fn empty_player(model: Model) -> impl IntoElement {
                                 .replace("#1b2421", "currentColor"),
                         )
                     })
-                    .w(px(56.0))
-                    .h(px(56.0))
+                    .w(px(48.0))
+                    .h(px(48.0))
                     .text_color(move || theme().foreground)
                     .label("MusicX"),
                 )
                 .child(
-                    text("从一首喜欢的歌开始")
+                    text("先添加音乐来源")
                         .mt(px(24.0))
-                        .text_size(px(22.0))
+                        .text_size(px(20.0))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(move || theme().foreground),
                 )
                 .child(
-                    text("添加音乐来源，连接 Agent，\n让它为你选一首歌。")
-                        .mt(px(10.0))
-                        .text_size(px(13.0))
+                    text("接入你常用的音乐平台，\n开始播放喜欢的音乐。")
+                        .mt(px(12.0))
+                        .text_size(px(12.0))
                         .text_center()
                         .number_of_lines(2)
                         .text_color(move || theme().muted_foreground),
@@ -543,24 +527,27 @@ fn empty_player(model: Model) -> impl IntoElement {
         )
         .child(
             view()
-                .mt(px(28.0))
-                .gap(px(8.0))
-                .child(setup_action("添加音乐来源", true, move || {
+                .mt(px(24.0))
+                .child(setup_action("添加音乐来源", move || {
                     model.open(Page::Sources)
-                }))
-                .child(setup_action("连接 Agent", false, move || {
-                    model.open(Page::Settings)
                 })),
         )
         .child(
             view()
                 .items_center()
-                .mt(px(12.0))
+                .mt(px(20.0))
+                .gap(px(4.0))
                 .child(crate::controls::action(
-                    "打开我的歌单",
+                    "连接 Agent",
                     || false,
-                    move || model.open(Page::Library),
-                )),
+                    move || model.open(Page::Settings),
+                ))
+                .child(
+                    text("用对话选歌和控制播放")
+                        .text_size(px(11.0))
+                        .text_center()
+                        .text_color(move || theme().muted_foreground),
+                ),
         )
         .child(when(
             move || model.error.with(|error| !error.is_empty()),
