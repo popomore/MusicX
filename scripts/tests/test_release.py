@@ -84,10 +84,24 @@ class ReleaseTests(unittest.TestCase):
                         "-in", str(self.dmg), "-out", str(signature)], check=True, capture_output=True)
         self.appcast = self.root / "appcast.xml"
         self.appcast.write_text(f'''<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
-<channel><item><sparkle:version>0.2.0</sparkle:version>
+<channel><title>MusicX</title><item><sparkle:version>0.2.0</sparkle:version>
 <enclosure url="https://github.com/test/musicx/releases/download/v0.2.0/{self.dmg.name}"
 length="{self.dmg.stat().st_size}" sparkle:edSignature="{base64.b64encode(signature.read_bytes()).decode()}"/>
 </item></channel></rss>''')
+        self.sign_appcast()
+
+    def sign_appcast(self, key=None):
+        """Sign the exact XML bytes using Sparkle 2.10.1's trailer format."""
+        import base64
+        content = self.appcast.read_bytes().split(b"<!-- sparkle-signatures:\n")[0]
+        self.appcast.write_bytes(content)
+        signature = self.root / "feed-signature"
+        subprocess.run(["openssl", "pkeyutl", "-sign", "-inkey", str(key or self.root / "test-key.pem"),
+                        "-rawin", "-in", str(self.appcast), "-out", str(signature)],
+                       check=True, capture_output=True)
+        trailer = (f"<!-- sparkle-signatures:\nedSignature: {base64.b64encode(signature.read_bytes()).decode()}\n"
+                   f"length: {len(content)}\n-->\n").encode()
+        self.appcast.write_bytes(content + trailer)
 
     def git(self, *args):
         return subprocess.run(["git", *args], cwd=self.root, env=self.env, text=True,
@@ -313,6 +327,7 @@ length="{self.dmg.stat().st_size}" sparkle:edSignature="{base64.b64encode(signat
         tag = "v3.4.5"
         self.env.update(RELEASE_TAG=tag, SIGNING_MODE="developer-id")
         self.appcast.write_text(self.appcast.read_text().replace("0.2.0", "3.4.5"))
+        self.sign_appcast()
         self.save({"refs": {tag: self.sha}, "release": None, "calls": []})
         self.run_script("publish-macos.sh", self.dmg)
         manifest = json.loads((self.root / "release-manifest.json").read_text())
@@ -338,8 +353,54 @@ length="{self.dmg.stat().st_size}" sparkle:edSignature="{base64.b64encode(signat
         ]
         for invalid in variants:
             self.appcast.write_text(invalid)
+            self.sign_appcast()
             self.run_script("publish-macos.sh", self.dmg, success=False)
             self.assertEqual(self.state()["calls"], [])
+
+    def test_stable_release_rejects_unsigned_or_tampered_feed(self):
+        """A valid archive signature cannot authorize unsigned feed content."""
+        original = self.appcast.read_bytes()
+        variants = [
+            original.split(b"<!-- sparkle-signatures:\n")[0],
+            original.replace(b">MusicX<", b">Forged<"),
+        ]
+        for mode in ("ad-hoc", "developer-id"):
+            self.env.update(RELEASE_TAG="v0.2.0", SIGNING_MODE=mode)
+            for index, invalid in enumerate(variants):
+                with self.subTest(signing_mode=mode, variant=index):
+                    self.save({"refs": {"v0.2.0": self.sha}, "release": None, "calls": []})
+                    self.appcast.write_bytes(invalid)
+                    self.run_script("publish-macos.sh", self.dmg, success=False)
+                    self.assertEqual(self.state()["calls"], [])
+
+    def test_stable_release_rejects_feed_signed_by_another_key(self):
+        """Keep the DMG signature valid while signing the feed with an untrusted key."""
+        key = self.root / "other-key.pem"
+        subprocess.run(["openssl", "genpkey", "-algorithm", "ED25519", "-out", str(key)],
+                       check=True, capture_output=True)
+        self.sign_appcast(key)
+        for mode in ("ad-hoc", "developer-id"):
+            with self.subTest(signing_mode=mode):
+                self.env.update(RELEASE_TAG="v0.2.0", SIGNING_MODE=mode)
+                self.save({"refs": {"v0.2.0": self.sha}, "release": None, "calls": []})
+                self.run_script("publish-macos.sh", self.dmg, success=False)
+                self.assertEqual(self.state()["calls"], [])
+
+    def test_stable_release_rejects_malformed_feed_signature_block(self):
+        """Reject invalid trailers and any unsigned content after the trailer."""
+        self.env.update(RELEASE_TAG="v0.2.0", SIGNING_MODE="ad-hoc")
+        original = self.appcast.read_bytes()
+        variants = [
+            original.replace(b"\nlength: ", b"\nlength: 9"),
+            original.replace(b"\nedSignature: ", b"\nedSignature: !"),
+            original + b"<!-- unsigned metadata -->",
+        ]
+        for index, invalid in enumerate(variants):
+            with self.subTest(variant=index):
+                self.save({"refs": {"v0.2.0": self.sha}, "release": None, "calls": []})
+                self.appcast.write_bytes(invalid)
+                self.run_script("publish-macos.sh", self.dmg, success=False)
+                self.assertEqual(self.state()["calls"], [])
 
     def test_stable_release_rejects_another_signing_key(self):
         self.env.update(RELEASE_TAG="v0.2.0")
