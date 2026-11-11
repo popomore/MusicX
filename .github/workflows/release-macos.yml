@@ -3,6 +3,7 @@ name: Release macOS
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -19,12 +20,13 @@ env:
 
 jobs:
   build:
+    if: github.ref_type == 'tag' && !github.event.deleted
     runs-on: macos-15
     timeout-minutes: 45
     outputs:
       artifact-id: ${{ steps.artifacts.outputs.artifact-id }}
       source-sha: ${{ steps.source.outputs.sha }}
-      signing-mode: ${{ steps.signing.outputs.mode }}
+      signing-mode: ${{ steps.source.outputs.channel == 'preview' && 'ad-hoc' || steps.signing.outputs.mode }}
     defaults:
       run:
         shell: bash
@@ -47,17 +49,11 @@ jobs:
             echo "::error::The tagged commit must be on main."
             exit 1
           fi
-          metadata=$(cargo metadata --locked --no-deps --format-version 1)
-          version=$(jq -er '.packages[] | select(.name == "musicx") | .version' <<< "$metadata")
-          bundle_version=$(jq -er '.packages[] | select(.name == "musicx-platform-apple") | .version' <<< "$metadata")
-          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ||
-                "$GITHUB_REF_NAME" != "v$version" || "$version" != "$bundle_version" ]]; then
-            echo "::error::Use a stable version tag matching both MusicX Cargo manifests."
-            exit 1
-          fi
-          printf 'sha=%s\n' "$source_sha" >> "$GITHUB_OUTPUT"
+          channel=$(bash scripts/release-tag.sh "$source_sha" "$GITHUB_REF_NAME")
+          printf 'sha=%s\nchannel=%s\n' "$source_sha" "$channel" >> "$GITHUB_OUTPUT"
 
       - name: Select signing mode
+        if: steps.source.outputs.channel == 'stable'
         id: signing
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -87,6 +83,7 @@ jobs:
           printf 'mode=%s\n' "$mode" >> "$GITHUB_OUTPUT"
 
       - name: Format and test
+        if: steps.source.outputs.channel == 'stable'
         run: |
           cargo fmt --all -- --check
           cargo test --release --locked --workspace
@@ -171,7 +168,7 @@ jobs:
             ${{ env.DMG }}.sha256
           compression-level: 0
           if-no-files-found: error
-          retention-days: 7
+          retention-days: ${{ steps.source.outputs.channel == 'preview' && 14 || 7 }}
 
   publish:
     needs: build

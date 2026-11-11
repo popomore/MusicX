@@ -9,8 +9,7 @@ if [[ "$(git rev-parse HEAD)" != "$source_sha" ]]; then
     echo "::error::The checkout does not match the preview build."
     exit 1
 fi
-timestamp=$(TZ=UTC git show -s --format=%cd --date=format-local:%Y%m%d%H%M%S "$source_sha")
-tag="${source_sha:0:4}-$timestamp"
+tag=$(bash "$(dirname "$0")/release-tag.sh" "$source_sha")
 
 existing=$(gh api "repos/$repo/git/matching-refs/tags/$tag" \
     --jq ".[] | select(.ref == \"refs/tags/$tag\") | .ref")
