@@ -58,7 +58,7 @@ class ReleaseTests(unittest.TestCase):
         self.sha = self.git("rev-parse", "HEAD").stdout.strip()
         self.env["SOURCE_SHA"] = self.sha
         self.tag = "v0.2.0.preview-20261110031705-" + self.sha[:4]
-        self.dmg = self.root / "MusicX.dmg"
+        self.dmg = self.root / "MusicX-macos-arm64.dmg"
         self.dmg.write_bytes(b"installer fixture")
         digest = hashlib.sha256(self.dmg.read_bytes()).hexdigest()
         self.dmg.with_suffix(".dmg.sha256").write_text(f"{digest}  {self.dmg.name}\n")
@@ -153,6 +153,32 @@ class ReleaseTests(unittest.TestCase):
         self.bundle_manifest.write_text(self.bundle_manifest.read_text().replace('"0.2.0"', '"0.2.1"'))
         self.run_script("create-preview-tag.sh", success=False)
         self.assertEqual(self.state()["calls"], [])
+
+    def test_preview_dispatch_skips_complete_release_and_retries_incomplete_release(self):
+        self.env.update(RELEASE_TAG=self.tag, SIGNING_MODE="ad-hoc")
+        self.save({"refs": {self.tag: self.sha}, "release": None, "calls": []})
+        self.run_script("publish-macos.sh", self.dmg)
+        published = self.state()["release"]
+        incomplete = {**published, "assets": published["assets"][:-1]}
+        cases = [
+            ("published", published, False),
+            ("missing", None, True),
+            ("draft", {**published, "draft": True}, True),
+            ("incomplete", incomplete, True),
+        ]
+        for name, release, should_dispatch in cases:
+            with self.subTest(name=name):
+                self.save({"refs": {self.tag: self.sha}, "release": release, "calls": []})
+                self.run_script("dispatch-preview-release.sh", self.tag)
+                dispatches = [c for c in self.state()["calls"] if c[:2] == ["workflow", "run"]]
+                expected = [["workflow", "run", "release-macos.yml", "--repo", "test/musicx",
+                             "--ref", self.tag]] if should_dispatch else []
+                self.assertEqual(dispatches, expected)
+
+    def test_preview_dispatch_stops_when_release_lookup_fails(self):
+        self.save({"refs": {self.tag: self.sha}, "release": None, "calls": [], "api_error": True})
+        self.run_script("dispatch-preview-release.sh", self.tag, success=False)
+        self.assertEqual(self.state()["calls"], [["api", "--paginate", "repos/test/musicx/releases?per_page=100"]])
 
     def test_release_type_depends_on_tag_and_signing(self):
         """Check release metadata across stable and preview signing combinations."""

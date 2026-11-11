@@ -50,6 +50,8 @@ def execute():
             state["refs"][tag] = field("sha")
             return {}
         if endpoint == "releases?per_page=100":
+            if state.get("api_error"):
+                raise RuntimeError("GitHub unavailable")
             return [state["release"]] if state["release"] else []
         if endpoint == "releases/1/assets?per_page=100":
             return state["release"]["assets"]
@@ -59,6 +61,11 @@ def execute():
             return {"html_url": "https://example.invalid/release"}
         raise AssertionError(f"Unsupported API operation: {args}")
 
+    if args[:2] == ["workflow", "run"]:
+        assert args[2] == "release-macos.yml"
+        assert flag("--repo") == "test/musicx"
+        assert flag("--ref") in state["refs"]
+        return {}
     if args[:2] == ["release", "create"]:
         tag = args[2]
         assert state["release"] is None and tag in state["refs"]
