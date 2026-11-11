@@ -78,6 +78,21 @@ pub fn settings_view(model: Model) -> impl IntoElement {
     flow(model, false, || {})
 }
 
+#[cfg(target_os = "macos")]
+fn update_settings() -> impl IntoElement {
+    view()
+        .gap(px(6.0))
+        .pb(px(14.0))
+        .child(section("版本与更新"))
+        .child(caption(crate::updates::version()))
+        .child(action("检查更新…", || false, crate::updates::check))
+}
+
+#[cfg(target_os = "ios")]
+fn update_settings() -> impl IntoElement {
+    view()
+}
+
 #[cfg(target_os = "ios")]
 fn playback_settings(_model: Model) -> impl IntoElement {
     view()
@@ -254,6 +269,7 @@ fn flow(model: Model, importing: bool, back: impl Fn() + Copy + 'static) -> impl
                     view()
                         .gap(px(10.0))
                         .pb(px(12.0))
+                        .child(when(move || !importing, update_settings))
                         .child(when(move || !importing, move || playback_settings(model)))
                         .child(when(move || !importing, mcp_settings))
                         .child(when(move || !importing, || section("音乐来源")))

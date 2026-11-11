@@ -6,8 +6,9 @@ use objc2::{
 };
 use objc2_app_kit::*;
 use objc2_foundation::{
-    NSData, NSDistributedNotificationCenter, NSObject, NSObjectProtocol, NSPoint, NSRunLoop,
-    NSRunLoopCommonModes, NSSize, NSString, NSTimer, ns_string,
+    NSBundle, NSData, NSDistributedNotificationCenter, NSNotification,
+    NSNotificationSuspensionBehavior, NSObject, NSObjectProtocol, NSRunLoop, NSRunLoopCommonModes,
+    NSSize, NSString, NSTimer, ns_string,
 };
 use std::{
     cell::RefCell,
@@ -23,7 +24,7 @@ use crate::{
 pub use musicx_core::protocol::APP_NAME;
 use musicx_core::protocol::component_app_id;
 
-const APP_BUNDLE_VERSION: &str = "7";
+const APP_BUNDLE_VERSION: &str = env!("CARGO_PKG_VERSION");
 const WEB_AUTH_APP: &str = "WebAuth.app";
 const PANEL_BIN: &str = "musicx-panel";
 const WEB_AUTH_BIN: &str = "musicx-webauth";
@@ -46,6 +47,9 @@ struct Desktop {
     timer: Retained<NSTimer>,
     media: Option<SystemMedia>,
     panel: Option<PanelProcess>,
+    updater: Option<crate::updater::Updater>,
+    updater_error: String,
+    stopping: bool,
     last_title: String,
     last_artist: String,
     last_state: Option<State>,
@@ -74,6 +78,10 @@ define_class!(
                 let menu = NSMenu::new(mtm);
                 unsafe {
                     menu.addItemWithTitle_action_keyEquivalent(
+                        ns_string!("检查更新…"), Some(sel!(checkForUpdates:)), ns_string!(""),
+                    ).setTarget(Some(self));
+                    menu.addItem(&NSMenuItem::separatorItem(mtm));
+                    menu.addItemWithTitle_action_keyEquivalent(
                         ns_string!("退出 MusicX"), Some(sel!(quitFromStatus:)), ns_string!(""),
                     ).setTarget(Some(self));
                 }
@@ -84,17 +92,31 @@ define_class!(
         }
         #[unsafe(method(quitFromStatus:))]
         fn quit_from_status(&self, _sender: Option<&AnyObject>) { quit(); }
+        #[unsafe(method(checkForUpdates:))]
+        fn check_updates(&self, _sender: Option<&AnyObject>) { check_for_updates(); }
     }
 
     unsafe impl NSApplicationDelegate for Delegate {
+        #[unsafe(method(applicationDidFinishLaunching:))]
+        fn launched(&self, _notification: &NSNotification) {
+            let result = crate::updater::Updater::start();
+            DESKTOP.with_borrow_mut(|desktop| {
+                if let Some(desktop) = desktop {
+                    match result {
+                        Ok(updater) => desktop.updater = updater,
+                        Err(error) => desktop.updater_error = format!("更新器启动失败：{error}"),
+                    }
+                }
+            });
+        }
         #[unsafe(method(applicationShouldTerminateAfterLastWindowClosed:))]
         fn keep_playing(&self, _app: &NSApplication) -> bool { false }
         #[unsafe(method(applicationShouldHandleReopen:hasVisibleWindows:))]
         fn reopen(&self, _app: &NSApplication, _visible: bool) -> bool { show_panel(); false }
         #[unsafe(method(applicationShouldTerminate:))]
         fn terminate(&self, _app: &NSApplication) -> NSApplicationTerminateReply {
-            quit();
-            NSApplicationTerminateReply::TerminateCancel
+            shutdown();
+            NSApplicationTerminateReply::TerminateNow
         }
     }
 
@@ -125,6 +147,11 @@ fn package(
         include_bytes!("../../../assets/musicx.icns"),
     )?;
     let ui_element = if agent { "true" } else { "false" };
+    let updater = if binary == "musicx" && contents.join("Helpers").is_dir() {
+        crate::updater::package(bundle, signing_identity)?
+    } else {
+        String::new()
+    };
     fs::write(
         contents.join("Info.plist"),
         format!(
@@ -142,6 +169,7 @@ fn package(
 <key>LSUIElement</key><{ui_element}/>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
+{updater}
 </dict></plist>"#,
             version = env!("CARGO_PKG_VERSION"),
         ),
@@ -336,6 +364,18 @@ pub fn run(runtime: DesktopRuntime) -> ExitCode {
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
     let delegate: Retained<Delegate> = unsafe { msg_send![Delegate::alloc(mtm), init] };
     app.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
+    unsafe {
+        NSDistributedNotificationCenter::defaultCenter()
+            .addObserver_selector_name_object_suspensionBehavior(
+                &delegate,
+                sel!(checkForUpdates:),
+                Some(&NSString::from_str(
+                    &musicx_core::protocol::check_updates_notification(),
+                )),
+                Some(&NSString::from_str(&std::process::id().to_string())),
+                NSNotificationSuspensionBehavior::DeliverImmediately,
+            );
+    }
 
     let status_item = NSStatusBar::systemStatusBar().statusItemWithLength(NSSquareStatusItemLength);
     let status_icon = load_status_icon(include_bytes!("../../../assets/musicx-menu.png"));
@@ -379,6 +419,10 @@ pub fn run(runtime: DesktopRuntime) -> ExitCode {
             timer,
             media: None,
             panel: None,
+            updater: None,
+            updater_error: "此构建尚未配置自动更新。请从 MusicX 的 GitHub Releases 下载新版本。"
+                .into(),
+            stopping: false,
             last_title: String::new(),
             last_artist: String::new(),
             last_state: None,
@@ -431,9 +475,25 @@ fn show_panel() {
             .yieldActivationToApplicationWithBundleIdentifier(&NSString::from_str(
                 &component_app_id("panel"),
             ));
+        let bundle = NSBundle::mainBundle();
+        let bundle_string = |key: &str, fallback: &str| {
+            bundle
+                .objectForInfoDictionaryKey(&NSString::from_str(key))
+                .and_then(|value| value.downcast_ref::<NSString>().map(ToString::to_string))
+                .unwrap_or_else(|| fallback.to_owned())
+        };
         let child = std::process::Command::new(panel_executable)
             .current_dir(&desktop.working_dir)
             .arg("panel")
+            .env("MUSICX_UPDATER_PID", std::process::id().to_string())
+            .env(
+                "MUSICX_APP_VERSION",
+                bundle_string("CFBundleShortVersionString", env!("CARGO_PKG_VERSION")),
+            )
+            .env(
+                "MUSICX_APP_BUILD",
+                bundle_string("CFBundleVersion", APP_BUNDLE_VERSION),
+            )
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .spawn()?;
@@ -510,31 +570,46 @@ pub fn refresh() {
     });
 }
 
-pub fn quit() {
-    dispatch2::DispatchQueue::main().exec_async(|| {
-        DESKTOP.with_borrow_mut(|desktop| {
-            if let Some(mut desktop) = desktop.take() {
-                desktop.timer.invalidate();
-                if let Some(mut panel) = desktop.panel.take() {
-                    let _ = panel.child.kill();
-                    let _ = panel.child.wait();
-                }
-                NSStatusBar::systemStatusBar().removeStatusItem(&desktop.status_item);
-            }
-        });
-        player::shutdown();
-        stop_application();
+fn check_for_updates() {
+    // Clone no AppKit objects across threads and release the RefCell borrow
+    // before entering Sparkle's UI (which may run a nested event loop).
+    let updater = DESKTOP.with_borrow(|desktop| {
+        desktop.as_ref().map(|d| {
+            (
+                d.updater.as_ref().map(|u| u.controller()),
+                d.updater_error.clone(),
+            )
+        })
     });
+    if let Some((controller, error)) = updater {
+        if let Some(controller) = controller {
+            crate::updater::Updater::check(&controller);
+        } else {
+            crate::updater::unavailable(&error);
+        }
+    }
 }
 
-fn stop_application() {
-    let mtm = MainThreadMarker::new().expect("main thread");
-    let app = NSApplication::sharedApplication(mtm);
-    app.stop(None);
-    if let Some(event) = NSEvent::otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2(
-            NSEventType::ApplicationDefined, NSPoint::new(0.0, 0.0), NSEventModifierFlags::empty(), 0.0, 0, None, 0, 0, 0) {
-            app.postEvent_atStart(&event, true);
+fn shutdown() {
+    DESKTOP.with_borrow_mut(|desktop| {
+        if let Some(desktop) = desktop.as_mut().filter(|d| !d.stopping) {
+            desktop.stopping = true;
+            desktop.timer.invalidate();
+            if let Some(mut panel) = desktop.panel.take() {
+                let _ = panel.child.kill();
+                let _ = panel.child.wait();
+            }
+            NSStatusBar::systemStatusBar().removeStatusItem(&desktop.status_item);
         }
+    });
+    player::shutdown();
+}
+
+pub fn quit() {
+    dispatch2::DispatchQueue::main().exec_async(|| {
+        NSApplication::sharedApplication(MainThreadMarker::new().expect("main thread"))
+            .terminate(None);
+    });
 }
 
 #[cfg(test)]
@@ -582,6 +657,7 @@ mod tests {
                 ("CFBundleIdentifier", component_app_id(component)),
                 ("CFBundleName", name.clone()),
                 ("CFBundleDisplayName", name.clone()),
+                ("CFBundleVersion", env!("CARGO_PKG_VERSION").to_owned()),
             ] {
                 let result = Command::new("/usr/bin/plutil")
                     .args(["-extract", key, "raw", "-o", "-"])

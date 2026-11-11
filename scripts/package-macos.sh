@@ -14,6 +14,10 @@ if [ -e "$output" ]; then
 fi
 stage=$(mktemp -d "${TMPDIR:-/tmp}/musicx-dmg.XXXXXX")
 trap 'rm -rf "$stage"' EXIT
+if [ -n "${MUSICX_SPARKLE_PUBLIC_KEY:-}" ]; then
+    sparkle=$(bash scripts/prepare-sparkle.sh)
+    export MUSICX_SPARKLE_FRAMEWORK="$sparkle/Sparkle.framework"
+fi
 mkdir "$stage/volume"
 ./run package-app "$stage/volume/MusicX.app"
 codesign --verify --deep --strict "$stage/volume/MusicX.app"

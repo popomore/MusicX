@@ -126,8 +126,16 @@ jobs:
           printf 'MUSICX_CODESIGN_IDENTITY=%s\n' "$identity" >> "$GITHUB_ENV"
 
       - name: Package Apple Silicon DMG
+        env:
+          SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
         run: |
           test "$(uname -m)" = arm64
+          if [[ "${{ steps.signing.outputs.mode }}" == developer-id ]]; then
+            : "${SPARKLE_PUBLIC_KEY:?Configure the Sparkle public key repository variable}"
+            : "${SPARKLE_PRIVATE_KEY:?Configure the Sparkle private key repository secret}"
+            export MUSICX_SPARKLE_PUBLIC_KEY="$SPARKLE_PUBLIC_KEY"
+          fi
           sh scripts/package-macos.sh "$DMG"
           hdiutil verify -quiet "$DMG"
 
@@ -159,6 +167,16 @@ jobs:
           name=$(basename "$DMG")
           shasum -a 256 "$name" > "$name.sha256"
 
+      - name: Generate signed automatic update feed
+        if: steps.signing.outputs.mode == 'developer-id'
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          MUSICX_SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
+        run: |
+          brew list --versions openssl@3 >/dev/null || brew install openssl@3
+          bash scripts/generate-appcast.sh "$DMG"
+          python3 scripts/validate-appcast.py "$DMG" "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY"
+
       - id: artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -166,6 +184,7 @@ jobs:
           path: |
             ${{ env.DMG }}
             ${{ env.DMG }}.sha256
+            target/distribution/appcast.xml
           compression-level: 0
           if-no-files-found: error
           retention-days: ${{ steps.source.outputs.channel == 'preview' && 14 || 7 }}
@@ -192,6 +211,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ needs.build.outputs.source-sha }}
           SIGNING_MODE: ${{ needs.build.outputs.signing-mode }}
+          MUSICX_SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
         run: bash scripts/publish-macos.sh "$DMG"
 
       - name: Preserve the release manifest

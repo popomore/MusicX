@@ -5,3 +5,5 @@ pub mod desktop;
 pub mod mobile;
 pub mod player;
 mod system_media;
+#[cfg(target_os = "macos")]
+mod updater;

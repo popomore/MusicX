@@ -36,6 +36,20 @@ sh scripts/package-macos.sh
 
 The default output is `target/distribution/MusicX-macos-<arch>.dmg`. Pass an output path to write it elsewhere. With no signing identity configured, the packager uses ad hoc signing for local testing.
 
+### Automatic updates
+
+Signature verification requires OpenSSL 3. On macOS, install `openssl@3` with Homebrew; the validator selects its explicit path instead of the system LibreSSL.
+
+The persistent outer app owns Sparkle 2.10.1; the disposable player panel forwards update requests to its parent. Settings displays the parent app's version, and both the application menu and status icon's context menu expose **检查更新…**. Sparkle checks daily, downloads updates automatically, and manages installation and relaunch. Quitting stops playback and terminates the child panel before the outer app exits.
+
+The fixed stable feed is `https://github.com/popomore/MusicX/releases/latest/download/appcast.xml`. Each enclosure points to the DMG on its immutable version tag. Preview releases do not supply this feed. Pushing source or building a CI artifact does not make an update available; the regular GitHub Release must be published with its signed appcast.
+
+Configure repository variable `SPARKLE_PUBLIC_KEY` and repository secret `SPARKLE_PRIVATE_KEY` before the next Developer ID release. Generate and export a dedicated key with Sparkle's `bin/generate_keys --account musicx` and `bin/generate_keys --account musicx -x <private-file>`. Preserve this key for future releases; keep the private value out of Git. The packager embeds only the public key. The workflow passes the private key to `generate_appcast` through stdin, verifies the enclosure signature against the configured public key, and uploads the feed with the installer. A signed stable release fails if this configuration or feed is missing.
+
+For local packaging with updates enabled, set `MUSICX_SPARKLE_PUBLIC_KEY` to the public key before running `scripts/package-macos.sh`. The script downloads a pinned, checksum-verified Sparkle distribution and signs its nested framework components before signing the outer bundle. Omit the key for local builds with updates disabled. The CLI's private development cache is never configured as an update target.
+
+Bundle versions follow the Cargo `X.Y.Z` version, so increment both helper and platform package versions before releasing an update. The first version with Sparkle must be installed manually; older versions have no updater. A real A→B upgrade, Developer ID validation, and notarization require published builds and are separate from local tests.
+
 For distribution, set `MUSICX_CODESIGN_IDENTITY` to your Developer ID Application identity and package to a new output path. Submit the resulting DMG using your existing notarytool Keychain profile, then staple and validate the ticket before publishing it.
 
 ```sh
@@ -76,7 +90,7 @@ git tag -a v0.2.0 -m "MusicX 0.2.0"
 git push origin v0.2.0
 ```
 
-The macOS job validates the tagged commit and both package versions, then builds the DMG for the selected signing mode. For Developer ID builds it signs, notarizes, and staples the installer. The publish job verifies the checksum and uploads the installer, checksum, and `release-manifest.json` to a draft. It checks the GitHub asset digests before publishing and retains a copy of the manifest for 90 days. The manifest records the signing mode.
+The macOS job validates the tagged commit and both package versions, then builds the DMG for the selected signing mode. For Developer ID builds it signs, notarizes, and staples the installer, then generates a signed `appcast.xml`. The publish job verifies the checksum and update signature and uploads the installer, checksum, appcast (stable releases), and `release-manifest.json` to a draft. It checks the GitHub asset digests before publishing and retains a copy of the manifest for 90 days. The manifest records the signing mode.
 
 If publication fails after a successful build, rerun the failed jobs to reuse the same installer. Preview installers are retained for 14 days; tagged release installers are retained for seven days. The publisher reuses matching uploads and stops if the draft contains conflicting assets. After configuring Apple credentials, use the next version tag for the signed release.
 

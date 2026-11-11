@@ -5,6 +5,7 @@ tag=${RELEASE_TAG:-${GITHUB_REF_NAME:?}}
 repo=${GITHUB_REPOSITORY:?}
 source_sha=${SOURCE_SHA:?}
 signing_mode=${SIGNING_MODE:?}
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 cd "$(dirname "$1")"
 dmg=$(basename "$1")
 checksum="$dmg.sha256"
@@ -32,6 +33,11 @@ if [[ "$prerelease" == true ]]; then
 fi
 
 sha256sum --check "$checksum"
+files=("$dmg" "$checksum")
+if [[ "$prerelease" == false ]]; then
+    python3 "$script_dir/validate-appcast.py" "$dmg" "$tag" "$repo"
+    files+=(appcast.xml)
+fi
 verify_tag() {
     local tag_sha
     tag_sha=$(gh api "repos/$repo/commits/refs/tags/$tag" --jq .sha)
@@ -49,11 +55,12 @@ file_digests() {
 }
 
 jq -n --arg tag "$tag" --arg version "${tag#v}" --arg source_sha "$source_sha" \
-    --arg signing_mode "$signing_mode" --argjson files "$(file_digests "$dmg" "$checksum")" '
+    --arg signing_mode "$signing_mode" --argjson files "$(file_digests "${files[@]}")" '
     {schema: 1, unit: "musicx-macos", tag: $tag, version: $version, source_sha: $source_sha,
      signing_mode: $signing_mode, files: ($files | map({name, sha256: (.digest | ltrimstr("sha256:"))}))}
 ' > "$manifest"
-expected=$(file_digests "$dmg" "$checksum" "$manifest")
+files+=("$manifest")
+expected=$(file_digests "${files[@]}")
 
 release=$(gh api --paginate "repos/$repo/releases?per_page=100" |
     jq -cs --arg tag "$tag" '
@@ -93,7 +100,7 @@ if jq -e '.draft' <<< "$release" > /dev/null; then
         exit 1
     fi
     missing=()
-    for file in "$dmg" "$checksum" "$manifest"; do
+    for file in "${files[@]}"; do
         if ! jq -e --arg name "$file" 'any(.[]; .name == $name)' <<< "$actual" > /dev/null; then
             missing+=("$file")
         fi

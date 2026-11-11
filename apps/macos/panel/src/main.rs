@@ -10,6 +10,7 @@ mod remote;
 mod source_browser;
 mod sources_ui;
 mod ui;
+mod updates;
 fn on_disconnected() {
     dispatch2::DispatchQueue::main().exec_async(desktop::stop_panel);
 }

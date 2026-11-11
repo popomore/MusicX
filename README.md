@@ -30,6 +30,8 @@ MusicX requires macOS 14 or later. The first notarized download is in preparatio
 
 MusicX starts without a default music source. Add a plugin from **Settings → Music Sources** before searching or playing music; installed sources work independently of catalog availability. A dot on the menu bar icon indicates playback. Right-click and choose **Quit MusicX**, or press Command-Q with the panel focused, to end the session.
 
+Release builds check for stable updates daily and download them in the background using Sparkle. Open **Settings → Version & Updates** to see your version and check immediately, or choose **Check for Updates…** from the MusicX application menu or the menu bar icon's right-click menu. Update installation and restart are handled by Sparkle. Development and ad hoc preview builds do not enable automatic updates.
+
 ## A player that fits in the menu bar
 
 - **See what's playing.** Open the album from the cover, follow timed lyrics, or choose Standard, High, or Lossless from the quality badge.
