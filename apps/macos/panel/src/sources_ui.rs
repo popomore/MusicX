@@ -93,11 +93,7 @@ fn update_settings() -> impl IntoElement {
                     .min_w(px(0.0))
                     .child(caption(crate::updates::version())),
             )
-            .child(settings_action(
-                "检查更新…",
-                || false,
-                crate::updates::check,
-            )),
+            .child(settings_action("检查更新", || false, crate::updates::check)),
     )
 }
 
@@ -254,6 +250,14 @@ fn mcp_settings() -> impl IntoElement {
         }))
 }
 
+fn settings_separator() -> impl IntoElement {
+    view()
+        .w_full()
+        .h(px(1.0))
+        .min_h(px(1.0))
+        .bg(move || theme().muted)
+}
+
 pub fn import_view(model: Model, back: impl Fn() + Copy + 'static) -> impl IntoElement {
     flow(model, true, back)
 }
@@ -293,11 +297,20 @@ fn flow(model: Model, importing: bool, back: impl Fn() + Copy + 'static) -> impl
             move || {
                 scroll().flex_1().min_h(px(0.0)).child(
                     view()
-                        .gap(px(16.0))
+                        .gap(px(8.0))
                         .pb(px(12.0))
                         .child(when(move || !importing, move || playback_settings(model)))
+                        .child(when(
+                            move || !importing && cfg!(target_os = "macos"),
+                            settings_separator,
+                        ))
                         .child(source_settings(this, importing))
+                        .child(when(move || !importing, settings_separator))
                         .child(when(move || !importing, mcp_settings))
+                        .child(when(
+                            move || !importing && cfg!(target_os = "macos"),
+                            settings_separator,
+                        ))
                         .child(when(move || !importing, update_settings)),
                 )
             },
