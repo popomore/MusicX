@@ -1,7 +1,7 @@
 # 发布
 
 - 用户要求“基于 main 创建 X.Y.Z”时，按发布版本处理，创建 `vX.Y.Z` tag；只有明确要求分支或工作树时才创建它们。
-- 正式发布 tag 使用 `vX.Y.Z` 格式，例如 `v2.0.1`。用户要求推送时，只推送该 tag。
+- 正式发布 tag 使用 `vX.Y.Z` 格式，例如 `v1.0.0`。用户要求推送时，只推送该 tag。
 - 发布前同步 `origin/main`，确认待发布提交已在 `main` 上，且对应提交的 CI 已通过。
 - `apps/macos/helper/Cargo.toml`（`musicx`）与 `crates/platform-apple/Cargo.toml`（`musicx-platform-apple`）的版本必须相同，并与 tag 去掉 `v` 后的版本一致。更新版本时同步 `Cargo.lock`，版本变更须先合入 `main`。
 - `scripts/release-tag.sh` 读取当前工作树的 Cargo 元数据；必须在待发布提交的干净检出中校验，不能用其他提交的版本文件代替。
@@ -12,7 +12,7 @@
 
 ```sh
 set -eu
-release_tag=v2.0.1
+release_tag=v1.0.0
 git fetch origin main --tags
 release_sha=$(git rev-parse refs/remotes/origin/main)
 test "$(git rev-parse HEAD)" = "$release_sha"
