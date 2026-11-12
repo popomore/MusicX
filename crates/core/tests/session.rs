@@ -20,9 +20,11 @@ use std::{
 
 static MESSAGES: OnceLock<mpsc::Sender<Message>> = OnceLock::new();
 static LOADS: AtomicUsize = AtomicUsize::new(0);
+static RESOLVES: AtomicUsize = AtomicUsize::new(0);
 static PAUSES: AtomicUsize = AtomicUsize::new(0);
 static FAIL_RESOLVE: AtomicBool = AtomicBool::new(false);
 static FAIL_LOAD: AtomicBool = AtomicBool::new(false);
+static NATIVE_AUDIO_ERROR: AtomicBool = AtomicBool::new(false);
 static PLAYBACK_ELAPSED: AtomicU64 = AtomicU64::new(0);
 
 fn dispatch(message: Message) {
@@ -33,6 +35,7 @@ struct Source;
 static SOURCE: Source = Source;
 impl DataSource for Source {
     fn resolve(&self, track: Track, _: Quality) -> Result<Media> {
+        RESOLVES.fetch_add(1, Ordering::Relaxed);
         if FAIL_RESOLVE.load(Ordering::Relaxed) {
             bail!("offline");
         }
@@ -57,6 +60,7 @@ impl AudioOutput for Audio {
         if FAIL_LOAD.load(Ordering::Relaxed) {
             bail!("audio load failed");
         }
+        NATIVE_AUDIO_ERROR.store(false, Ordering::Relaxed);
         PLAYBACK_ELAPSED.store(0, Ordering::Relaxed);
         *output = Some(Self {
             position: Cell::new(0.0),
@@ -76,7 +80,9 @@ impl AudioOutput for Audio {
                 AudioState::Paused
             },
             volume: self.volume.get(),
-            error: None,
+            error: NATIVE_AUDIO_ERROR
+                .load(Ordering::Relaxed)
+                .then(|| "native item failed".into()),
         }
     }
     fn prepare_resume(&self) -> Result<()> {
@@ -240,6 +246,17 @@ fn pause_and_seek_during_selection_apply_to_the_new_track() {
 }
 
 #[test]
+fn failed_native_items_resolve_again_on_resume_and_toggle() {
+    for phase in [
+        "native_retry_resume",
+        "native_retry_toggle",
+        "native_retry_offline",
+    ] {
+        run_scenario(&[phase]);
+    }
+}
+
+#[test]
 fn passive_restore_preserves_completed_history() {
     let directory = std::env::temp_dir().join(format!(
         "musicx-history-{}",
@@ -382,6 +399,83 @@ fn session_worker() {
     let mut player = Player::<Audio>::new(dispatch, &SOURCE);
     let action = |player: &mut Player<Audio>, action| player.handle(Message::Action(action, None));
     match phase.as_str() {
+        "native_retry_resume" | "native_retry_toggle" | "native_retry_offline" => {
+            let lease = Arc::new(());
+            let weak = Arc::downgrade(&lease);
+            let mut initial = media(track(1));
+            initial.lease = Some(lease);
+            command(&mut player, Action::Play(initial)).unwrap();
+            command(&mut player, Action::Pause).unwrap();
+            command(&mut player, Action::Resume).unwrap();
+            assert_eq!(LOADS.load(Ordering::Relaxed), 1);
+            assert_eq!(RESOLVES.load(Ordering::Relaxed), 0);
+            command(
+                &mut player,
+                Action::Seek {
+                    seconds: 42.0,
+                    track_key: None,
+                },
+            )
+            .unwrap();
+            player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+            player.tick();
+            NATIVE_AUDIO_ERROR.store(true, Ordering::Relaxed);
+            assert!(player.status().state == State::Error);
+            FAIL_RESOLVE.store(phase == "native_retry_offline", Ordering::Relaxed);
+            let (send, reply) = tokio::sync::oneshot::channel();
+            player.handle(Message::Action(
+                if phase == "native_retry_toggle" {
+                    Action::Toggle
+                } else {
+                    Action::Resume
+                },
+                Some(send),
+            ));
+            let loading = player.status();
+            assert!(
+                loading.state == State::Loading && loading.switching,
+                "retry must resolve new media instead of playing a failed native item"
+            );
+            assert_eq!(loading.track.as_ref().map(|t| t.id), Some(1));
+            assert_eq!(loading.position, 42.0);
+            assert!(loading.audio_quality.is_none() && loading.error.is_none());
+            assert!(
+                weak.upgrade().is_none(),
+                "retry must release the failed item's lease"
+            );
+            player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+            let result = reply.blocking_recv().unwrap();
+            let resumed = if phase == "native_retry_offline" {
+                assert!(result.is_err());
+                assert_eq!(player.status().position, 42.0);
+                FAIL_RESOLVE.store(false, Ordering::Relaxed);
+                resolve_command(&mut player, Action::Resume, &receive).unwrap()
+            } else {
+                result.unwrap()
+            };
+            assert!(resumed.state == State::Playing && resumed.error.is_none());
+            assert_eq!(resumed.track.as_ref().map(|t| t.id), Some(1));
+            assert_eq!(resumed.position, 42.0);
+            assert_eq!(LOADS.load(Ordering::Relaxed), 2);
+            assert_eq!(
+                RESOLVES.load(Ordering::Relaxed),
+                if phase == "native_retry_offline" {
+                    2
+                } else {
+                    1
+                }
+            );
+            player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+            PLAYBACK_ELAPSED.store(1.0_f64.to_bits(), Ordering::Relaxed);
+            player.tick();
+            let history = musicx_core::history::recent(10).unwrap();
+            assert_eq!(
+                history.len(),
+                1,
+                "retry must keep the existing history entry"
+            );
+            assert_eq!(history[0].progress.unwrap().position, 43.0);
+        }
         "select_resolve_failure"
         | "select_load_failure"
         | "list_resolve_failure"

@@ -624,14 +624,34 @@ impl<A: AudioOutput> Player<A> {
                 }
             }
             Message::Action(action @ (Action::Resume | Action::Toggle), reply)
-                if self.deferred_position.is_some() =>
+                if self.deferred_position.is_some()
+                    || self
+                        .audio
+                        .as_ref()
+                        .is_some_and(|audio| audio.snapshot().error.is_some()) =>
             {
-                if matches!(action, Action::Toggle) && self.requested_play {
+                if matches!(action, Action::Toggle)
+                    && self.deferred_position.is_some()
+                    && self.requested_play
+                {
                     let result = self.apply(Action::Pause);
                     self.respond(result, reply);
                 } else if self.switching {
                     self.respond(Err(anyhow!("正在取流，请稍候")), reply);
                 } else if let Some(track) = self.index.and_then(|i| self.queue.get(i)).cloned() {
+                    if self.deferred_position.is_none() {
+                        // A failed native item cannot be played again. Keep the
+                        // song, progress and history while resolving a fresh item.
+                        let position = self.status().position;
+                        if let Some(audio) = self.audio.take() {
+                            audio.pause();
+                        }
+                        self.audio_lease = None;
+                        self.audio_quality = None;
+                        self.seek_serial += 1;
+                        self.pending_seek = None;
+                        self.deferred_position = Some(position);
+                    }
                     self.switching = true;
                     self.requested_play = true;
                     self.error = None;
