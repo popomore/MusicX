@@ -789,11 +789,21 @@ fn latest_source_version(repo: &str, api: &str) -> Result<String> {
     )
 }
 
-pub(crate) fn source_version(m: &mygo::Manifest) -> &str {
+pub(crate) fn repository_version(m: &mygo::Manifest) -> Option<&str> {
     m.metadata
         .get("sourceVersion")
         .and_then(Value::as_str)
-        .unwrap_or(&m.version)
+        .filter(|version| !version.is_empty())
+        .or_else(|| {
+            m.metadata
+                .get("sourceCommit")
+                .and_then(Value::as_str)
+                .filter(|sha| sha.len() == 40 && sha.bytes().all(|c| c.is_ascii_hexdigit()))
+        })
+}
+
+pub(crate) fn source_version(m: &mygo::Manifest) -> &str {
+    repository_version(m).unwrap_or(&m.version)
 }
 
 pub(crate) fn auto_update(id: &str, api: &str, expected: &[u8]) -> Result<String> {

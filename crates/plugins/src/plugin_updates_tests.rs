@@ -177,6 +177,21 @@ fn updates_child() {
     let good = fixture(&root, "good", "1.0.0");
     mygo::install_repository(&good, false, None).unwrap();
     mygo::install_repository(&fixture(&root, "bad", "1.0.0"), false, None).unwrap();
+    let legacy = fixture(&root, "legacy", "1.0.0");
+    let mut legacy_manifest = manifest("legacy", "1.0.0");
+    legacy_manifest
+        .as_object_mut()
+        .unwrap()
+        .remove("sourceVersion");
+    legacy_manifest["sourceCommit"] = json!("a".repeat(40));
+    fs::write(legacy.join("plugin.json"), legacy_manifest.to_string()).unwrap();
+    mygo::install_repository(&legacy, false, None).unwrap();
+    assert_eq!(
+        music_sources::source_version(
+            &mygo::manifest(&mygo::plugin_root().unwrap().join("legacy")).unwrap()
+        ),
+        "a".repeat(40)
+    );
     mygo::install(&fixture(&root, "local", "1.0.0")).unwrap();
     assert!(
         !mygo::manifest(&mygo::plugin_root().unwrap().join("local"))
@@ -208,6 +223,10 @@ fn updates_child() {
     set_enabled(true).unwrap();
     run_due(now, &api).unwrap();
     assert_eq!(mygo::manifest(&good_dir).unwrap().version, "2.0.0");
+    let legacy_dir = mygo::plugin_root().unwrap().join("legacy");
+    let upgraded = mygo::manifest(&legacy_dir).unwrap();
+    assert_eq!(upgraded.version, "2.0.0");
+    assert_eq!(upgraded.metadata["sourceVersion"], "v2.0.0");
     assert_eq!(
         fs::read(good_dir.join("settings.json")).unwrap(),
         settings_before
@@ -221,7 +240,8 @@ fn updates_child() {
         mygo::invoke("good", "configured", json!({})).unwrap(),
         "fixture-token"
     );
-    assert_eq!(load().unwrap().checks.len(), 2);
+    assert_eq!(load().unwrap().checks.len(), 3);
+    mygo::uninstall("legacy").unwrap();
     let count = server.lock().unwrap().requests.len();
     run_due(now + 60, &api).unwrap();
     run_due(now + RETRY_INTERVAL - 1, &api).unwrap();

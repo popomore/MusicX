@@ -144,11 +144,7 @@ fn run_due(now: u64, api: &str) -> Result<()> {
         let Ok(manifest) = serde_json::from_slice::<mygo::Manifest>(&expected) else {
             continue;
         };
-        let Some(version) = manifest
-            .metadata
-            .get("sourceVersion")
-            .and_then(|v| v.as_str())
-        else {
+        let Some(version) = music_sources::repository_version(&manifest) else {
             continue;
         };
         let Some(repository) = manifest
