@@ -204,36 +204,24 @@ async fn ui_action(
 ) -> UiResult {
     use protocol::UiAction;
     let action = match action {
-        UiAction::PlayTrack { track } => Action::Play(
-            tokio::task::spawn_blocking(move || {
-                services.sources.resolve(track, audio_quality::preferred())
-            })
-            .await
-            .map_err(ui_error)?
-            .map_err(ui_error)?,
-        ),
+        UiAction::PlayTrack { track } => {
+            validate_list(std::slice::from_ref(&track), 0).map_err(ui_error)?;
+            Action::PlayTrack(track)
+        }
         UiAction::PlayList {
             tracks,
             index,
             context,
         } => {
             validate_list(&tracks, index).map_err(ui_error)?;
-            let track = tracks[index].clone();
-            let media = tokio::task::spawn_blocking(move || {
-                services.sources.resolve(track, audio_quality::preferred())
-            })
-            .await
-            .map_err(ui_error)?
-            .map_err(ui_error)?;
             Action::ReplaceQueue {
                 tracks,
                 index,
                 context,
-                media,
             }
         }
         UiAction::PlayLocalPlaylist { id, index } => {
-            tokio::task::spawn_blocking(move || local_queue(services, id, index))
+            tokio::task::spawn_blocking(move || local_queue(id, index))
                 .await
                 .map_err(ui_error)?
                 .map_err(ui_error)?
@@ -257,16 +245,12 @@ async fn ui_action(
     ui_player(services, action).await
 }
 
-fn local_queue(services: Services, id: String, index: usize) -> Result<Action> {
+fn local_queue(id: String, index: usize) -> Result<Action> {
     let list = local_library::playlist(&id)?;
     validate_list(&list.tracks, index)?;
-    let media = services
-        .sources
-        .resolve(list.tracks[index].clone(), audio_quality::preferred())?;
     Ok(Action::ReplaceQueue {
         tracks: list.tracks,
         index,
-        media,
         context: protocol::QueueContext::LocalPlaylist {
             id,
             name: list.name,
@@ -547,9 +531,8 @@ impl PlayerTools {
         if matches!(input.action, LibraryOperation::Play) {
             let id = id()?;
             let index = input.index.unwrap_or(0);
-            let services = self.services;
             return self
-                .player(blocking(move || local_queue(services, id, index)).await?)
+                .player(blocking(move || local_queue(id, index)).await?)
                 .await;
         }
         let edit = match input.action {
@@ -844,6 +827,25 @@ mod tests {
         panic!("resolution failure must not change the player");
     }
 
+    fn submit_selection(action: Action, reply: Reply) {
+        let selected = match action {
+            Action::PlayTrack(track) => track,
+            Action::ReplaceQueue { tracks, index, .. } => tracks[index].clone(),
+            _ => panic!("expected an unresolved selection"),
+        };
+        assert!(selected == track());
+        reply
+            .unwrap()
+            .send(Ok(Status {
+                state: protocol::State::Loading,
+                track: Some(selected),
+                switching: true,
+                ..Default::default()
+            }))
+            .ok()
+            .unwrap();
+    }
+
     fn fixture(submit: fn(Action, Reply), fail: bool) -> (PlayerTools, &'static FixtureSource) {
         let source = Box::leak(Box::new(FixtureSource {
             seen: Mutex::new(Vec::new()),
@@ -860,6 +862,26 @@ mod tests {
             },
             source,
         )
+    }
+
+    #[tokio::test]
+    async fn ui_submits_selection_before_attempting_source_resolution() {
+        let (tools, source) = fixture(submit_selection, true);
+        for action in [
+            protocol::UiAction::PlayTrack { track: track() },
+            protocol::UiAction::PlayList {
+                tracks: vec![track()],
+                index: 0,
+                context: protocol::QueueContext::History,
+            },
+        ] {
+            let Json(status) = ui_action(State(tools.services), Json(action))
+                .await
+                .unwrap();
+            assert!(status.state == protocol::State::Loading && status.switching);
+            assert!(status.track == Some(track()));
+        }
+        assert!(source.seen.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

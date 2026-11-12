@@ -20,6 +20,7 @@ use std::{
 
 static MESSAGES: OnceLock<mpsc::Sender<Message>> = OnceLock::new();
 static LOADS: AtomicUsize = AtomicUsize::new(0);
+static PAUSES: AtomicUsize = AtomicUsize::new(0);
 static FAIL_RESOLVE: AtomicBool = AtomicBool::new(false);
 static FAIL_LOAD: AtomicBool = AtomicBool::new(false);
 static PLAYBACK_ELAPSED: AtomicU64 = AtomicU64::new(0);
@@ -85,6 +86,7 @@ impl AudioOutput for Audio {
         self.playing.set(true);
     }
     fn pause(&self) {
+        PAUSES.fetch_add(1, Ordering::Relaxed);
         self.playing.set(false);
     }
     fn set_volume(&self, volume: f32) {
@@ -156,6 +158,17 @@ fn command(player: &mut Player<Audio>, action: Action) -> Result<Status> {
     reply.blocking_recv().unwrap()
 }
 
+fn resolve_command(
+    player: &mut Player<Audio>,
+    action: Action,
+    messages: &mpsc::Receiver<Message>,
+) -> Result<Status> {
+    let (send, reply) = tokio::sync::oneshot::channel();
+    player.handle(Message::Action(action, Some(send)));
+    player.handle(messages.recv_timeout(Duration::from_secs(2)).unwrap());
+    reply.blocking_recv().unwrap()
+}
+
 fn run_worker(directory: &std::path::Path, phase: &str) {
     let output = Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "session_worker", "--nocapture"])
@@ -211,6 +224,19 @@ fn tick_checkpoints_natural_playback_progress() {
 #[test]
 fn display_status_checkpoints_natural_playback_progress() {
     run_scenario(&["periodic_display"]);
+}
+
+#[test]
+fn selection_is_visible_before_resolution_and_keeps_failed_track_for_retry() {
+    run_scenario(&["select_resolve_failure"]);
+    run_scenario(&["select_load_failure"]);
+    run_scenario(&["list_resolve_failure"]);
+    run_scenario(&["track_resolve_failure"]);
+}
+
+#[test]
+fn pause_and_seek_during_selection_apply_to_the_new_track() {
+    run_scenario(&["select_pause"]);
 }
 
 #[test]
@@ -356,6 +382,126 @@ fn session_worker() {
     let mut player = Player::<Audio>::new(dispatch, &SOURCE);
     let action = |player: &mut Player<Audio>, action| player.handle(Message::Action(action, None));
     match phase.as_str() {
+        "select_resolve_failure"
+        | "select_load_failure"
+        | "list_resolve_failure"
+        | "track_resolve_failure"
+        | "select_pause" => {
+            resolve_command(
+                &mut player,
+                Action::ReplaceQueue {
+                    tracks: vec![track(1), track(2)],
+                    index: 0,
+                    context: QueueContext::History,
+                },
+                &receive,
+            )
+            .unwrap();
+            command(
+                &mut player,
+                Action::Seek {
+                    seconds: 42.0,
+                    track_key: None,
+                },
+            )
+            .unwrap();
+            player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+            player.tick();
+            FAIL_RESOLVE.store(phase.ends_with("resolve_failure"), Ordering::Relaxed);
+            FAIL_LOAD.store(phase == "select_load_failure", Ordering::Relaxed);
+            let selection = match phase.as_str() {
+                "list_resolve_failure" => Action::ReplaceQueue {
+                    tracks: vec![track(2), track(3)],
+                    index: 0,
+                    context: QueueContext::LocalPlaylist {
+                        id: "new-list".into(),
+                        name: "New list".into(),
+                    },
+                },
+                "track_resolve_failure" => Action::PlayTrack(track(2)),
+                _ => Action::Select {
+                    index: 1,
+                    revision: player.status().queue_revision,
+                },
+            };
+            let pauses = PAUSES.load(Ordering::Relaxed);
+            let (send, reply) = tokio::sync::oneshot::channel();
+            player.handle(Message::Action(selection, Some(send)));
+            let loading = player.status();
+            assert_eq!(
+                loading.track.as_ref().map(|t| t.id),
+                Some(2),
+                "the selected track must be visible before resolving its audio"
+            );
+            assert!(loading.state == State::Loading && loading.switching);
+            assert_eq!(loading.position, 0.0);
+            assert!(loading.audio_quality.is_none() && loading.error.is_none());
+            assert_eq!(PAUSES.load(Ordering::Relaxed), pauses + 1);
+            let saved: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(
+                    musicx_core::protocol::data_dir()
+                        .unwrap()
+                        .join("playback-session.json"),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                saved["queue"][saved["index"].as_u64().unwrap() as usize]["id"],
+                2
+            );
+            assert_eq!(saved["position"], 0.0);
+            if phase == "select_pause" {
+                command(&mut player, Action::Pause).unwrap();
+                command(
+                    &mut player,
+                    Action::Seek {
+                        seconds: 17.0,
+                        track_key: None,
+                    },
+                )
+                .unwrap();
+                player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+                let paused = reply.blocking_recv().unwrap().unwrap();
+                assert!(paused.state == State::Paused && !paused.switching);
+                assert!(paused.error.is_none());
+                assert_eq!(paused.track.as_ref().map(|t| t.id), Some(2));
+                assert_eq!(paused.position, 17.0);
+                player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+                let resumed = command(&mut player, Action::Resume).unwrap();
+                assert!(resumed.state == State::Playing);
+                return;
+            }
+            player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+            assert!(reply.blocking_recv().unwrap().is_err());
+            let failed = player.status();
+            assert_eq!(failed.track.as_ref().map(|t| t.id), Some(2));
+            assert!(failed.state == State::Paused && !failed.switching);
+            assert_eq!(failed.position, 0.0);
+            assert!(failed.audio_quality.is_none());
+            assert_eq!(
+                failed.error.as_deref(),
+                Some(if phase.ends_with("resolve_failure") {
+                    "offline"
+                } else {
+                    "audio load failed"
+                })
+            );
+            let history = musicx_core::history::recent(10).unwrap();
+            assert_eq!(history.len(), 1);
+            assert_eq!(history[0].track.id, 1);
+            assert_eq!(history[0].progress.unwrap().position, 42.0);
+            FAIL_RESOLVE.store(false, Ordering::Relaxed);
+            FAIL_LOAD.store(false, Ordering::Relaxed);
+            let (send, reply) = tokio::sync::oneshot::channel();
+            player.handle(Message::Action(Action::Resume, Some(send)));
+            assert!(player.status().state == State::Loading);
+            player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+            let resumed = reply.blocking_recv().unwrap().unwrap();
+            assert_eq!(resumed.track.as_ref().map(|t| t.id), Some(2));
+            assert!(resumed.state == State::Playing && resumed.error.is_none());
+            player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+        }
         "media_lease" => {
             let lease = Arc::new(());
             let weak = Arc::downgrade(&lease);
@@ -397,15 +543,16 @@ fn session_worker() {
             );
         }
         "save" => {
-            action(
+            resolve_command(
                 &mut player,
                 Action::ReplaceQueue {
                     tracks: vec![track(1), track(2)],
                     index: 1,
                     context: QueueContext::History,
-                    media: media(track(2)),
                 },
-            );
+                &receive,
+            )
+            .unwrap();
             action(
                 &mut player,
                 Action::Seek {
@@ -574,14 +721,14 @@ fn session_worker() {
             assert_eq!(status.volume, 0.8);
         }
         "queue_limit" => {
-            command(
+            resolve_command(
                 &mut player,
                 Action::ReplaceQueue {
                     tracks: (1..=9_998).map(track).collect(),
                     index: 0,
                     context: QueueContext::History,
-                    media: media(track(1)),
                 },
+                &receive,
             )
             .unwrap();
             command(&mut player, Action::Play(media(track(10_001)))).unwrap();

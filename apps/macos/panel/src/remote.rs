@@ -169,12 +169,17 @@ pub fn submit(action: Action, reply: Reply) {
         #[cfg(target_os = "macos")]
         Action::Normalization(enabled) => Some(UiAction::Normalization { enabled }),
     };
-    // Preparing an entire saved playlist must not delay pause/seek requests.
+    // Stream resolution must not delay status polling or pause/seek requests.
     if matches!(
         action,
         Some(
-            UiAction::PlayList { .. }
+            UiAction::PlayTrack { .. }
+                | UiAction::PlayList { .. }
                 | UiAction::PlayLocalPlaylist { .. }
+                | UiAction::PlayQueue { .. }
+                | UiAction::Previous
+                | UiAction::Next
+                | UiAction::Resume
                 | UiAction::Quality { .. }
         )
     ) {

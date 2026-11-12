@@ -20,12 +20,12 @@ pub enum Action {
     DisplayStatus,
     MergeTrackMetadata(Track),
     Play(Media),
+    PlayTrack(Track),
     Enqueue(Media),
     ReplaceQueue {
         tracks: Vec<Track>,
         index: usize,
         context: crate::protocol::QueueContext,
-        media: Media,
     },
     Select {
         index: usize,
@@ -286,6 +286,39 @@ impl<A: AudioOutput> Player<A> {
         Ok(())
     }
 
+    fn prepare_selection(&mut self) {
+        // Checkpoint the old track before changing the queue or its index.
+        self.flush_history();
+        if let Some(audio) = self.audio.take() {
+            audio.pause();
+        }
+        self.audio_lease = None;
+        self.audio_quality = None;
+        self.seek_serial += 1;
+        self.pending_seek = None;
+        self.deferred_position = Some(0.0);
+        self.end_handled = false;
+        self.history_recorded = false;
+        self.preserve_restored_history = false;
+        self.requested_play = true;
+        self.switching = true;
+        self.error = None;
+    }
+
+    fn resolve_selection(&self, reply: Reply) {
+        let index = self.index.expect("a selection owns a queue index");
+        let track = self.queue[index].clone();
+        let dispatch = self.dispatch;
+        let source = self.source;
+        thread::spawn(move || {
+            dispatch(Message::Switched {
+                index,
+                media: source.resolve_selection(track, crate::audio_quality::preferred()),
+                reply,
+            });
+        });
+    }
+
     fn seek(&mut self, seconds: f64) {
         self.seek_serial += 1;
         let serial = self.seek_serial;
@@ -377,24 +410,6 @@ impl<A: AudioOutput> Player<A> {
                 Arc::make_mut(&mut self.queue).push(media.track);
                 self.queue_revision += 1;
             }
-            Action::ReplaceQueue {
-                mut tracks,
-                index,
-                context,
-                media,
-            } => {
-                ensure!(!self.switching, "正在切换曲目");
-                ensure!(
-                    index < tracks.len() && tracks.len() <= MAX_QUEUE_TRACKS,
-                    "无效的播放列表"
-                );
-                self.load(&media)?;
-                tracks[index] = media.track;
-                self.queue = Arc::new(tracks);
-                self.queue_context = Some(context);
-                self.queue_revision += 1;
-                self.index = Some(index);
-            }
             Action::Toggle => {
                 let playing = matches!(self.status().state, State::Playing | State::Loading);
                 return self.apply(if playing {
@@ -463,7 +478,12 @@ impl<A: AudioOutput> Player<A> {
                     audio.set_volume(value);
                 }
             }
-            Action::Previous | Action::Next | Action::Select { .. } | Action::Quality(_) => {
+            Action::PlayTrack(_)
+            | Action::ReplaceQueue { .. }
+            | Action::Previous
+            | Action::Next
+            | Action::Select { .. }
+            | Action::Quality(_) => {
                 unreachable!("switching resolves outside the UI thread")
             }
         }
@@ -565,6 +585,44 @@ impl<A: AudioOutput> Player<A> {
         let dispatch = self.dispatch;
         let source = self.source;
         match message {
+            Message::Action(Action::PlayTrack(track), reply) => {
+                if self.switching {
+                    self.respond(Err(anyhow!("正在切换曲目")), reply);
+                } else if self.queue.len() >= MAX_QUEUE_TRACKS {
+                    self.respond(
+                        Err(anyhow!("播放队列最多支持{MAX_QUEUE_TRACKS}首歌")),
+                        reply,
+                    );
+                } else {
+                    self.prepare_selection();
+                    let index = self.index.map_or(0, |index| index + 1);
+                    Arc::make_mut(&mut self.queue).insert(index, track);
+                    self.index = Some(index);
+                    self.queue_revision += 1;
+                    self.resolve_selection(reply);
+                }
+            }
+            Message::Action(
+                Action::ReplaceQueue {
+                    tracks,
+                    index,
+                    context,
+                },
+                reply,
+            ) => {
+                if self.switching {
+                    self.respond(Err(anyhow!("正在切换曲目")), reply);
+                } else if index >= tracks.len() || tracks.len() > MAX_QUEUE_TRACKS {
+                    self.respond(Err(anyhow!("无效的播放列表")), reply);
+                } else {
+                    self.prepare_selection();
+                    self.queue = Arc::new(tracks);
+                    self.index = Some(index);
+                    self.queue_context = Some(context);
+                    self.queue_revision += 1;
+                    self.resolve_selection(reply);
+                }
+            }
             Message::Action(action @ (Action::Resume | Action::Toggle), reply)
                 if self.deferred_position.is_some() =>
             {
@@ -634,20 +692,10 @@ impl<A: AudioOutput> Player<A> {
                 };
                 if self.switching {
                     self.respond(Err(anyhow!("正在切换曲目")), reply);
-                } else if let Some((index, track)) =
-                    target.and_then(|i| self.queue.get(i).map(|track| (i, track)))
-                {
-                    self.switching = true;
-                    self.error = None;
-                    let track = track.clone();
-                    thread::spawn(move || {
-                        dispatch(Message::Switched {
-                            index,
-                            media: source
-                                .resolve_selection(track, crate::audio_quality::preferred()),
-                            reply,
-                        });
-                    });
+                } else if let Some(index) = target.filter(|&i| i < self.queue.len()) {
+                    self.prepare_selection();
+                    self.index = Some(index);
+                    self.resolve_selection(reply);
                 } else {
                     self.respond(Err(anyhow!("没有可切换的曲目")), reply);
                 }
@@ -673,9 +721,26 @@ impl<A: AudioOutput> Player<A> {
                 reply,
             } => {
                 self.switching = false;
-                let result = media.and_then(|media| self.load(&media));
-                if result.is_ok() {
-                    self.index = Some(index);
+                self.error = None;
+                let result = media.and_then(|media| {
+                    let play = self.requested_play;
+                    let position = self.deferred_position.unwrap_or(0.0);
+                    self.load_with_play(&media, false)?;
+                    self.requested_play = play;
+                    if self.queue[index] != media.track {
+                        Arc::make_mut(&mut self.queue)[index] = media.track;
+                        self.queue_revision += 1;
+                    }
+                    if position > 0.0 {
+                        self.seek(position);
+                    }
+                    if play {
+                        self.audio().play();
+                    }
+                    Ok(())
+                });
+                if result.is_err() {
+                    self.requested_play = false;
                 }
                 self.respond(result, reply);
             }

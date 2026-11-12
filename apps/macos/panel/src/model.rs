@@ -525,17 +525,13 @@ impl Model {
         }
         self.starting.set(true);
         self.error.set(String::new());
+        self.open(Page::Player);
         let (send, receive) = oneshot::channel();
         remote::submit(action, Some(send));
         self.owner.run(|| {
             spawn(async move {
                 match receive.await {
-                    Ok(Ok(status)) => {
-                        #[cfg(target_os = "macos")]
-                        self.open(Page::Player);
-                        self.update(status);
-                        self.open(Page::Player);
-                    }
+                    Ok(Ok(status)) => self.update(status),
                     Ok(Err(error)) => self.error.set(error.to_string()),
                     Err(_) => self.error.set("播放请求已结束".into()),
                 }
