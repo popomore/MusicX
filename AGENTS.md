@@ -1,3 +1,8 @@
+# Commits
+
+- Write all commit messages, including the subject and body, in English.
+- Write pull request titles in English, since they may become squash commit subjects.
+
 # Releases
 
 1. Fetch `origin/main` and use a clean checkout with passing CI.
