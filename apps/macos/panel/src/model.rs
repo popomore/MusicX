@@ -1,4 +1,5 @@
 //! Shared NSH screen state. Catalog loads never block transport controls.
+use crate::protocol::tr;
 #[cfg(target_os = "macos")]
 use crate::protocol::{FavoriteState, LocalLibraryAction};
 use crate::{
@@ -29,6 +30,7 @@ pub enum Page {
 #[derive(Clone, Copy)]
 pub struct Model {
     owner: Owner,
+    pub language: Signal<crate::protocol::i18n::Locale>,
     pub status: Signal<Status>,
     #[cfg(target_os = "macos")]
     pub status_ready: Signal<bool>,
@@ -85,6 +87,7 @@ impl Model {
     pub fn new() -> Self {
         Self {
             owner: Owner::current(),
+            language: signal(crate::protocol::i18n::locale()),
             status: signal(Status::default()),
             #[cfg(target_os = "macos")]
             status_ready: signal(false),
@@ -130,6 +133,17 @@ impl Model {
             cover_failed: signal(false),
         }
     }
+    pub fn refresh_language(self) {
+        crate::protocol::i18n::refresh();
+        let language = crate::protocol::i18n::locale();
+        if self.language.get() != language {
+            self.error.set(String::new());
+            self.language.set(language);
+            #[cfg(target_os = "macos")]
+            crate::desktop::refresh_language();
+        }
+    }
+
     pub fn open(self, page: Page) {
         #[cfg(target_os = "macos")]
         {
@@ -245,7 +259,9 @@ impl Model {
                         }
                     }
                     Ok(Err(error)) => self.error.set(error.to_string()),
-                    Err(_) => self.error.set("加载已结束，请重试".into()),
+                    Err(_) => self
+                        .error
+                        .set(tr!("Loading ended; please try again").into()),
                 }
             })
         });
@@ -371,8 +387,10 @@ impl Model {
                 }
                 match result {
                     Ok(Ok(value)) => self.favorite.set(value),
-                    Ok(Err(e)) => self.error.set(format!("收藏未保存：{e}")),
-                    Err(_) => self.error.set("收藏请求已结束，请重试".into()),
+                    Ok(Err(e)) => self.error.set(tr!("Like not saved: {e}"; e = e)),
+                    Err(_) => self
+                        .error
+                        .set(tr!("Like request ended; please try again").into()),
                 }
             })
         });
@@ -400,7 +418,9 @@ impl Model {
                 match result {
                     Ok(Ok(info)) => self.info.set(Some(info)),
                     Ok(Err(e)) => self.error.set(e.to_string()),
-                    Err(_) => self.error.set("歌词请求已结束，请重试".into()),
+                    Err(_) => self
+                        .error
+                        .set(tr!("Lyrics request ended; please try again").into()),
                 }
             })
         });
@@ -513,7 +533,9 @@ impl Model {
                 match receive.await {
                     Ok(Ok(status)) => self.update(status),
                     Ok(Err(error)) => self.error.set(error.to_string()),
-                    Err(_) => self.error.set("音质请求已结束，请重试".into()),
+                    Err(_) => self
+                        .error
+                        .set(tr!("Quality request ended; please try again").into()),
                 }
                 self.quality_busy.set(false);
             })
@@ -537,7 +559,7 @@ impl Model {
                         self.open(Page::Player);
                     }
                     Ok(Err(error)) => self.error.set(error.to_string()),
-                    Err(_) => self.error.set("播放请求已结束".into()),
+                    Err(_) => self.error.set(tr!("Playback request ended").into()),
                 }
                 self.starting.set(false);
             })
@@ -568,10 +590,5 @@ pub fn plain_lyrics(text: &str) -> String {
 pub fn ago(timestamp: u64) -> String {
     let now = (nsh_core::time::unix_ms() / 1000.0) as u64;
     let seconds = now.saturating_sub(timestamp);
-    match seconds {
-        0..=59 => "刚刚".into(),
-        60..=3599 => format!("{} 分钟前", seconds / 60),
-        3600..=86399 => format!("{} 小时前", seconds / 3600),
-        _ => format!("{} 天前", seconds / 86400),
-    }
+    crate::protocol::i18n::relative_time(seconds)
 }

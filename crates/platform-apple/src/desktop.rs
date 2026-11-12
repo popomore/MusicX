@@ -1,3 +1,4 @@
+use musicx_core::protocol::tr;
 use objc2::{
     AnyThread, MainThreadMarker, MainThreadOnly, define_class, msg_send,
     rc::{Retained, autoreleasepool},
@@ -59,11 +60,12 @@ struct Desktop {
     media: Option<SystemMedia>,
     panel: Option<PanelProcess>,
     updater: Option<crate::updater::Updater>,
-    updater_error: String,
+    updater_error: Option<String>,
     stopping: bool,
     last_title: String,
     last_artist: String,
     last_state: Option<State>,
+    last_language: musicx_core::protocol::i18n::Locale,
 }
 
 define_class!(
@@ -89,11 +91,11 @@ define_class!(
                 let menu = NSMenu::new(mtm);
                 unsafe {
                     menu.addItemWithTitle_action_keyEquivalent(
-                        ns_string!("检查更新…"), Some(sel!(checkForUpdates:)), ns_string!(""),
+                        &NSString::from_str(tr!("Check for Updates…")), Some(sel!(checkForUpdates:)), ns_string!(""),
                     ).setTarget(Some(self));
                     menu.addItem(&NSMenuItem::separatorItem(mtm));
                     menu.addItemWithTitle_action_keyEquivalent(
-                        ns_string!("退出 MusicX"), Some(sel!(quitFromStatus:)), ns_string!(""),
+                        &NSString::from_str(tr!("Quit MusicX")), Some(sel!(quitFromStatus:)), ns_string!(""),
                     ).setTarget(Some(self));
                 }
                 NSMenu::popUpContextMenu_withEvent_forView(&menu, &event, button);
@@ -123,7 +125,7 @@ define_class!(
                 if let Some(desktop) = desktop {
                     match result {
                         Ok(updater) => desktop.updater = updater,
-                        Err(error) => desktop.updater_error = format!("更新器启动失败：{error}"),
+                        Err(error) => desktop.updater_error = Some(error.to_string()),
                     }
                 }
             });
@@ -183,6 +185,8 @@ fn package(
 <key>CFBundleDisplayName</key><string>{name}</string>
 <key>CFBundleIconFile</key><string>musicx.icns</string>
 <key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleDevelopmentRegion</key><string>en</string>
+<key>CFBundleLocalizations</key><array><string>en</string><string>zh-Hans</string></array>
 <key>CFBundleShortVersionString</key><string>{APP_SHORT_VERSION}</string>
 <key>CFBundleVersion</key><string>{APP_BUNDLE_VERSION}</string>
 <key>MusicXReleaseVersion</key><string>{APP_RELEASE_VERSION}</string>
@@ -205,8 +209,7 @@ fn package(
     let signature = codesign.arg(bundle).output()?;
     anyhow::ensure!(
         signature.status.success(),
-        "无法签名 {name}：{}",
-        String::from_utf8_lossy(&signature.stderr).trim()
+        tr!("Could not sign {name}: {}", String::from_utf8_lossy(&signature.stderr).trim(); name = name)
     );
     Ok(())
 }
@@ -234,7 +237,10 @@ fn app_executable(bundle: &Path, name: &str) -> PathBuf {
 
 fn build_component(executable: &Path, name: &str) -> anyhow::Result<PathBuf> {
     let component = executable.with_file_name(name);
-    anyhow::ensure!(component.is_file(), "缺少构建产物 {name}，请先运行 ./run");
+    anyhow::ensure!(
+        component.is_file(),
+        tr!("Build artifact {name} missing; run ./run first"; name = name)
+    );
     Ok(component)
 }
 
@@ -250,7 +256,13 @@ fn package_app_from_executable(
     web_auth_name: &str,
     signing: Option<&OsStr>,
 ) -> anyhow::Result<()> {
-    anyhow::ensure!(!bundle.exists(), "目标应用包已存在：{}", bundle.display());
+    anyhow::ensure!(
+        !bundle.exists(),
+        tr!(
+            "Destination app bundle already exists: {}",
+            bundle.display()
+        )
+    );
     let panel = build_component(executable, PANEL_BIN)?;
     let webauth = build_component(executable, WEB_AUTH_BIN)?;
     let helpers = bundle.join("Contents/Helpers");
@@ -295,7 +307,7 @@ pub fn prepare_runtime(web_auth_name: &str) -> anyhow::Result<DesktopRuntime> {
             let web_auth_executable = app_executable(&helpers.join(WEB_AUTH_APP), WEB_AUTH_BIN);
             anyhow::ensure!(
                 app_executable(&panel_bundle, PANEL_BIN).is_file() && web_auth_executable.is_file(),
-                "MusicX 应用包不完整"
+                tr!("MusicX app bundle is incomplete")
             );
             return Ok(DesktopRuntime {
                 working_dir: musicx_core::storage::state_dir()?,
@@ -326,7 +338,7 @@ pub fn prepare_runtime(web_auth_name: &str) -> anyhow::Result<DesktopRuntime> {
         // It never needs access to sibling files in the Downloads folder.
         anyhow::ensure!(
             private_executable.is_file(),
-            "请先在项目中运行 ./run 准备私有运行文件"
+            tr!("Run ./run in the project first to prepare private runtime files")
         );
     } else {
         let panel = build_component(&executable, PANEL_BIN)?;
@@ -449,12 +461,12 @@ pub fn run(runtime: DesktopRuntime) -> ExitCode {
             media: None,
             panel: None,
             updater: None,
-            updater_error: "此构建尚未配置自动更新。请从 MusicX 的 GitHub Releases 下载新版本。"
-                .into(),
+            updater_error: None,
             stopping: false,
             last_title: String::new(),
             last_artist: String::new(),
             last_state: None,
+            last_language: musicx_core::protocol::i18n::locale(),
         })
     });
     refresh();
@@ -499,7 +511,10 @@ fn show_panel() {
         }
         let bundle = desktop.panel_bundle.clone();
         let panel_executable = app_executable(&bundle, PANEL_BIN);
-        anyhow::ensure!(panel_executable.is_file(), "缺少 MusicX 播放面板");
+        anyhow::ensure!(
+            panel_executable.is_file(),
+            tr!("MusicX player panel missing")
+        );
         NSApplication::sharedApplication(MainThreadMarker::new().expect("main thread"))
             .yieldActivationToApplicationWithBundleIdentifier(&NSString::from_str(
                 &component_app_id("panel"),
@@ -526,12 +541,17 @@ fn show_panel() {
         Ok(())
     });
     if let Err(error) = result {
-        eprintln!("打开选歌面板失败：{error:#}");
+        eprintln!(
+            "{}",
+            tr!("Could not open the player panel: {error}"; error = format!("{:#}", error))
+        );
     }
 }
 
 pub fn refresh() {
     autoreleasepool(|_| {
+        musicx_core::protocol::i18n::refresh();
+        let language = musicx_core::protocol::i18n::locale();
         let status = player::tick();
         DESKTOP.with_borrow_mut(|desktop| {
             let Some(desktop) = desktop else {
@@ -549,19 +569,20 @@ pub fn refresh() {
             if desktop.last_title != title
                 || desktop.last_artist != artist
                 || desktop.last_state != Some(status.state)
+                || desktop.last_language != language
             {
                 let state = match status.state {
-                    State::Idle => "等待选歌",
-                    State::Loading => "加载中",
-                    State::Playing => "播放中",
-                    State::Paused => "已暂停",
-                    State::Ended => "播放结束",
-                    State::Error => "播放出错",
+                    State::Idle => tr!("Waiting for music"),
+                    State::Loading => tr!("Loading"),
+                    State::Playing => tr!("Playing"),
+                    State::Paused => tr!("Paused"),
+                    State::Ended => tr!("Playback ended"),
+                    State::Error => tr!("Playback error"),
                 };
                 let detail = if title.is_empty() {
-                    format!("{APP_NAME} · {state} · 点击打开播放器")
+                    tr!("{APP_NAME} · {state} · Click to open player"; APP_NAME = APP_NAME, state = state)
                 } else {
-                    format!("{title} · {artist} · {state} · 点击打开播放器")
+                    tr!("{title} · {artist} · {state} · Click to open player"; title = title, artist = artist, state = state)
                 };
                 if let Some(button) = desktop
                     .status_item
@@ -584,6 +605,7 @@ pub fn refresh() {
                 desktop.last_title = title.to_owned();
                 desktop.last_artist = artist.to_owned();
                 desktop.last_state = Some(status.state);
+                desktop.last_language = language;
             }
             if status.track.is_some() {
                 desktop
@@ -610,7 +632,14 @@ fn check_for_updates() {
         if let Some(controller) = controller {
             crate::updater::Updater::check(&controller);
         } else {
-            crate::updater::unavailable(&error);
+            let message = error.map_or_else(
+                || {
+                    tr!("Automatic updates are not configured for this build. Download a new version from MusicX on GitHub Releases.")
+                        .to_owned()
+                },
+                |error| tr!("Updater failed to start: {error}"; error = error),
+            );
+            crate::updater::unavailable(&message);
         }
     }
 }

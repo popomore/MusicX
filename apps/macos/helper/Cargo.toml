@@ -7,6 +7,7 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+musicx-protocol = { path = "../../../crates/protocol" }
 musicx-mcp = { path = "../../../crates/mcp" }
 musicx-platform-apple = { path = "../../../crates/platform-apple" }
 musicx-plugins = { path = "../../../crates/plugins" }

@@ -1,3 +1,4 @@
+use crate::protocol::tr;
 use crate::{
     model::{Model, ago},
     remote::{Action, submit},
@@ -101,23 +102,23 @@ fn header(model: Model) -> impl IntoElement {
         .gap(px(6.0))
         .child(when(
             move || model.page.get() != Page::Player,
-            move || nav_action("返回", move || model.open(Page::Player)),
+            move || nav_action(tr!("Back"), move || model.open(Page::Player)),
         ))
         .child(
             view().flex_1().min_w(px(0.0)).window_drag(!mobile()).child(
                 text(move || match model.page.get() {
-                    Page::Info => "歌曲信息",
-                    Page::History => "播放历史",
-                    Page::Album => "专辑曲目",
-                    Page::Discovery => "来源作品",
-                    Page::Sources => "音乐来源",
-                    Page::Library => "我的歌单",
+                    Page::Info => tr!("Track information"),
+                    Page::History => tr!("History"),
+                    Page::Album => tr!("Album tracks"),
+                    Page::Discovery => tr!("Source releases"),
+                    Page::Sources => tr!("Music sources"),
+                    Page::Library => tr!("My playlists"),
                     Page::Player => model.status.with(|s| match s.state {
-                        State::Playing => "正在播放",
-                        State::Paused => "已暂停",
-                        State::Loading => "正在缓冲",
-                        State::Ended => "播放结束",
-                        State::Error => "播放出错",
+                        State::Playing => tr!("Now playing"),
+                        State::Paused => tr!("Paused"),
+                        State::Loading => tr!("Buffering"),
+                        State::Ended => tr!("Playback ended"),
+                        State::Error => tr!("Playback error"),
                         State::Idle => "MusicX",
                     }),
                 })
@@ -133,7 +134,7 @@ fn header(model: Model) -> impl IntoElement {
                     Page::Player | Page::Sources | Page::Library | Page::Discovery
                 )
             },
-            move || nav_action("刷新", move || model.open(model.page.get())),
+            move || nav_action(tr!("Refresh"), move || model.open(model.page.get())),
         ))
         .child(when(
             || !mobile(),
@@ -145,7 +146,7 @@ fn header(model: Model) -> impl IntoElement {
                     .h(px(24.0))
                     .child(
                         button()
-                            .accessibility_label(Some("最小化窗口".into()))
+                            .accessibility_label(Some(tr!("Minimize window").into()))
                             .on_press(nsh_core::element::desktop::minimize)
                             .w(px(24.0))
                             .h(px(24.0))
@@ -160,7 +161,7 @@ fn header(model: Model) -> impl IntoElement {
                     )
                     .child(
                         button()
-                            .accessibility_label(Some("关闭窗口".into()))
+                            .accessibility_label(Some(tr!("Close window").into()))
                             .on_press(nsh_core::element::desktop::close_window)
                             .w(px(24.0))
                             .h(px(24.0))
@@ -179,7 +180,11 @@ fn header(model: Model) -> impl IntoElement {
 
 #[cfg(target_os = "ios")]
 fn transport(model: Model, previous: bool) -> impl IntoElement {
-    let label = if previous { "上一首" } else { "下一首" };
+    let label = if previous {
+        tr!("Previous track")
+    } else {
+        tr!("Next track")
+    };
     button()
         .accessibility_label(Some(label.into()))
         .disabled(move || {
@@ -235,16 +240,18 @@ fn player(model: Model) -> impl IntoElement {
     };
     let title = computed(move || {
         model.status.with(|s| {
-            s.track
-                .as_ref()
-                .map_or_else(|| "还没有播放歌曲".to_owned(), |t| t.title.clone())
+            s.track.as_ref().map_or_else(
+                || tr!("Nothing playing yet").to_owned(),
+                |t| t.title.clone(),
+            )
         })
     });
     let artist = computed(move || {
         model.status.with(|s| {
-            s.track
-                .as_ref()
-                .map_or_else(|| "通过 Agent 选一首歌".to_owned(), |t| t.artist.clone())
+            s.track.as_ref().map_or_else(
+                || tr!("Ask your agent to choose a track").to_owned(),
+                |t| t.artist.clone(),
+            )
         })
     });
     let cover = computed(move || {
@@ -261,7 +268,7 @@ fn player(model: Model) -> impl IntoElement {
             .child(
                 view().items_center().mt(px(10.0)).child(
                     button()
-                        .accessibility_label(Some("查看当前专辑的其他歌曲".into()))
+                        .accessibility_label(Some(tr!("Browse this album").into()))
                         .disabled(move || {
                             model
                                 .status
@@ -275,7 +282,7 @@ fn player(model: Model) -> impl IntoElement {
                                 .h(move || px(cover_size()))
                                 .rounded(px(10.0))
                                 .object_fit(ResizeMode::Cover)
-                                .label(move || SharedString::from(format!("{}的封面", title.get())))
+                                .label(move || SharedString::from(tr!("Cover for {}", title.get())))
                                 .placeholder(ImageSrc::svg_markup(PLACEHOLDER))
                                 .on_error(move |_: &str| model.cover_failed.set(true))
                                 .on_load(move |_: &nsh_core::Size<DevicePixels>| {
@@ -312,7 +319,7 @@ fn player(model: Model) -> impl IntoElement {
                         },
                         move || {
                             button()
-                                .accessibility_label(Some("查看专辑曲目".into()))
+                                .accessibility_label(Some(tr!("View album tracks").into()))
                                 .on_press(move || model.open(Page::Album))
                                 .mt(px(4.0))
                                 .child(
@@ -341,7 +348,7 @@ fn player(model: Model) -> impl IntoElement {
                             .value(move || Some(SliderValue::Single(position())))
                             .max(move || model.status.with(|s| s.duration.max(1.0)))
                             .disabled(move || model.status.with(|s| s.duration <= 0.0))
-                            .accessibility_label(Some("播放进度".into()))
+                            .accessibility_label(Some(tr!("Playback position").into()))
                             .track_class(Some("h-5 justify-center".into()))
                             .indicator_class(Some("h-1 rounded-full bg-muted".into()))
                             .range_class(Some("rounded-full bg-primary".into()))
@@ -389,9 +396,9 @@ fn player(model: Model) -> impl IntoElement {
                         button()
                             .accessibility_label(move || {
                                 Some(if playing() {
-                                    "暂停".into()
+                                    tr!("Pause").into()
                                 } else {
-                                    "播放".into()
+                                    tr!("Play").into()
                                 })
                             })
                             .disabled(move || {
@@ -432,34 +439,40 @@ fn player(model: Model) -> impl IntoElement {
                     .mt(px(12.0))
                     .child(
                         button()
-                            .accessibility_label(Some("查看歌曲信息和歌词".into()))
+                            .accessibility_label(Some(
+                                tr!("View track information and lyrics").into(),
+                            ))
                             .disabled(move || model.status.with(|s| s.track.is_none()))
                             .on_press(move || model.open(Page::Info))
                             .h(px(if mobile() { 44.0 } else { 30.0 }))
                             .px(px(10.0))
                             .child(
-                                text("歌曲信息")
+                                text(tr!("Track information"))
                                     .text_size(px(12.0))
                                     .text_color(move || theme().muted_foreground),
                             ),
                     )
-                    .child(action("播放历史", move || model.open(Page::History))),
+                    .child(action(tr!("History"), move || model.open(Page::History))),
             )
             .child(when(mobile, move || {
                 view()
                     .flex_row()
                     .justify_center()
-                    .child(action("我的歌单", move || model.open(Page::Library)))
-                    .child(action("音乐来源", move || model.open(Page::Sources)))
+                    .child(action(tr!("My playlists"), move || {
+                        model.open(Page::Library)
+                    }))
+                    .child(action(tr!("Music sources"), move || {
+                        model.open(Page::Sources)
+                    }))
             }))
             .child(
                 text(move || {
                     model.status.with(|s| {
                         s.error.clone().unwrap_or_else(|| {
                             if s.switching {
-                                "正在切歌…".into()
+                                tr!("Changing track…").into()
                             } else if model.cover_failed.get() {
-                                "封面暂不可用".into()
+                                tr!("Artwork unavailable").into()
                             } else {
                                 String::new()
                             }
@@ -482,8 +495,8 @@ fn track_row(
 ) -> impl IntoElement {
     button()
         .accessibility_label(move || {
-            Some(SharedString::from(format!(
-                "播放 {}，{}",
+            Some(SharedString::from(tr!(
+                "Play {}, {}",
                 track().title,
                 track().artist
             )))
@@ -520,7 +533,7 @@ fn history(model: Model) -> impl IntoElement {
             .child(when(
                 move || !model.is_loading() && model.history.with(Vec::is_empty),
                 || {
-                    text("还没有播放记录")
+                    text(tr!("No listening history yet"))
                         .text_size(px(13.0))
                         .text_color(move || theme().muted_foreground)
                 },
@@ -544,7 +557,7 @@ fn history(model: Model) -> impl IntoElement {
                             row.with(|row| {
                                 row.1.progress.map(|progress| {
                                     if progress.completed {
-                                        "已播完".into()
+                                        tr!("Finished").into()
                                     } else if progress.duration > 0.0 {
                                         format!(
                                             "{} / {}",
@@ -552,7 +565,7 @@ fn history(model: Model) -> impl IntoElement {
                                             time(progress.duration)
                                         )
                                     } else {
-                                        format!("已播 {}", time(progress.position))
+                                        tr!("Played {}", time(progress.position))
                                     }
                                 })
                             })
@@ -610,7 +623,7 @@ fn album(model: Model) -> impl IntoElement {
                             .with(|a| a.as_ref().is_some_and(|a| a.tracks.is_empty()))
                 },
                 || {
-                    text("当前来源没有返回专辑曲目")
+                    text(tr!("This source returned no album tracks"))
                         .text_size(px(13.0))
                         .text_color(move || theme().muted_foreground)
                 },
@@ -656,14 +669,14 @@ fn info(model: Model) -> impl IntoElement {
                         .with(|s| s.track.as_ref().is_some_and(|t| t.album.is_some()))
                 },
                 move || {
-                    action("查看专辑其他歌曲 ›", move || {
+                    action(tr!("View album tracks ›"), move || {
                         model.open(Page::Album)
                     })
                 },
             ))
             .child(
                 button()
-                    .accessibility_label(Some("打开歌曲来源链接".into()))
+                    .accessibility_label(Some(tr!("Open track source link").into()))
                     .disabled(move || {
                         model
                             .info
@@ -684,7 +697,7 @@ fn info(model: Model) -> impl IntoElement {
                         text(move || {
                             model.info.with(|i| {
                                 i.as_ref().map_or_else(
-                                    || "歌曲来源 ↗".to_owned(),
+                                    || tr!("Track source ↗").to_owned(),
                                     |i| {
                                         i.source_link.as_ref().map_or_else(
                                             || i.source_name.clone(),
@@ -704,7 +717,7 @@ fn info(model: Model) -> impl IntoElement {
                                     .and_then(|i| {
                                         i.source_link.as_ref().map(|link| link.url.clone())
                                     })
-                                    .unwrap_or_else(|| "当前来源未提供歌曲链接".into())
+                                    .unwrap_or_else(|| tr!("This source has no link for this track").into())
                             })
                         })
                         .text_size(px(10.0))
@@ -713,7 +726,7 @@ fn info(model: Model) -> impl IntoElement {
                     ),
             )
             .child(
-                text("歌词")
+                text(tr!("Lyrics"))
                     .text_size(px(14.0))
                     .font_weight(FontWeight::SEMIBOLD)
                     .mt(px(16.0))
@@ -725,7 +738,7 @@ fn info(model: Model) -> impl IntoElement {
                         i.as_ref().map_or_else(
                             || {
                                 if model.is_loading() {
-                                    "正在加载歌词…".into()
+                                    tr!("Loading lyrics…").into()
                                 } else {
                                     String::new()
                                 }
@@ -737,11 +750,11 @@ fn info(model: Model) -> impl IntoElement {
                                 let original = plain_lyrics(&i.lyrics.text);
                                 let translation = plain_lyrics(&i.lyrics.translation);
                                 if original.is_empty() {
-                                    "这首歌暂无歌词".into()
+                                    tr!("No lyrics for this track").into()
                                 } else if translation.is_empty() {
                                     original
                                 } else {
-                                    format!("{original}\n\n译文\n{translation}")
+                                    tr!("{original}\n\nTranslation\n{translation}"; original = original, translation = translation)
                                 }
                             },
                         )
@@ -760,10 +773,13 @@ pub fn App() -> impl IntoElement {
     let model = Model::new();
     #[cfg(target_os = "ios")]
     if let Err(error) = crate::initialize() {
-        model.error.set(format!("播放器启动失败：{error}"));
+        model
+            .error
+            .set(tr!("Player failed to start: {error}"; error = error));
     }
     let refreshing = signal(false);
     set_interval(Duration::from_millis(500), move || {
+        model.refresh_language();
         if refreshing.get() {
             return;
         }
@@ -779,11 +795,25 @@ pub fn App() -> impl IntoElement {
             refreshing.set(false);
         });
     });
-    #[cfg(target_os = "macos")]
-    {
-        desktop_ui::shell(model)
-    }
-    #[cfg(target_os = "ios")]
+    dynamic(move || {
+        model.language.get();
+        // Only a language change should recreate static labels. Playback ticks
+        // keep their fine-grained bindings and the same authoritative Model.
+        untracked(|| {
+            #[cfg(target_os = "macos")]
+            {
+                desktop_ui::shell(model)
+            }
+            #[cfg(target_os = "ios")]
+            {
+                mobile_shell(model)
+            }
+        })
+    })
+}
+
+#[cfg(target_os = "ios")]
+fn mobile_shell(model: Model) -> impl IntoElement {
     view()
         .flex_1()
         .bg(move || theme().background)
@@ -827,7 +857,7 @@ pub fn App() -> impl IntoElement {
                 .child(when(
                     move || model.page.get() != Page::Player && model.is_loading(),
                     || {
-                        text("正在加载…")
+                        text(tr!("Loading…"))
                             .text_size(px(11.0))
                             .text_color(move || theme().muted_foreground)
                     },

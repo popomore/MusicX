@@ -1,6 +1,7 @@
 //! Sparkle runs only in the outer, persistent application, never in the panel.
 use base64::{Engine, prelude::BASE64_STANDARD};
 use musicx_core::protocol::UpdateChannel;
+use musicx_core::protocol::tr;
 use objc2::{
     MainThreadMarker, MainThreadOnly, define_class, msg_send,
     rc::{Allocated, Retained},
@@ -50,12 +51,15 @@ impl Updater {
         }
         let url = bundle
             .privateFrameworksURL()
-            .ok_or_else(|| anyhow::anyhow!("缺少 Frameworks 目录"))?
+            .ok_or_else(|| anyhow::anyhow!(tr!("Frameworks directory missing")))?
             .URLByAppendingPathComponent(ns_string!("Sparkle.framework"))
-            .ok_or_else(|| anyhow::anyhow!("无效的 Sparkle.framework 路径"))?;
+            .ok_or_else(|| anyhow::anyhow!(tr!("Invalid Sparkle.framework path")))?;
         let framework = NSBundle::bundleWithURL(&url)
-            .ok_or_else(|| anyhow::anyhow!("缺少 Sparkle.framework"))?;
-        anyhow::ensure!(unsafe { framework.load() }, "无法加载 Sparkle.framework");
+            .ok_or_else(|| anyhow::anyhow!(tr!("Sparkle.framework missing")))?;
+        anyhow::ensure!(
+            unsafe { framework.load() },
+            tr!("Could not load Sparkle.framework")
+        );
         let delegate: Retained<UpdateDelegate> = unsafe {
             msg_send![
                 UpdateDelegate::alloc(MainThreadMarker::new().expect("main thread")),
@@ -63,7 +67,7 @@ impl Updater {
             ]
         };
         let class = AnyClass::get(c"SPUStandardUpdaterController")
-            .ok_or_else(|| anyhow::anyhow!("缺少 Sparkle 更新控制器"))?;
+            .ok_or_else(|| anyhow::anyhow!(tr!("Sparkle update controller missing")))?;
         // Sparkle's documented initializer; the retained controller and framework
         // stay alive on AppKit's main thread until the helper terminates.
         let controller = unsafe {
@@ -106,9 +110,9 @@ pub fn unavailable(message: &str) {
     let mtm = MainThreadMarker::new().expect("main thread");
     NSApplication::sharedApplication(mtm).activate();
     let alert = NSAlert::new(mtm);
-    alert.setMessageText(ns_string!("无法检查更新"));
+    alert.setMessageText(&NSString::from_str(tr!("Could not check for updates")));
     alert.setInformativeText(&NSString::from_str(message));
-    alert.addButtonWithTitle(ns_string!("好"));
+    alert.addButtonWithTitle(&NSString::from_str(tr!("OK")));
     alert.runModal();
 }
 
@@ -120,17 +124,17 @@ pub fn package(bundle: &Path, signing: Option<&std::ffi::OsStr>) -> anyhow::Resu
     let key = key.to_str().unwrap_or_default().trim();
     anyhow::ensure!(
         BASE64_STANDARD.decode(key).is_ok_and(|key| key.len() == 32),
-        "Sparkle 公钥必须为 Base64 编码的 32 字节 Ed25519 公钥"
+        tr!("Sparkle public key must be a Base64-encoded 32-byte Ed25519 key")
     );
     let source = std::env::var_os("MUSICX_SPARKLE_FRAMEWORK")
-        .ok_or_else(|| anyhow::anyhow!("缺少 MUSICX_SPARKLE_FRAMEWORK"))?;
+        .ok_or_else(|| anyhow::anyhow!(tr!("MUSICX_SPARKLE_FRAMEWORK is missing")))?;
     let destination = bundle.join("Contents/Frameworks/Sparkle.framework");
     std::fs::create_dir_all(destination.parent().expect("Frameworks"))?;
     let copied = std::process::Command::new("/usr/bin/ditto")
         .arg(&source)
         .arg(&destination)
         .status()?;
-    anyhow::ensure!(copied.success(), "复制 Sparkle.framework 失败");
+    anyhow::ensure!(copied.success(), tr!("Could not copy Sparkle.framework"));
     // Sign nested code from the inside out, keeping hardened runtime enabled.
     for relative in [
         "Versions/B/XPCServices/Downloader.xpc",
@@ -149,8 +153,10 @@ pub fn package(bundle: &Path, signing: Option<&std::ffi::OsStr>) -> anyhow::Resu
         let result = command.arg(destination.join(relative)).output()?;
         anyhow::ensure!(
             result.status.success(),
-            "Sparkle 签名失败：{}",
-            String::from_utf8_lossy(&result.stderr)
+            tr!(
+                "Sparkle signing failed: {}",
+                String::from_utf8_lossy(&result.stderr)
+            )
         );
     }
     Ok(format!(

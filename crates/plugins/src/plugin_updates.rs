@@ -1,6 +1,7 @@
 //! The persistent host updates repository installs independently of the player UI.
 use crate::{music_sources, mygo, repository};
 use anyhow::{Result, ensure};
+use musicx_core::protocol::tr;
 use musicx_core::{protocol::PluginUpdateSettings, storage};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -46,13 +47,16 @@ struct Check {
 fn lock() -> Result<MutexGuard<'static, ()>> {
     WRITER
         .lock()
-        .map_err(|_| anyhow::anyhow!("插件更新设置暂不可用"))
+        .map_err(|_| anyhow::anyhow!(tr!("Plugin update settings are unavailable")))
 }
 
 fn load() -> Result<State> {
     match fs::read(storage::state_dir()?.join(FILE)) {
         Ok(bytes) => {
-            ensure!(bytes.len() <= 2 * 1024 * 1024, "插件更新记录过大");
+            ensure!(
+                bytes.len() <= 2 * 1024 * 1024,
+                tr!("Plugin update record is too large")
+            );
             Ok(serde_json::from_slice(&bytes)?)
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(State::default()),
@@ -82,7 +86,10 @@ pub fn set_enabled(enabled: bool) -> Result<PluginUpdateSettings> {
 // that have not yet started replacing an installed plugin.
 pub(crate) fn enabled_guard() -> Result<MutexGuard<'static, ()>> {
     let guard = lock()?;
-    ensure!(load()?.enabled, "已关闭插件自动更新");
+    ensure!(
+        load()?.enabled,
+        tr!("Automatic plugin updates are disabled")
+    );
     Ok(guard)
 }
 
@@ -101,7 +108,10 @@ pub fn start() -> Result<()> {
                     .unwrap_or_default()
                     .as_secs();
                 if let Err(error) = run_due(now, repository::API) {
-                    eprintln!("插件自动更新暂不可用：{error}");
+                    eprintln!(
+                        "{}",
+                        tr!("Automatic plugin updates are unavailable: {error}"; error = error)
+                    );
                 }
                 std::thread::sleep(Duration::from_secs(60));
             }
@@ -187,7 +197,10 @@ fn run_due(now: u64, api: &str) -> Result<()> {
                     check.version = version;
                     check.failed = false;
                 }
-                Err(error) => eprintln!("插件 {id} 自动更新未完成，保留已安装版本：{error}"),
+                Err(error) => eprintln!(
+                    "{}",
+                    tr!("Automatic update for plugin {id} failed; keeping the installed version: {error}"; id = id, error = error)
+                ),
             }
         }
         save(&state)?;

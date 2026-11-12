@@ -1,4 +1,5 @@
 //! One shared preference for the helper and its disposable settings panel.
+use crate::tr;
 use serde::{Deserialize, Serialize};
 use std::{io::Write, path::Path};
 
@@ -13,8 +14,8 @@ pub enum UpdateChannel {
 impl UpdateChannel {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Stable => "稳定版",
-            Self::All => "全部版本",
+            Self::Stable => tr!("Stable"),
+            Self::All => tr!("All releases"),
         }
     }
 
@@ -23,7 +24,8 @@ impl UpdateChannel {
     }
 
     pub fn save(self) -> std::io::Result<()> {
-        let dir = crate::data_dir().ok_or_else(|| std::io::Error::other("找不到配置目录"))?;
+        let dir = crate::data_dir()
+            .ok_or_else(|| std::io::Error::other(tr!("Configuration directory not found")))?;
         self.write(&dir)
     }
 

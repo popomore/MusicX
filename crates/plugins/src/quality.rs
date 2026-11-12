@@ -71,9 +71,18 @@ mod tests {
             false,
         );
         assert_eq!(audio.requested, Quality::Lossless);
-        assert_eq!(audio.summary(), "标准 · MP3 · 128 kbps");
+        assert_eq!(
+            audio.summary(),
+            format!(
+                "{} · MP3 · 128 kbps",
+                musicx_core::protocol::tr!("Standard")
+            )
+        );
         let unknown = metadata(Quality::Hires, &json!({}), true);
-        assert_eq!(unknown.summary(), "来源未提供音质参数");
+        assert_eq!(
+            unknown.summary(),
+            musicx_core::protocol::tr!("This source has no audio quality details")
+        );
     }
     #[test]
     fn plugin_rate_units_and_partial_metadata() {

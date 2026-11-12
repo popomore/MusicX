@@ -1,4 +1,5 @@
 //! Every music source uses the same MyGo configuration, account and import flow.
+use crate::protocol::tr;
 use crate::{
     controls::{action, caption, heading, section},
     model::{Model, Page},
@@ -49,7 +50,9 @@ impl Sources {
                 match result {
                     Ok(Ok(v)) => done(self, v),
                     Ok(Err(e)) => self.message.set(e.to_string()),
-                    Err(_) => self.message.set("请求已结束，请重试".into()),
+                    Err(_) => self
+                        .message
+                        .set(tr!("Request ended; please try again").into()),
                 }
             })
         });
@@ -70,7 +73,9 @@ impl Sources {
                 this.plugins.set(rows);
                 match updates {
                     Some(Ok(settings)) => this.auto_update.set(Some(settings.enabled)),
-                    Some(Err(error)) => this.message.set(format!("无法读取插件更新设置：{error}")),
+                    Some(Err(error)) => this
+                        .message
+                        .set(tr!("Could not read plugin update settings: {error}"; error = error)),
                     None => {}
                 }
             },
@@ -96,6 +101,59 @@ pub fn settings_view(model: Model) -> impl IntoElement {
     flow(model, false, || {})
 }
 
+fn language_settings(model: Model) -> impl IntoElement {
+    use crate::protocol::i18n::Language;
+    let selected = signal(Language::load());
+    let message = signal(String::new());
+    view()
+        .gap(px(8.0))
+        .child(section(tr!("Language")))
+        .child(Language::ALL.into_iter().fold(
+            view().flex_row().flex_wrap().gap(px(4.0)),
+            |row, language| {
+                row.child(
+                    button()
+                        .accessibility_label(Some(language.label().into()))
+                        .selected(move || selected.get() == language)
+                        .on_press(move || match language.save() {
+                            Ok(()) => {
+                                selected.set(language);
+                                message.set(String::new());
+                                model.refresh_language();
+                            }
+                            Err(error) => {
+                                message.set(tr!("Could not save language: {error}"; error = error))
+                            }
+                        })
+                        .min_h(px(if cfg!(target_os = "ios") { 44.0 } else { 32.0 }))
+                        .px(px(8.0))
+                        .py(px(6.0))
+                        .rounded(px(6.0))
+                        .items_center()
+                        .justify_center()
+                        .bg(move || {
+                            if selected.get() == language {
+                                theme().muted
+                            } else {
+                                theme().muted.opacity(0.25)
+                            }
+                        })
+                        .hover(|s| s.bg(theme().muted))
+                        .active(|s| s.opacity(0.65))
+                        .child(
+                            text(language.label())
+                                .text_size(px(11.0))
+                                .text_color(move || theme().foreground),
+                        ),
+                )
+            },
+        ))
+        .child(when(
+            move || !message.get().is_empty(),
+            move || caption(move || message.get()),
+        ))
+}
+
 #[cfg(target_os = "macos")]
 fn update_settings() -> impl IntoElement {
     use crate::protocol::UpdateChannel;
@@ -115,7 +173,8 @@ fn update_settings() -> impl IntoElement {
                             message.set(String::new());
                             crate::updates::channel_changed();
                         }
-                        Err(error) => message.set(format!("无法保存更新设置：{error}")),
+                        Err(error) => message
+                            .set(tr!("Could not save update settings: {error}"; error = error)),
                     })
                     .h(px(28.0))
                     .px(px(8.0))
@@ -140,7 +199,7 @@ fn update_settings() -> impl IntoElement {
         });
     view()
         .gap(px(8.0))
-        .child(section("版本与更新"))
+        .child(section(tr!("Version & updates")))
         .child(
             view()
                 .flex_row()
@@ -152,7 +211,11 @@ fn update_settings() -> impl IntoElement {
                         .min_w(px(0.0))
                         .child(caption(crate::updates::version())),
                 )
-                .child(settings_action("检查更新", || false, crate::updates::check)),
+                .child(settings_action(
+                    tr!("Check for updates"),
+                    || false,
+                    crate::updates::check,
+                )),
         )
         .child(
             view()
@@ -160,7 +223,7 @@ fn update_settings() -> impl IntoElement {
                 .items_center()
                 .justify_between()
                 .child(
-                    text("接收更新")
+                    text(tr!("Updates"))
                         .text_size(px(12.0))
                         .text_color(move || theme().foreground),
                 )
@@ -171,8 +234,10 @@ fn update_settings() -> impl IntoElement {
                 message.get()
             } else {
                 match channel.get() {
-                    UpdateChannel::All => "包含稳定版和预览版（Preview）。".into(),
-                    UpdateChannel::Stable => "仅检查稳定版。已开始的预览版更新仍可能安装。".into(),
+                    UpdateChannel::All => tr!("Includes stable and preview releases.").into(),
+                    UpdateChannel::Stable => {
+                        tr!("Stable releases only. A preview update already in progress may still install.").into()
+                    }
                 }
             }
         }))
@@ -192,15 +257,15 @@ fn playback_settings(_model: Model) -> impl IntoElement {
 fn playback_settings(model: Model) -> impl IntoElement {
     view()
         .gap(px(4.0))
-        .child(section("播放"))
+        .child(section(tr!("Play")))
         .child(setting_toggle(
-            "音量均衡",
+            tr!("Volume normalization"),
             move || model.status.with(|s| s.normalization_enabled),
             || false,
             move |enabled| remote::submit(remote::Action::Normalization(enabled), None),
         ))
         .child(setting_toggle(
-            "单行同步歌词",
+            tr!("Lyric preview"),
             move || model.show_mini_lyrics.get(),
             || false,
             move |_| model.toggle_mini_lyrics(),
@@ -286,7 +351,7 @@ fn mcp_settings() -> impl IntoElement {
     let message = signal("");
     view()
         .gap(px(8.0))
-        .child(section("MCP 连接"))
+        .child(section(tr!("MCP connection")))
         .child(
             view()
                 .px(px(8.0))
@@ -300,7 +365,7 @@ fn mcp_settings() -> impl IntoElement {
                 .flex_row()
                 .gap(px(8.0))
                 .child(settings_action(
-                    "复制 MCP 配置",
+                    tr!("Copy MCP config"),
                     || remote::mcp_token().is_none(),
                     move || {
                         if let Some(token) = remote::mcp_token() {
@@ -314,23 +379,23 @@ fn mcp_settings() -> impl IntoElement {
                                 }
                             });
                             set_clipboard(format!("{config:#}"));
-                            message.set("配置已复制");
+                            message.set(tr!("Configuration copied"));
                         }
                     },
                 ))
                 .child(settings_action(
-                    "复制令牌",
+                    tr!("Copy token"),
                     || remote::mcp_token().is_none(),
                     move || {
                         if let Some(token) = remote::mcp_token() {
                             set_clipboard(token);
-                            message.set("令牌已复制");
+                            message.set(tr!("Token copied"));
                         }
                     },
                 )),
         )
         .child(caption(move || match message.get() {
-            "" => "用于支持 Streamable HTTP 的客户端。",
+            "" => tr!("For clients that support Streamable HTTP."),
             feedback => feedback,
         }))
 }
@@ -373,9 +438,15 @@ fn flow(model: Model, importing: bool, back: impl Fn() + Copy + 'static) -> impl
             move || {
                 view()
                     .gap(px(12.0))
-                    .child(action("返回我的歌单", move || this.busy.get(), back))
-                    .child(heading("导入歌单"))
-                    .child(caption("选择音乐来源，保存一份本地歌单。"))
+                    .child(action(
+                        tr!("Back to my playlists"),
+                        move || this.busy.get(),
+                        back,
+                    ))
+                    .child(heading(tr!("Import playlist")))
+                    .child(caption(tr!(
+                        "Choose a music source to save a local playlist."
+                    )))
             },
         ))
         .child(when(
@@ -385,6 +456,8 @@ fn flow(model: Model, importing: bool, back: impl Fn() + Copy + 'static) -> impl
                     view()
                         .gap(px(8.0))
                         .pb(px(12.0))
+                        .child(when(move || !importing, move || language_settings(model)))
+                        .child(when(move || !importing, settings_separator))
                         .child(when(move || !importing, move || playback_settings(model)))
                         .child(when(
                             move || !importing && cfg!(target_os = "macos"),
@@ -425,7 +498,10 @@ fn flow(model: Model, importing: bool, back: impl Fn() + Copy + 'static) -> impl
                 )
             },
         ))
-        .child(when(move || this.busy.get(), || caption("正在读取或保存…")))
+        .child(when(
+            move || this.busy.get(),
+            || caption(tr!("Loading or saving…")),
+        ))
         .child(when(
             move || this.message.with(|v| !v.is_empty()),
             move || caption(move || this.message.get()),
@@ -442,10 +518,10 @@ fn source_settings(this: Sources, importing: bool) -> impl IntoElement {
                     .flex_row()
                     .items_center()
                     .justify_between()
-                    .child(section("音乐来源"))
+                    .child(section(tr!("Music sources")))
                     .child(
                         button()
-                            .accessibility_label(Some("添加音乐来源".into()))
+                            .accessibility_label(Some(tr!("Add music source").into()))
                             .disabled(move || this.busy.get())
                             .on_press(move || {
                                 this.selected.set(None);
@@ -461,7 +537,7 @@ fn source_settings(this: Sources, importing: bool) -> impl IntoElement {
                             .active(|s| s.opacity(0.65))
                             .disabled_style(|s| s.opacity(0.4))
                             .child(
-                                text("＋ 添加")
+                                text(tr!("＋ Add"))
                                     .text_size(px(11.0))
                                     .text_color(move || theme().foreground),
                             ),
@@ -474,7 +550,7 @@ fn source_settings(this: Sources, importing: bool) -> impl IntoElement {
                 view()
                     .gap(px(4.0))
                     .child(setting_toggle(
-                        "自动更新插件",
+                        tr!("Automatically update plugins"),
                         move || this.auto_update.get().unwrap_or(false),
                         move || this.busy.get() || this.auto_update.get().is_none(),
                         move |enabled| {
@@ -490,13 +566,17 @@ fn source_settings(this: Sources, importing: bool) -> impl IntoElement {
                         },
                     ))
                     .child(caption(
-                        "每天更新仓库插件，保留账号和设置。旧插件需先手动更新一次。",
+                        tr!("Update repository plugins daily and keep accounts and settings. Update older plugins manually once first."),
                     ))
             },
         ))
         .child(when(
             move || !this.busy.get() && this.plugins.with(|sources| sources.is_empty()),
-            || caption("尚未添加音乐来源。添加插件后，可按其能力登录或导入歌单。"),
+            || {
+                caption(tr!(
+                    "No music sources yet. Add a plugin to sign in or import playlists where supported."
+                ))
+            },
         ))
         .child(each(
             move || {
@@ -516,8 +596,8 @@ fn source_settings(this: Sources, importing: bool) -> impl IntoElement {
             move |row, _| {
                 button()
                     .accessibility_label(move || {
-                        Some(SharedString::from(format!(
-                            "音乐来源 {}",
+                        Some(SharedString::from(tr!(
+                            "Music source {}",
                             row.with(|s| crate::controls::source_name(&s.id, &s.name))
                         )))
                     })
@@ -556,11 +636,11 @@ fn source_settings(this: Sources, importing: bool) -> impl IntoElement {
                                     let playlist =
                                         source.capabilities.iter().any(|v| v == "playlist");
                                     match (importing, sign_in, playlist) {
-                                        (true, _, _) => "导入此来源的歌单",
-                                        (_, true, true) => "支持登录 · 可导入歌单",
-                                        (_, true, false) => "支持登录",
-                                        (_, false, true) => "可导入歌单",
-                                        _ => "已添加",
+                                        (true, _, _) => tr!("Import playlists from this source"),
+                                        (_, true, true) => tr!("Sign-in · Playlist import"),
+                                        (_, true, false) => tr!("Sign-in available"),
+                                        (_, false, true) => tr!("Playlist import"),
+                                        _ => tr!("Added"),
                                     }
                                 })
                             })),

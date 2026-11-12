@@ -1846,6 +1846,7 @@ dependencies = [
  "musicx-mcp",
  "musicx-platform-apple",
  "musicx-plugins",
+ "musicx-protocol",
 ]
 
 [[package]]
@@ -1960,8 +1961,10 @@ dependencies = [
 name = "musicx-protocol"
 version = "0.2.0"
 dependencies = [
+ "objc2-foundation",
  "schemars",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1970,6 +1973,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "block2",
+ "musicx-protocol",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
