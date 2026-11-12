@@ -778,9 +778,7 @@ fn active_player(model: Model) -> impl IntoElement {
                         slider()
                             .value(move || Some(SliderValue::Single(position())))
                             .max(move || model.status.with(|s| s.duration.max(1.0)))
-                            .disabled(move || {
-                                model.status.with(|s| s.duration <= 0.0 || s.switching)
-                            })
+                            .disabled(move || model.status.with(|s| s.duration <= 0.0))
                             .accessibility_label(Some("播放进度".into()))
                             .track_class(Some("h-5 justify-center".into()))
                             .indicator_class(Some("h-1 rounded-full bg-muted".into()))
@@ -831,10 +829,16 @@ fn active_player(model: Model) -> impl IntoElement {
                                 Some(if playing() { "暂停" } else { "播放" }.into())
                             })
                             .disabled(move || {
-                                model.starting.get()
-                                    || model.status.with(|s| s.track.is_none() || s.switching)
+                                model.status.with(|s| {
+                                    s.track.is_none()
+                                        || (model.starting.get() && !s.switching)
+                                        || (s.switching && !playing())
+                                })
                             })
                             .on_press(move || {
+                                if !playing() {
+                                    model.error.set(String::new());
+                                }
                                 submit(
                                     if playing() {
                                         Action::Pause
