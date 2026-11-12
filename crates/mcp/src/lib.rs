@@ -118,6 +118,9 @@ pub fn start(services: Services) -> Result<()> {
             eprintln!("MCP 服务退出：{error}");
         }
     });
+    if let Err(error) = musicx_plugins::plugin_updates::start() {
+        eprintln!("无法启动插件自动更新：{error}");
+    }
     eprintln!("Streamable HTTP MCP：http://{address}/mcp");
     Ok(())
 }
@@ -433,6 +436,8 @@ struct LibraryInput {
 struct SourceInput {
     action: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     repository: Option<String>,
@@ -505,7 +510,7 @@ impl PlayerTools {
 #[tool_router]
 impl PlayerTools {
     #[tool(
-        description = "管理音乐数据源。action=list/catalog/catalog_view/refresh_catalog/get/install/check_update/update/uninstall/configure/account/sign_in/poll/cancel/sign_out/playlists/import_playlist/import_liked/import_recent/artist/album/shows/show。artist/album/show需要id，show可用offset分页。catalog_view/refresh_catalog返回sources、refreshing和warning，旧缓存立即可读；install可直接用owner/repo或GitHub仓库URL，无需在目录中。插件source为mygo:ID。configure的values按声明字段保存，敏感值不回显；sign_in返回扫码任务，poll/cancel用job。导入仅建本地副本，不回写来源歌单。"
+        description = "管理音乐数据源。action=list/catalog/catalog_view/refresh_catalog/get/install/check_update/update/uninstall/configure/account/sign_in/poll/cancel/sign_out/playlists/import_playlist/import_liked/import_recent/artist/album/shows/show/auto_update_settings/set_auto_update。auto_update_settings读取插件自动更新开关，set_auto_update需要enabled布尔值。artist/album/show需要id，show可用offset分页。catalog_view/refresh_catalog返回sources、refreshing和warning，旧缓存立即可读；install可直接用owner/repo或GitHub仓库URL，无需在目录中。插件source为mygo:ID。configure的values按声明字段保存，敏感值不回显；sign_in返回扫码任务，poll/cancel用job。导入仅建本地副本，不回写来源歌单。"
     )]
     async fn manage_music_sources(
         &self,

@@ -517,12 +517,24 @@ pub(crate) fn entry(dir: &Path, manifest: &Manifest) -> Result<PathBuf> {
 }
 
 pub fn install(source: &Path) -> Result<String> {
-    install_mode(source, false)
+    install_mode(source, false, false, None)
 }
 pub fn update_local(source: &Path) -> Result<String> {
-    install_mode(source, true)
+    install_mode(source, true, false, None)
 }
-fn install_mode(source: &Path, replace: bool) -> Result<String> {
+pub(crate) fn install_repository(
+    source: &Path,
+    replace: bool,
+    expected: Option<&[u8]>,
+) -> Result<String> {
+    install_mode(source, replace, true, expected)
+}
+fn install_mode(
+    source: &Path,
+    replace: bool,
+    repository: bool,
+    expected: Option<&[u8]>,
+) -> Result<String> {
     let manifest = manifest(source)?;
     ensure!(
         crate::music_sources::limitation(&manifest, false, false).is_none(),
@@ -543,6 +555,15 @@ fn install_mode(source: &Path, replace: bool) -> Result<String> {
         "请先完成或取消此来源的账号关联"
     );
     ensure!(replace || !target.exists(), "插件 {} 已存在", manifest.id);
+    let _updates = expected
+        .map(|_| crate::plugin_updates::enabled_guard())
+        .transpose()?;
+    if let Some(expected) = expected {
+        ensure!(
+            fs::read(target.join("plugin.json"))? == expected,
+            "来源已被修改，稍后重新检查自动更新"
+        );
+    }
     let pending = root.join(format!(
         ".install-{}",
         musicx_core::storage::random_hex::<8>()
@@ -550,6 +571,10 @@ fn install_mode(source: &Path, replace: bool) -> Result<String> {
     fs::create_dir(&pending)?;
     let result = (|| -> Result<()> {
         let mut installed = manifest;
+        if !repository {
+            installed.metadata.remove("sourceVersion");
+            installed.metadata.remove("sourceCommit");
+        }
         installed.main = "index.js".into();
         let code =
             crate::script::javascript(&script.to_string_lossy(), &fs::read_to_string(&script)?)?;

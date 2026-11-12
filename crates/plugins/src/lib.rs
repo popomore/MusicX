@@ -7,6 +7,7 @@ mod localization;
 pub mod music_sources;
 pub mod mygo;
 mod oauth;
+pub mod plugin_updates;
 mod quality;
 mod repository;
 mod script;

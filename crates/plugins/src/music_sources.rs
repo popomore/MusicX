@@ -654,6 +654,14 @@ pub fn install(repository: &str) -> Result<MusicSource> {
     install_package(repository, None)
 }
 fn install_package(repository: &str, replacing: Option<&str>) -> Result<MusicSource> {
+    install_package_from(repository, replacing, repository::API, None)
+}
+fn install_package_from(
+    repository: &str,
+    replacing: Option<&str>,
+    api: &str,
+    expected: Option<&[u8]>,
+) -> Result<MusicSource> {
     let repo = repository::parse_repository(repository)?;
     // Discovery is optional. Only an already-cached explicit snapshot pins a version.
     let mut row = source_catalog::cached_entry(&repo).unwrap_or_else(|| source_catalog::Entry {
@@ -667,7 +675,7 @@ fn install_package(repository: &str, replacing: Option<&str>) -> Result<MusicSou
     let package = if !row.discovered {
         repository::pinned(&repo, &row.commit)?
     } else {
-        repository::download(&repo)?
+        repository::download_from(&repo, api)?
     };
     let manifest = package.manifest;
     let script = package.script;
@@ -675,6 +683,15 @@ fn install_package(repository: &str, replacing: Option<&str>) -> Result<MusicSou
     let mut m: mygo::Manifest = serde_json::from_slice(&manifest)?;
     if let Some(id) = replacing {
         ensure!(m.id == id, "更新包的数据源标识与已安装来源不一致");
+    }
+    if let Some(expected) = expected {
+        let installed: mygo::Manifest = serde_json::from_slice(expected)?;
+        if let (Ok(current), Ok(next)) = (
+            semver::Version::parse(installed.version.trim_start_matches('v')),
+            semver::Version::parse(m.version.trim_start_matches('v')),
+        ) {
+            ensure!(next >= current, "自动更新跳过较旧的插件版本");
+        }
     }
     if !row.discovered {
         ensure!(
@@ -737,11 +754,7 @@ fn install_package(repository: &str, replacing: Option<&str>) -> Result<MusicSou
                 )?;
             }
         }
-        if replacing.is_some() {
-            mygo::update_local(&staging)
-        } else {
-            mygo::install(&staging)
-        }
+        mygo::install_repository(&staging, replacing.is_some(), expected)
     })();
     let _ = fs::remove_dir_all(staging);
     let id = result?;
@@ -761,17 +774,37 @@ pub fn check_update(source: &str) -> Result<Value> {
     let m = mygo::manifest(&mygo::plugin_root()?.join(id))?;
     let repo =
         repository::parse_repository(m.repository.as_deref().context("此来源没有记录仓库")?)?;
-    let latest = if let Some(row) = source_catalog::cached_entry(&repo).filter(|r| !r.discovered) {
-        row.commit
-    } else {
-        repository::latest_version(&repo)?
-    };
-    let current = m
-        .metadata
+    let latest = latest_source_version(&repo, repository::API)?;
+    let current = source_version(&m);
+    Ok(json!({"available":current != latest,"installed_version":current,"latest_version":latest}))
+}
+
+fn latest_source_version(repo: &str, api: &str) -> Result<String> {
+    Ok(
+        if let Some(row) = source_catalog::cached_entry(repo).filter(|r| !r.discovered) {
+            row.commit
+        } else {
+            repository::latest_version(repo, api)?
+        },
+    )
+}
+
+pub(crate) fn source_version(m: &mygo::Manifest) -> &str {
+    m.metadata
         .get("sourceVersion")
         .and_then(Value::as_str)
-        .unwrap_or(&m.version);
-    Ok(json!({"available":current != latest,"installed_version":current,"latest_version":latest}))
+        .unwrap_or(&m.version)
+}
+
+pub(crate) fn auto_update(id: &str, api: &str, expected: &[u8]) -> Result<String> {
+    let m: mygo::Manifest = serde_json::from_slice(expected)?;
+    let repository = m.repository.as_deref().context("此来源没有记录仓库")?;
+    let repo = repository::parse_repository(repository)?;
+    if source_version(&m) != latest_source_version(&repo, api)? {
+        install_package_from(repository, Some(id), api, Some(expected))?;
+    }
+    let installed = mygo::manifest(&mygo::plugin_root()?.join(id))?;
+    Ok(source_version(&installed).to_owned())
 }
 
 pub fn account(source: &str) -> Result<SourceAccount> {
@@ -1031,6 +1064,12 @@ pub fn login_state(id: &str, cancel: bool) -> Result<SourceLogin> {
 pub fn execute(input: MusicSourceAction) -> Result<Value> {
     Ok(match input {
         MusicSourceAction::List => serde_json::to_value(list()?)?,
+        MusicSourceAction::AutoUpdateSettings => {
+            serde_json::to_value(crate::plugin_updates::settings()?)?
+        }
+        MusicSourceAction::SetAutoUpdate { enabled } => {
+            serde_json::to_value(crate::plugin_updates::set_enabled(enabled)?)?
+        }
         MusicSourceAction::Catalog => serde_json::to_value(catalog()?)?,
         MusicSourceAction::CatalogView => serde_json::to_value(catalog_view(false)?)?,
         MusicSourceAction::RefreshCatalog => serde_json::to_value(catalog_view(true)?)?,

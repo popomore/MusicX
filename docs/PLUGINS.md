@@ -34,6 +34,10 @@ JavaScript and TypeScript single-file entries are supported. TypeScript is trans
 
 Source details expose **More Options → Check for Updates**, **Update Source**, and **Remove Source**. Updates validate the new package and source ID before replacement, preserve settings/account storage, and keep the previous plugin if package validation or replacement fails. Removal requires a second confirmation in the UI, deletes plugin settings/account storage, and retains local playlists and history. Tracks from a removed source require that source to be added again before playback.
 
+**Automatically Update Plugins** (自动更新插件) in Music Sources is enabled by default. While MusicX is running, the persistent host checks repository-installed plugins daily and installs available updates, even when the macOS player panel is closed. Checks begin 30 seconds after startup; failures retry after an hour without blocking other sources. The preference and per-source check times persist in `plugin-updates.json`, so restarting does not repeat recent checks. Turning the switch off also cancels downloaded updates that have not begun installation. Manual checks and updates remain available.
+
+Automatic updates preserve settings and account storage, wait for unfinished sign-in flows, validate source identity and compatibility, and reject lower semantic plugin versions. A source modified during download is checked again later. Local-directory installs and local-directory updates stay manual, including when their manifest declares a repository. They resume automatic updates only after an explicit repository update or reinstall. Custom catalog pins and hashes apply to automatic updates as well.
+
 Local directory installs and updates are available from the helper:
 
 ```sh
@@ -71,6 +75,8 @@ Management examples:
 ```json
 {"action":"check_update","source":"mygo:example"}
 {"action":"update","source":"mygo:example"}
+{"action":"auto_update_settings"}
+{"action":"set_auto_update","enabled":false}
 {"action":"uninstall","source":"mygo:example"}
 {"action":"sign_in","source":"mygo:example","method":"oauth"}
 ```

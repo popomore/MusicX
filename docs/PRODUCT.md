@@ -27,6 +27,8 @@ MusicX remembers the current track, queue, playback position, and volume across 
 
 MusicX starts without a default source. Users explicitly add compatible MyGo Music plugins from the catalog or a GitHub repository. A source can offer search, playback, lyrics, album/artist information, account sign-in, podcast browsing, or playlist/liked-song/recent-track import depending on its capabilities. The settings view surfaces the available actions for each source.
 
+Repository-installed plugins update automatically while MusicX is running, preserving accounts and settings. Music Sources provides a switch to turn this off. Local-directory plugins remain manually managed.
+
 Connect accounts with QR sign-in or, where supported on macOS, an embedded web sign-in window. Credentials belong to the source's local account session. Imported playlists are local snapshots that remain available after signing out. Playback of their tracks still depends on the source and its account requirements.
 
 ## Local data
