@@ -61,6 +61,8 @@
   "Start the background player first": "Start the background player first",
   "Panel connection already started": "Panel connection already started",
   "Panel client already started": "Panel client already started",
+  "Track navigation queue already started": "Track navigation queue already started",
+  "Track change outcome is not yet confirmed; later track changes are queued. Please wait.": "Track change outcome is not yet confirmed; later track changes are queued. Please wait.",
   "Could not connect to the background player": "Could not connect to the background player",
   "Background request failed": "Background request failed",
   "Background connection closed": "Background connection closed",

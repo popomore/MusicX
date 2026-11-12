@@ -61,6 +61,8 @@
   "Start the background player first": "请先启动后台播放器",
   "Panel connection already started": "界面连接已启动",
   "Panel client already started": "界面客户端已经启动",
+  "Track navigation queue already started": "切歌队列已经启动",
+  "Track change outcome is not yet confirmed; later track changes are queued. Please wait.": "切歌结果尚未确认，后续切歌已排队，请稍候",
   "Could not connect to the background player": "后台播放器连接失败",
   "Background request failed": "后台请求失败",
   "Background connection closed": "后台连接已经结束",
