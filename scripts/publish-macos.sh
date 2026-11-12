@@ -33,11 +33,10 @@ if [[ "$prerelease" == true ]]; then
 fi
 
 sha256sum --check "$checksum"
-files=("$dmg" "$checksum")
+python3 "$script_dir/validate-appcast.py" "$dmg" "$tag" "$repo"
+files=("$dmg" "$checksum" appcast.xml)
 make_latest=false
 if [[ "$channel" == stable ]]; then
-    python3 "$script_dir/validate-appcast.py" "$dmg" "$tag" "$repo"
-    files+=(appcast.xml)
     make_latest=true
 fi
 verify_tag() {
@@ -57,8 +56,9 @@ file_digests() {
 }
 
 jq -n --arg tag "$tag" --arg version "${tag#v}" --arg source_sha "$source_sha" \
+    --arg build_version "${MUSICX_BUNDLE_VERSION:?}" \
     --arg signing_mode "$signing_mode" --argjson files "$(file_digests "${files[@]}")" '
-    {schema: 1, unit: "musicx-macos", tag: $tag, version: $version, source_sha: $source_sha,
+    {schema: 1, unit: "musicx-macos", tag: $tag, version: $version, build_version: $build_version, source_sha: $source_sha,
      signing_mode: $signing_mode, files: ($files | map({name, sha256: (.digest | ltrimstr("sha256:"))}))}
 ' > "$manifest"
 files+=("$manifest")

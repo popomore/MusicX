@@ -1,20 +1,41 @@
 //! Sparkle runs only in the outer, persistent application, never in the panel.
 use base64::{Engine, prelude::BASE64_STANDARD};
+use musicx_core::protocol::UpdateChannel;
 use objc2::{
-    MainThreadMarker, msg_send,
+    MainThreadMarker, MainThreadOnly, define_class, msg_send,
     rc::{Allocated, Retained},
     runtime::{AnyClass, AnyObject},
 };
 use objc2_app_kit::{NSAlert, NSApplication};
-use objc2_foundation::{NSBundle, NSString, ns_string};
+use objc2_foundation::{NSBundle, NSObject, NSObjectProtocol, NSSet, NSString, ns_string};
 use std::path::Path;
 
 pub const FEED_URL: &str =
-    "https://github.com/popomore/MusicX/releases/latest/download/appcast.xml";
+    "https://github.com/popomore/MusicX/releases/download/update-feed/appcast.xml";
+
+define_class!(
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "MusicXUpdaterDelegate"]
+    struct UpdateDelegate;
+
+    unsafe impl NSObjectProtocol for UpdateDelegate {}
+
+    impl UpdateDelegate {
+        #[unsafe(method_id(allowedChannelsForUpdater:))]
+        fn channels(&self, _updater: &AnyObject) -> Retained<NSSet<NSString>> {
+            match UpdateChannel::load() {
+                UpdateChannel::Stable => NSSet::new(),
+                UpdateChannel::All => NSSet::from_slice(&[ns_string!("preview")]),
+            }
+        }
+    }
+);
 
 pub struct Updater {
     _framework: Retained<NSBundle>,
     controller: Retained<AnyObject>,
+    _delegate: Retained<UpdateDelegate>,
 }
 
 impl Updater {
@@ -35,6 +56,12 @@ impl Updater {
         let framework = NSBundle::bundleWithURL(&url)
             .ok_or_else(|| anyhow::anyhow!("缺少 Sparkle.framework"))?;
         anyhow::ensure!(unsafe { framework.load() }, "无法加载 Sparkle.framework");
+        let delegate: Retained<UpdateDelegate> = unsafe {
+            msg_send![
+                UpdateDelegate::alloc(MainThreadMarker::new().expect("main thread")),
+                init
+            ]
+        };
         let class = AnyClass::get(c"SPUStandardUpdaterController")
             .ok_or_else(|| anyhow::anyhow!("缺少 Sparkle 更新控制器"))?;
         // Sparkle's documented initializer; the retained controller and framework
@@ -42,16 +69,24 @@ impl Updater {
         let controller = unsafe {
             let allocated: Allocated<AnyObject> = msg_send![class, alloc];
             msg_send![allocated, initWithStartingUpdater: true,
-                updaterDelegate: None::<&AnyObject>, userDriverDelegate: None::<&AnyObject>]
+                updaterDelegate: &*delegate, userDriverDelegate: None::<&AnyObject>]
         };
         Ok(Some(Self {
             _framework: framework,
             controller,
+            _delegate: delegate,
         }))
     }
 
     pub fn controller(&self) -> Retained<AnyObject> {
         self.controller.clone()
+    }
+
+    pub fn channel_changed(&self) {
+        unsafe {
+            let updater: Retained<AnyObject> = msg_send![&*self.controller, updater];
+            let _: () = msg_send![&*updater, resetUpdateCycleAfterShortDelay];
+        }
     }
 
     pub fn check(controller: &AnyObject) {

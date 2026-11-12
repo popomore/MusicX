@@ -82,19 +82,84 @@ pub fn settings_view(model: Model) -> impl IntoElement {
 
 #[cfg(target_os = "macos")]
 fn update_settings() -> impl IntoElement {
-    view().gap(px(8.0)).child(section("版本与更新")).child(
-        view()
-            .flex_row()
-            .items_center()
-            .gap(px(8.0))
-            .child(
-                view()
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .child(caption(crate::updates::version())),
+    use crate::protocol::UpdateChannel;
+    let channel = signal(UpdateChannel::load());
+    let message = signal(String::new());
+    let options = view().flex_row().gap(px(4.0));
+    let options = [UpdateChannel::All, UpdateChannel::Stable]
+        .into_iter()
+        .fold(options, |row, value| {
+            row.child(
+                button()
+                    .accessibility_label(Some(value.label().into()))
+                    .selected(move || channel.get() == value)
+                    .on_press(move || match value.save() {
+                        Ok(()) => {
+                            channel.set(value);
+                            message.set(String::new());
+                            crate::updates::channel_changed();
+                        }
+                        Err(error) => message.set(format!("无法保存更新设置：{error}")),
+                    })
+                    .h(px(28.0))
+                    .px(px(8.0))
+                    .rounded(px(6.0))
+                    .items_center()
+                    .justify_center()
+                    .bg(move || {
+                        if channel.get() == value {
+                            theme().muted
+                        } else {
+                            theme().muted.opacity(0.25)
+                        }
+                    })
+                    .hover(|s| s.bg(theme().muted))
+                    .active(|s| s.opacity(0.65))
+                    .child(
+                        text(value.label())
+                            .text_size(px(11.0))
+                            .text_color(move || theme().foreground),
+                    ),
             )
-            .child(settings_action("检查更新", || false, crate::updates::check)),
-    )
+        });
+    view()
+        .gap(px(8.0))
+        .child(section("版本与更新"))
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .gap(px(8.0))
+                .child(
+                    view()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .child(caption(crate::updates::version())),
+                )
+                .child(settings_action("检查更新", || false, crate::updates::check)),
+        )
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .child(
+                    text("接收更新")
+                        .text_size(px(12.0))
+                        .text_color(move || theme().foreground),
+                )
+                .child(options),
+        )
+        .child(caption(move || {
+            if !message.get().is_empty() {
+                message.get()
+            } else {
+                match channel.get() {
+                    UpdateChannel::All => "包含稳定版和预览版（Preview）。".into(),
+                    UpdateChannel::Stable => "仅检查稳定版。已开始的预览版更新仍可能安装。".into(),
+                }
+            }
+        }))
 }
 
 #[cfg(target_os = "ios")]

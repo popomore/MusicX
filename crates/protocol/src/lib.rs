@@ -2,6 +2,9 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+mod update_channel;
+pub use update_channel::UpdateChannel;
+
 /// Maximum size of a playback queue that can be persisted and restored.
 pub const MAX_QUEUE_TRACKS: usize = 10_000;
 
@@ -30,6 +33,11 @@ pub fn panel_reopen_notification() -> String {
 #[cfg(target_os = "macos")]
 pub fn check_updates_notification() -> String {
     component_app_id("updates.check")
+}
+
+#[cfg(target_os = "macos")]
+pub fn update_channel_notification() -> String {
+    component_app_id("updates.channel")
 }
 
 #[cfg(not(target_os = "ios"))]

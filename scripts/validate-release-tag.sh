@@ -28,7 +28,17 @@ fi
 
 case "${3:-}" in
     '') printf '%s\n' "$channel" ;;
-    --github-output) printf 'sha=%s\nchannel=%s\nversion=%s\nbundle-version=%s\n' "$source_sha" "$channel" "${tag#v}" "$version" ;;
+    --github-output)
+        # One release workflow allocates build numbers across both channels.
+        # The epoch also makes the first new build newer than legacy 1.0.0.
+        run_number=${GITHUB_RUN_NUMBER:?A release workflow run number is required}
+        if [[ ! "$run_number" =~ ^[1-9][0-9]{0,8}$ ]]; then
+            echo '::error::Invalid release workflow run number.' >&2
+            exit 1
+        fi
+        printf 'sha=%s\nchannel=%s\nversion=%s\nshort-version=%s\nbundle-version=%s\n' \
+            "$source_sha" "$channel" "${tag#v}" "$version" "$((1000000 + run_number))"
+        ;;
     *)
         echo '::error::Unknown validation output option.' >&2
         exit 1

@@ -20,13 +20,14 @@ env:
 
 jobs:
   validate:
-    if: ${{ !github.event.deleted }}
+    if: ${{ !github.event.deleted && github.ref_name != 'update-feed' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       source-sha: ${{ steps.source.outputs.sha }}
       channel: ${{ steps.source.outputs.channel }}
       version: ${{ steps.source.outputs.version }}
+      short-version: ${{ steps.source.outputs.short-version }}
       bundle-version: ${{ steps.source.outputs.bundle-version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -56,6 +57,7 @@ jobs:
     timeout-minutes: 45
     env:
       MUSICX_RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+      MUSICX_SHORT_VERSION: ${{ needs.validate.outputs.short-version }}
       MUSICX_BUNDLE_VERSION: ${{ needs.validate.outputs.bundle-version }}
     outputs:
       artifact-id: ${{ steps.artifacts.outputs.artifact-id }}
@@ -136,11 +138,9 @@ jobs:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
         run: |
           test "$(uname -m)" = arm64
-          if [[ "${{ needs.validate.outputs.channel }}" == stable ]]; then
-            : "${SPARKLE_PUBLIC_KEY:?Configure the Sparkle public key repository variable}"
-            : "${SPARKLE_PRIVATE_KEY:?Configure the Sparkle private key repository secret}"
-            export MUSICX_SPARKLE_PUBLIC_KEY="$SPARKLE_PUBLIC_KEY"
-          fi
+          : "${SPARKLE_PUBLIC_KEY:?Configure the Sparkle public key repository variable}"
+          : "${SPARKLE_PRIVATE_KEY:?Configure the Sparkle private key repository secret}"
+          export MUSICX_SPARKLE_PUBLIC_KEY="$SPARKLE_PUBLIC_KEY"
           sh scripts/package-macos.sh "$DMG"
           hdiutil verify -quiet "$DMG"
 
@@ -173,14 +173,15 @@ jobs:
           shasum -a 256 "$name" > "$name.sha256"
 
       - name: Generate signed automatic update feed
-        if: needs.validate.outputs.channel == 'stable'
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
           MUSICX_SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           brew list --versions openssl@3 >/dev/null || brew install openssl@3
           bash scripts/generate-appcast.sh "$DMG"
           python3 scripts/validate-appcast.py "$DMG" "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY"
+          bash scripts/generate-update-feed.sh "$DMG"
 
       - id: artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -190,12 +191,14 @@ jobs:
             ${{ env.DMG }}
             ${{ env.DMG }}.sha256
             target/distribution/appcast.xml
+            target/distribution/appcast-all.xml
+            target/distribution/appcast-all.base
           compression-level: 0
           if-no-files-found: error
           retention-days: ${{ needs.validate.outputs.channel == 'preview' && 14 || 7 }}
 
   publish:
-    needs: build
+    needs: [validate, build]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -217,7 +220,16 @@ jobs:
           SOURCE_SHA: ${{ needs.build.outputs.source-sha }}
           SIGNING_MODE: ${{ needs.build.outputs.signing-mode }}
           MUSICX_SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
+          MUSICX_BUNDLE_VERSION: ${{ needs.validate.outputs.bundle-version }}
         run: bash scripts/publish-macos.sh "$DMG"
+
+      - name: Publish the signed update feed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.build.outputs.source-sha }}
+          MUSICX_SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
+          MUSICX_BUNDLE_VERSION: ${{ needs.validate.outputs.bundle-version }}
+        run: bash scripts/publish-update-feed.sh "$DMG"
 
       - name: Preserve the release manifest
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
