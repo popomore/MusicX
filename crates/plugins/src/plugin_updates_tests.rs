@@ -186,13 +186,40 @@ fn updates_child() {
     legacy_manifest["sourceCommit"] = json!("a".repeat(40));
     fs::write(legacy.join("plugin.json"), legacy_manifest.to_string()).unwrap();
     mygo::install_repository(&legacy, false, None).unwrap();
+    let legacy_dir = mygo::plugin_root().unwrap().join("legacy");
+    fs::remove_file(legacy_dir.join(crate::installation::FILE)).unwrap();
     assert_eq!(
         music_sources::source_version(
             &mygo::manifest(&mygo::plugin_root().unwrap().join("legacy")).unwrap()
         ),
         "a".repeat(40)
     );
-    mygo::install(&fixture(&root, "local", "1.0.0")).unwrap();
+    // Pre-marker local copies may contain sourceVersion, but must stay manual.
+    mygo::install_repository(&fixture(&root, "untracked-local", "1.0.0"), false, None).unwrap();
+    let untracked_dir = mygo::plugin_root().unwrap().join("untracked-local");
+    fs::remove_file(untracked_dir.join(crate::installation::FILE)).unwrap();
+    // A script edited before the scan must not cause a repository request.
+    mygo::install_repository(&fixture(&root, "edited", "1.0.0"), false, None).unwrap();
+    let edited_dir = mygo::plugin_root().unwrap().join("edited");
+    let initial_edit = format!("{SCRIPT}\n// existing local edit\n");
+    fs::write(edited_dir.join("index.js"), &initial_edit).unwrap();
+    let local = fixture(&root, "local", "1.0.0");
+    fs::copy(
+        mygo::plugin_root()
+            .unwrap()
+            .join("good")
+            .join(crate::installation::FILE),
+        local.join(crate::installation::FILE),
+    )
+    .unwrap();
+    mygo::install(&local).unwrap();
+    assert!(
+        !mygo::plugin_root()
+            .unwrap()
+            .join("local")
+            .join(crate::installation::FILE)
+            .exists()
+    );
     assert!(
         !mygo::manifest(&mygo::plugin_root().unwrap().join("local"))
             .unwrap()
@@ -223,10 +250,41 @@ fn updates_child() {
     set_enabled(true).unwrap();
     run_due(now, &api).unwrap();
     assert_eq!(mygo::manifest(&good_dir).unwrap().version, "2.0.0");
-    let legacy_dir = mygo::plugin_root().unwrap().join("legacy");
+    assert_eq!(mygo::manifest(&legacy_dir).unwrap().version, "1.0.0");
+    assert_eq!(mygo::manifest(&untracked_dir).unwrap().version, "1.0.0");
+    assert_eq!(
+        fs::read_to_string(edited_dir.join("index.js")).unwrap(),
+        initial_edit
+    );
+    assert!(
+        !server
+            .lock()
+            .unwrap()
+            .requests
+            .iter()
+            .any(|path| path.contains("legacy")
+                || path.contains("untracked-local")
+                || path.contains("edited"))
+    );
+    // An explicit repository update creates a trusted baseline for old installs.
+    mygo::install_repository(&legacy, true, None).unwrap();
+    run_due(now + 1, &api).unwrap();
     let upgraded = mygo::manifest(&legacy_dir).unwrap();
     assert_eq!(upgraded.version, "2.0.0");
     assert_eq!(upgraded.metadata["sourceVersion"], "v2.0.0");
+    let record: Value =
+        serde_json::from_slice(&fs::read(legacy_dir.join(crate::installation::FILE)).unwrap())
+            .unwrap();
+    assert_eq!(record["repository"], "https://github.com/example/legacy");
+    assert_eq!(record["version"], "2.0.0");
+    assert_eq!(record["revision"], "v2.0.0");
+    assert_eq!(record["files"]["index.js"].as_str().unwrap().len(), 64);
+    assert!(
+        !record["files"]
+            .as_object()
+            .unwrap()
+            .contains_key("settings.json")
+    );
     assert_eq!(
         fs::read(good_dir.join("settings.json")).unwrap(),
         settings_before
@@ -311,6 +369,25 @@ fn updates_child() {
     assert!(!settings().unwrap().enabled);
     assert_eq!(mygo::manifest(&good_dir).unwrap().version, "2.0.0");
     set_enabled(true).unwrap();
+
+    // Direct script edits during a download also survive automatic replacement.
+    let edited = format!("{SCRIPT}\n// keep this local edit\n");
+    let edited_path = good_dir.join("index.js");
+    let edited_copy = edited.clone();
+    server.lock().unwrap().on_download = Some(Box::new(move || {
+        fs::write(edited_path, edited_copy).unwrap();
+    }));
+    tick += RETRY_INTERVAL;
+    run_due(tick, &api).unwrap();
+    assert_eq!(mygo::manifest(&good_dir).unwrap().version, "2.0.0");
+    assert_eq!(
+        fs::read_to_string(good_dir.join("index.js")).unwrap(),
+        edited
+    );
+    let count = server.lock().unwrap().requests.len();
+    run_due(tick + CHECK_INTERVAL, &api).unwrap();
+    assert_eq!(server.lock().unwrap().requests.len(), count);
+    mygo::install_repository(&fixture(&root, "good", "2.0.0"), true, None).unwrap();
 
     // A local edit made while downloading wins, and opts out of future checks.
     let local_edit = fixture(&root, "good", "2.5.0");

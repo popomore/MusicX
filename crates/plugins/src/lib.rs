@@ -3,6 +3,7 @@ pub mod assets;
 mod catalog;
 mod discovery;
 mod http;
+mod installation;
 mod localization;
 pub mod music_sources;
 pub mod mygo;

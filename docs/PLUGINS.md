@@ -38,7 +38,9 @@ Source details expose **More Options → Check for Updates**, **Update Source**,
 
 Automatic updates preserve settings and account storage, wait for unfinished sign-in flows, validate source identity and compatibility, and reject lower semantic plugin versions. A source modified during download is checked again later. Local-directory installs and local-directory updates stay manual, including when their manifest declares a repository. They resume automatic updates only after an explicit repository update or reinstall. Custom catalog pins and hashes apply to automatic updates as well.
 
-Older repository installs that record only `sourceCommit` remain eligible for automatic updates. The host uses this commit as the installed revision until an update records `sourceVersion`. A repository URL alone is not enough to opt a local-directory install into automatic updates.
+Each repository install writes a host-owned `mygo-plugins/<id>/musicx-install.json`. It records the repository, declared plugin version, installed revision (Release tag or commit), a commit SHA when resolved, and SHA256 hashes of the installed manifest, compiled entry and supported locale files. These hashes exclude account storage and settings. Automatic updates require this record and verify the payload before checking and again before replacement; directly edited files pause automatic updates.
+
+Older installs without this record stay manual, even if their manifest contains `sourceVersion` or `sourceCommit`. Use **More Options → Update Source** once to establish a repository baseline and enable automatic tracking. This action remains available when no newer version exists and replaces local plugin files. A local-directory update removes the host record and returns the source to manual management.
 
 Local directory installs and updates are available from the helper:
 

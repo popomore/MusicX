@@ -525,7 +525,7 @@ pub fn update_local(source: &Path) -> Result<String> {
 pub(crate) fn install_repository(
     source: &Path,
     replace: bool,
-    expected: Option<&[u8]>,
+    expected: Option<&crate::installation::Snapshot>,
 ) -> Result<String> {
     install_mode(source, replace, true, expected)
 }
@@ -533,7 +533,7 @@ fn install_mode(
     source: &Path,
     replace: bool,
     repository: bool,
-    expected: Option<&[u8]>,
+    expected: Option<&crate::installation::Snapshot>,
 ) -> Result<String> {
     let manifest = manifest(source)?;
     ensure!(
@@ -558,12 +558,6 @@ fn install_mode(
     let _updates = expected
         .map(|_| crate::plugin_updates::enabled_guard())
         .transpose()?;
-    if let Some(expected) = expected {
-        ensure!(
-            fs::read(target.join("plugin.json"))? == expected,
-            "来源已被修改，稍后重新检查自动更新"
-        );
-    }
     let pending = root.join(format!(
         ".install-{}",
         musicx_core::storage::random_hex::<8>()
@@ -597,6 +591,12 @@ fn install_mode(
                     bytes,
                 )?;
             }
+        }
+        if repository {
+            crate::installation::write(&pending, &installed)?;
+        }
+        if let Some(expected) = expected {
+            expected.verify(&target)?;
         }
         if replace && target.exists() {
             ensure!(

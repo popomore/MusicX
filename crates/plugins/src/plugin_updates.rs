@@ -138,10 +138,10 @@ fn run_due(now: u64, api: &str) -> Result<()> {
             continue;
         }
         // A single damaged or locally installed source must not block the others.
-        let Ok(expected) = fs::read(item.path().join("plugin.json")) else {
+        let Ok(expected) = crate::installation::Snapshot::capture(&item.path()) else {
             continue;
         };
-        let Ok(manifest) = serde_json::from_slice::<mygo::Manifest>(&expected) else {
+        let Ok(manifest) = serde_json::from_slice::<mygo::Manifest>(&expected.manifest) else {
             continue;
         };
         let Some(version) = music_sources::repository_version(&manifest) else {

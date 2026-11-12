@@ -660,7 +660,7 @@ fn install_package_from(
     repository: &str,
     replacing: Option<&str>,
     api: &str,
-    expected: Option<&[u8]>,
+    expected: Option<&crate::installation::Snapshot>,
 ) -> Result<MusicSource> {
     let repo = repository::parse_repository(repository)?;
     // Discovery is optional. Only an already-cached explicit snapshot pins a version.
@@ -685,7 +685,7 @@ fn install_package_from(
         ensure!(m.id == id, "更新包的数据源标识与已安装来源不一致");
     }
     if let Some(expected) = expected {
-        let installed: mygo::Manifest = serde_json::from_slice(expected)?;
+        let installed: mygo::Manifest = serde_json::from_slice(&expected.manifest)?;
         if let (Ok(current), Ok(next)) = (
             semver::Version::parse(installed.version.trim_start_matches('v')),
             semver::Version::parse(m.version.trim_start_matches('v')),
@@ -736,6 +736,7 @@ fn install_package_from(
     }
     m.metadata
         .insert("sourceVersion".into(), json!(package.version));
+    m.metadata.remove("sourceCommit");
     if let Some(commit) = package.commit {
         m.metadata.insert("sourceCommit".into(), json!(commit));
     }
@@ -806,8 +807,12 @@ pub(crate) fn source_version(m: &mygo::Manifest) -> &str {
     repository_version(m).unwrap_or(&m.version)
 }
 
-pub(crate) fn auto_update(id: &str, api: &str, expected: &[u8]) -> Result<String> {
-    let m: mygo::Manifest = serde_json::from_slice(expected)?;
+pub(crate) fn auto_update(
+    id: &str,
+    api: &str,
+    expected: &crate::installation::Snapshot,
+) -> Result<String> {
+    let m: mygo::Manifest = serde_json::from_slice(&expected.manifest)?;
     let repository = m.repository.as_deref().context("此来源没有记录仓库")?;
     let repo = repository::parse_repository(repository)?;
     if source_version(&m) != latest_source_version(&repo, api)? {

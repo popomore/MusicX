@@ -490,7 +490,7 @@ fn source_settings(this: Sources, importing: bool) -> impl IntoElement {
                         },
                     ))
                     .child(caption(
-                        "每天检查仓库安装的插件，自动更新并保留账号和设置。",
+                        "每天更新仓库插件，保留账号和设置。旧插件需先手动更新一次。",
                     ))
             },
         ))

@@ -43,7 +43,6 @@ struct Browser {
     imported: Signal<bool>,
     disconnecting: Signal<bool>,
     removing: Signal<bool>,
-    update_available: Signal<bool>,
     owner: Owner,
     page: Signal<Page>,
     busy: Signal<bool>,
@@ -149,7 +148,6 @@ impl Browser {
     fn populate(self, source: MusicSource) {
         self.imported.set(false);
         self.removing.set(false);
-        self.update_available.set(false);
         self.configuring
             .set(source.settings.iter().any(|f| f.secret && !f.configured));
         let values = source
@@ -383,7 +381,6 @@ impl Browser {
             move || request::<serde_json::Value>(Action::CheckUpdate { source: source.id }),
             |this, result| {
                 let available = result["available"].as_bool().unwrap_or(false);
-                this.update_available.set(available);
                 this.message.set(if available {
                     format!(
                         "可更新到 {}",
@@ -403,7 +400,6 @@ impl Browser {
             move || request::<MusicSource>(Action::Update { source: source.id }),
             |this, source| {
                 this.populate(source);
-                this.update_available.set(false);
                 this.message.set("来源已更新，账号和设置已保留".into());
             },
         );
@@ -493,7 +489,6 @@ pub fn sources_view(
         imported: signal(false),
         disconnecting: signal(false),
         removing: signal(false),
-        update_available: signal(false),
         owner: Owner::current(),
         page: signal(Page::List),
         busy: signal(false),
@@ -621,7 +616,8 @@ pub fn sources_view(
                         .child(action("更多选项",move||this.busy.get(),move||{this.managing.update(|v|*v = !*v);this.disconnecting.set(false);} ))
                         .child(when(move||this.managing.get(),move||view().gap(px(5.0))
                             .child(action("检查更新",move||this.busy.get(),move||this.check_update()))
-                            .child(when(move||this.update_available.get(),move||action("更新来源",move||this.busy.get(),move||this.update())))
+                            .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.repository.is_some())),move||action("更新来源",move||this.busy.get(),move||this.update())))
+                            .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.repository.is_some())),||caption("旧插件需手动更新一次以启用自动更新。更新会替换插件文件。")))
                             .child(action("移除来源",move||this.busy.get(),move||this.removing.set(true)))
                             .child(when(move||this.removing.get(),move||view().gap(px(4.0))
                                 .child(caption("本地歌单保留。移除后需重新添加来源才能播放其曲目。"))
