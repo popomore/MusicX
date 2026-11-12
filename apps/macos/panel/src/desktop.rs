@@ -258,25 +258,31 @@ pub fn run_panel() -> ExitCode {
     item(
         &menu,
         &delegate,
-        "检查更新…",
+        "Check for Updates…",
         Some(sel!(checkForUpdates:)),
         "",
     );
     menu.addItem(&NSMenuItem::separatorItem(mtm));
-    item(&menu, &delegate, "关闭面板", Some(sel!(closePanel:)), "w");
-    item(&menu, &delegate, "退出 MusicX", Some(sel!(quit:)), "q");
+    item(
+        &menu,
+        &delegate,
+        "Close Panel",
+        Some(sel!(closePanel:)),
+        "w",
+    );
+    item(&menu, &delegate, "Quit MusicX", Some(sel!(quit:)), "q");
     holder.setSubmenu(Some(&menu));
     let edit_holder = NSMenuItem::new(mtm);
-    edit_holder.setTitle(&NSString::from_str(tr!("编辑")));
-    MENU_TITLES.with_borrow_mut(|items| items.push((edit_holder.clone(), "编辑")));
+    edit_holder.setTitle(&NSString::from_str(tr!("Edit")));
+    MENU_TITLES.with_borrow_mut(|items| items.push((edit_holder.clone(), "Edit")));
     let edit = NSMenu::new(mtm);
     for (title, selector, key) in [
-        ("撤销", sel!(undo:), "z"),
-        ("重做", sel!(redo:), "Z"),
-        ("剪切", sel!(cut:), "x"),
-        ("复制", sel!(copy:), "c"),
-        ("粘贴", sel!(paste:), "v"),
-        ("全选", sel!(selectAll:), "a"),
+        ("Undo", sel!(undo:), "z"),
+        ("Redo", sel!(redo:), "Z"),
+        ("Cut", sel!(cut:), "x"),
+        ("Copy", sel!(copy:), "c"),
+        ("Paste", sel!(paste:), "v"),
+        ("Select All", sel!(selectAll:), "a"),
     ] {
         // Standard AppKit text actions follow the responder chain.
         unsafe {

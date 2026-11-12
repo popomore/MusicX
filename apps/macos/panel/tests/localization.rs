@@ -61,6 +61,10 @@ fn start() -> Headless {
 
 fn exercise() {
     let directory = protocol::data_dir().unwrap();
+    assert_eq!(
+        protocol::i18n::Language::load(),
+        protocol::i18n::Language::System
+    );
     std::fs::write(directory.join("language"), "zh-CN\n").unwrap();
     protocol::i18n::refresh();
     let mut app = start();
@@ -81,6 +85,16 @@ fn exercise() {
     app.press("简体中文").unwrap();
     app.wait(Duration::from_millis(100)).unwrap();
     assert!(app.shows("版本与更新"));
+    app.press(protocol::i18n::Language::System.label()).unwrap();
+    app.wait(Duration::from_millis(100)).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(directory.join("language")).unwrap(),
+        "system\n"
+    );
+    assert_eq!(
+        protocol::i18n::Language::load(),
+        protocol::i18n::Language::System
+    );
     app.press("English").unwrap();
     app.wait(Duration::from_millis(100)).unwrap();
     drop(app);
@@ -89,7 +103,9 @@ fn exercise() {
         app.shows("Language"),
         "reopening settings must use the saved language"
     );
-    println!("localization: live English/Chinese switching, Model preservation and reopen passed");
+    println!(
+        "localization: system default, manual language switching, Model preservation and reopen passed"
+    );
 }
 
 fn main() {

@@ -21,9 +21,9 @@ pub fn preferred() -> Quality {
 pub fn set_preferred(quality: Quality) -> Result<()> {
     let mut value = preference()
         .write()
-        .map_err(|_| anyhow::anyhow!(tr!("音质设置不可用")))?;
+        .map_err(|_| anyhow::anyhow!(tr!("Audio quality settings unavailable")))?;
     crate::storage::save_private("audio-quality.json", &serde_json::to_string(&quality)?)
-        .context(tr!("无法保存音质设置"))?;
+        .context(tr!("Could not save audio quality settings"))?;
     *value = quality;
     Ok(())
 }
@@ -44,7 +44,7 @@ pub fn normalization_enabled() -> bool {
 pub fn set_normalization(enabled: bool) -> Result<()> {
     let mut value = normalization()
         .write()
-        .map_err(|_| anyhow::anyhow!(tr!("音量均衡设置不可用")))?;
+        .map_err(|_| anyhow::anyhow!(tr!("Volume normalization settings unavailable")))?;
     crate::storage::save_private("normalization.json", &serde_json::to_string(&enabled)?)?;
     *value = enabled;
     Ok(())

@@ -7,7 +7,7 @@ use anyhow::{Context, Result, bail};
 use std::process::ExitCode;
 
 fn run() -> Result<ExitCode> {
-    let web_auth_name = tr!("{} 网页登录", desktop::APP_NAME);
+    let web_auth_name = tr!("{} Web Sign-In", desktop::APP_NAME);
     let mut args = std::env::args().skip(1);
     let command = args.next();
     if command.as_deref() == Some("package-app") {
@@ -20,15 +20,17 @@ fn run() -> Result<ExitCode> {
     }
     if matches!(command.as_deref(), Some("plugin-install" | "plugin-update")) {
         let directory = args.next().ok_or_else(|| {
-            anyhow::anyhow!(tr!("用法：musicx plugin-install/plugin-update <目录>"))
+            anyhow::anyhow!(tr!(
+                "Usage: musicx plugin-install/plugin-update <directory>"
+            ))
         })?;
         if args.next().is_some() {
-            bail!(tr!("只接受一个插件目录"));
+            bail!(tr!("Expected one plugin directory"));
         }
         println!(
             "{}",
             tr!(
-                "已保存 MyGo 插件 {}",
+                "Saved MyGo plugin {}",
                 if command.as_deref() == Some("plugin-update") {
                     mygo::update_local(std::path::Path::new(&directory))?
                 } else {
@@ -40,7 +42,7 @@ fn run() -> Result<ExitCode> {
     }
     if args.next().is_some() {
         bail!(tr!(
-            "用法：musicx [start|mcp-token|plugin-install/plugin-update <目录>]"
+            "Usage: musicx [start|mcp-token|plugin-install/plugin-update <directory>]"
         ));
     }
     match command.as_deref() {
@@ -61,11 +63,11 @@ fn run() -> Result<ExitCode> {
         Some("--help" | "-h") => {
             println!(
                 "{}",
-                tr!("用法：musicx [start|mcp-token|plugin-install/plugin-update <目录>]")
+                tr!("Usage: musicx [start|mcp-token|plugin-install/plugin-update <directory>]")
             )
         }
         _ => bail!(tr!(
-            "用法：musicx [start|mcp-token|plugin-install/plugin-update <目录>]"
+            "Usage: musicx [start|mcp-token|plugin-install/plugin-update <directory>]"
         )),
     }
     Ok(ExitCode::SUCCESS)

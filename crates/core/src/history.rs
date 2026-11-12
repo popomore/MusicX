@@ -68,7 +68,7 @@ fn append(value: &impl Serialize) -> Result<u64> {
         .read(true)
         .mode(0o600)
         .open(state_dir()?.join(FILE))
-        .context(tr!("无法打开播放历史"))?;
+        .context(tr!("Could not open listening history"))?;
     let mut offset = file.metadata()?.len();
     if offset > 0 {
         file.seek(SeekFrom::End(-1))?;
@@ -87,7 +87,7 @@ fn append(value: &impl Serialize) -> Result<u64> {
 pub fn record(track: Track, progress: HistoryProgress) -> Result<()> {
     let mut active = HISTORY
         .lock()
-        .map_err(|_| anyhow::anyhow!(tr!("播放历史锁不可用")))?;
+        .map_err(|_| anyhow::anyhow!(tr!("Listening history lock unavailable")))?;
     // A failed start write must never leave the previous play as the update target.
     *active = None;
     let entry = Entry {
@@ -102,7 +102,7 @@ pub fn record(track: Track, progress: HistoryProgress) -> Result<()> {
 pub fn update(mut progress: HistoryProgress, flush: bool) -> Result<()> {
     let mut active = HISTORY
         .lock()
-        .map_err(|_| anyhow::anyhow!(tr!("播放历史锁不可用")))?;
+        .map_err(|_| anyhow::anyhow!(tr!("Listening history lock unavailable")))?;
     if let Some(active) = active.as_mut() {
         progress.completed |= active.progress.is_some_and(|previous| previous.completed)
             && progress.duration > 0.0
@@ -157,7 +157,7 @@ fn read_recent(mut reader: impl BufRead, limit: usize) -> Result<VecDeque<(u64, 
 pub fn restore(track: &Track) -> Result<bool> {
     let mut active = HISTORY
         .lock()
-        .map_err(|_| anyhow::anyhow!(tr!("播放历史锁不可用")))?;
+        .map_err(|_| anyhow::anyhow!(tr!("Listening history lock unavailable")))?;
     let Some(file) = open()? else {
         return Ok(false);
     };
@@ -175,7 +175,7 @@ pub fn recent(limit: u64) -> Result<Vec<Entry>> {
     let (file, active) = {
         let active = HISTORY
             .lock()
-            .map_err(|_| anyhow::anyhow!(tr!("播放历史锁不可用")))?;
+            .map_err(|_| anyhow::anyhow!(tr!("Listening history lock unavailable")))?;
         let Some(file) = open()? else {
             return Ok(Vec::new());
         };

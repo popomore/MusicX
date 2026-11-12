@@ -49,13 +49,13 @@ impl Bindings {
         let network = grants.clone();
         ctx.globals().set("__redirectStart", Function::new(ctx.clone(), move |input: String| {
             let run = || -> Result<()> {
-                ensure!(!started.swap(true, Ordering::SeqCst), tr!("本次登录已经等待回调"));
-                let job = login.clone().context(tr!("请先发起来源登录"))?;
-                ensure!(!network.is_empty(), tr!("OAuth 回调需要网络权限"));
+                ensure!(!started.swap(true, Ordering::SeqCst), tr!("This sign-in is already waiting for a callback"));
+                let job = login.clone().context(tr!("Start source sign-in first"))?;
+                ensure!(!network.is_empty(), tr!("OAuth callback requires network permission"));
                 let options: Options = serde_json::from_str(&input)?;
-                ensure!(options.path.len() <= 512 && (options.path.is_empty() || options.path.starts_with('/')), tr!("无效的回调路径"));
-                ensure!(options.page.len() <= 65536, tr!("回调提示过长"));
-                let listener = TcpListener::bind(("127.0.0.1", options.port)).context(tr!("无法监听登录回调端口"))?;
+                ensure!(options.path.len() <= 512 && (options.path.is_empty() || options.path.starts_with('/')), tr!("Invalid callback path"));
+                ensure!(options.page.len() <= 65536, tr!("Callback prompt is too long"));
+                let listener = TcpListener::bind(("127.0.0.1", options.port)).context(tr!("Could not listen on the sign-in callback port"))?;
                 listener.set_nonblocking(true)?;
                 let until = if options.timeout == 0 { deadline } else { deadline.min(Instant::now() + Duration::from_millis(options.timeout.min(300000))) };
                 let answer = result.clone(); let stop = cancelled.clone();
@@ -78,7 +78,7 @@ impl Bindings {
                                         let _ = socket.write_all(b"HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
                                         return Ok(None);
                                     }
-                                    let text = if options.page.is_empty() { tr!("已完成登录，可以关闭此页面。") } else { &options.page };
+                                    let text = if options.page.is_empty() { tr!("Sign-in complete. You can close this page.") } else { &options.page };
                                     let _ = write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{text}", text.len());
                                     let mut query = serde_json::Map::new();
                                     for (key, value) in url.query_pairs() { query.entry(key.into_owned()).or_insert(json!(value)); }
@@ -88,9 +88,9 @@ impl Bindings {
                             }
                             std::thread::sleep(Duration::from_millis(25));
                         }
-                        anyhow::bail!(tr!("登录回调已取消或超时"))
+                        anyhow::bail!(tr!("Sign-in callback canceled or timed out"))
                     };
-                    let received = receive().map_err(|_| tr!("登录回调未完成").into());
+                    let received = receive().map_err(|_| tr!("Sign-in callback incomplete").into());
                     if let Ok(mut answer) = answer.lock() { *answer = Some(received); }
                 });
                 Ok(())
@@ -112,13 +112,13 @@ impl Bindings {
             "__openURL",
             Function::new(ctx.clone(), move |address: String| {
                 let open = || -> Result<()> {
-                    let job = job.as_ref().context(tr!("请先发起来源登录"))?;
+                    let job = job.as_ref().context(tr!("Start source sign-in first"))?;
                     let url = url::Url::parse(&address)?;
                     ensure!(
                         crate::mygo::permitted(&url, &grants),
-                        tr!("登录页面不在来源网络权限内")
+                        tr!("Sign-in page is outside the source’s network permissions")
                     );
-                    ensure!(!job.cancelled(), tr!("登录已取消"));
+                    ensure!(!job.cancelled(), tr!("Sign-in canceled"));
                     #[cfg(target_os = "macos")]
                     {
                         ensure!(
@@ -126,16 +126,18 @@ impl Bindings {
                                 .arg(url.as_str())
                                 .status()?
                                 .success(),
-                            tr!("无法打开登录页面")
+                            tr!("Could not open sign-in page")
                         );
                         Ok(())
                     }
                     #[cfg(not(target_os = "macos"))]
-                    anyhow::bail!(tr!("此平台尚未接入浏览器回调登录"));
+                    anyhow::bail!(tr!(
+                        "Browser callback sign-in is not supported on this platform"
+                    ));
                 };
                 open()
                     .map_or_else(
-                        |_| json!({"error":tr!("无法打开来源登录页")}),
+                        |_| json!({"error":tr!("Could not open the source sign-in page")}),
                         |_| json!({}),
                     )
                     .to_string()

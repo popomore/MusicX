@@ -97,7 +97,7 @@ pub fn DetailsDrawer(props: DetailsDrawerProps, cx: Scope<DetailsDrawerEvent>) -
                     .bottom_0()
                     .left(move || px(if props.left.get() { 0.0 } else { PLAYER_WIDTH }))
                     .right(move || px(if props.left.get() { PLAYER_WIDTH } else { 0.0 }))
-                    .label(SharedString::from(tr!("收起详情侧栏")))
+                    .label(SharedString::from(tr!("Close details pane")))
                     .focusable(false)
                     .on_press(move || cx.emit(DetailsDrawerEvent::OpenChange(false))),
             )

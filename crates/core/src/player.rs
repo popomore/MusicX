@@ -152,7 +152,7 @@ impl<A: AudioOutput> Player<A> {
                     history::restore(&session.queue[index]).unwrap_or_else(|error| {
                         eprintln!(
                             "{}",
-                            tr!("恢复播放历史失败：{error}"; error = format!("{:#}", error))
+                            tr!("Could not restore listening history: {error}"; error = format!("{:#}", error))
                         );
                         false
                     })
@@ -163,7 +163,7 @@ impl<A: AudioOutput> Player<A> {
             Ok(None) => {}
             Err(error) => eprintln!(
                 "{}",
-                tr!("恢复播放会话失败：{error}"; error = format!("{:#}", error))
+                tr!("Could not restore playback session: {error}"; error = format!("{:#}", error))
             ),
         }
         player
@@ -322,7 +322,7 @@ impl<A: AudioOutput> Player<A> {
             Action::Restore { snapshot, media } => {
                 ensure!(
                     self.startup_handoff_available && self.audio.is_none() && !self.switching,
-                    tr!("只能向尚未操作的播放器交接会话")
+                    tr!("A session can only be transferred to an unused player")
                 );
                 crate::audio_quality::set_preferred(snapshot.preferred_quality)?;
                 if let Some(media) = media {
@@ -343,7 +343,7 @@ impl<A: AudioOutput> Player<A> {
                     history::restore(&self.queue[index]).unwrap_or_else(|error| {
                         eprintln!(
                             "{}",
-                            tr!("恢复播放历史失败：{error}"; error = format!("{error:#}"))
+                            tr!("Could not restore listening history: {error}"; error = format!("{error:#}"))
                         );
                         false
                     })
@@ -364,10 +364,10 @@ impl<A: AudioOutput> Player<A> {
                 self.startup_handoff_available = false;
             }
             Action::Play(media) => {
-                ensure!(!self.switching, tr!("正在切换曲目"));
+                ensure!(!self.switching, tr!("Changing track"));
                 ensure!(
                     self.queue.len() < MAX_QUEUE_TRACKS,
-                    tr!("播放队列最多支持{MAX_QUEUE_TRACKS}首歌"; MAX_QUEUE_TRACKS = MAX_QUEUE_TRACKS)
+                    tr!("The queue supports up to {MAX_QUEUE_TRACKS} tracks"; MAX_QUEUE_TRACKS = MAX_QUEUE_TRACKS)
                 );
                 self.load(&media)?;
                 let target = self.index.map_or(0, |index| index + 1);
@@ -378,7 +378,7 @@ impl<A: AudioOutput> Player<A> {
             Action::Enqueue(media) => {
                 ensure!(
                     self.queue.len() < MAX_QUEUE_TRACKS,
-                    tr!("播放队列最多支持{MAX_QUEUE_TRACKS}首歌"; MAX_QUEUE_TRACKS = MAX_QUEUE_TRACKS)
+                    tr!("The queue supports up to {MAX_QUEUE_TRACKS} tracks"; MAX_QUEUE_TRACKS = MAX_QUEUE_TRACKS)
                 );
                 if self.index.is_none() {
                     self.load(&media)?;
@@ -393,10 +393,10 @@ impl<A: AudioOutput> Player<A> {
                 context,
                 media,
             } => {
-                ensure!(!self.switching, tr!("正在切换曲目"));
+                ensure!(!self.switching, tr!("Changing track"));
                 ensure!(
                     index < tracks.len() && tracks.len() <= MAX_QUEUE_TRACKS,
-                    tr!("无效的播放列表")
+                    tr!("Invalid playlist")
                 );
                 self.load(&media)?;
                 tracks[index] = media.track;
@@ -414,7 +414,7 @@ impl<A: AudioOutput> Player<A> {
                 });
             }
             Action::Pause => {
-                ensure!(self.index.is_some(), tr!("请先选一首歌"));
+                ensure!(self.index.is_some(), tr!("Choose a track first"));
                 self.flush_history();
                 self.requested_play = false;
                 if let Some(audio) = &self.audio {
@@ -422,7 +422,7 @@ impl<A: AudioOutput> Player<A> {
                 }
             }
             Action::Resume => {
-                ensure!(self.index.is_some(), tr!("请先选一首歌"));
+                ensure!(self.index.is_some(), tr!("Choose a track first"));
                 self.audio().prepare_resume()?;
                 let status = self.status();
                 if status.duration > 0.0 && status.position >= status.duration - 0.12 {
@@ -439,13 +439,13 @@ impl<A: AudioOutput> Player<A> {
                             && self.index.is_some_and(|i| {
                                 crate::protocol::track_key(&self.queue[i]) == expected
                             }),
-                        tr!("歌曲已切换，请选择当前歌词")
+                        tr!("The track changed; select a lyric from the current track")
                     );
                 }
                 let status = self.status();
                 ensure!(
                     status.duration > 0.0 && seconds.is_finite() && seconds >= 0.0,
-                    tr!("无效的播放进度")
+                    tr!("Invalid playback position")
                 );
                 let position = seconds.min(status.duration);
                 if position < status.duration - 0.12 {
@@ -467,7 +467,10 @@ impl<A: AudioOutput> Player<A> {
                 }
             }
             Action::Volume(value) => {
-                ensure!((0.0..=1.0).contains(&value), tr!("音量必须在 0 到 1 之间"));
+                ensure!(
+                    (0.0..=1.0).contains(&value),
+                    tr!("Volume must be between 0 and 1")
+                );
                 self.volume = value;
                 if let Some(audio) = &self.audio {
                     audio.set_volume(value);
@@ -537,7 +540,7 @@ impl<A: AudioOutput> Player<A> {
         if let Err(error) = result {
             eprintln!(
                 "{}",
-                tr!("保存播放历史失败：{error}"; error = format!("{:#}", error))
+                tr!("Could not save listening history: {error}"; error = format!("{:#}", error))
             );
         }
     }
@@ -555,7 +558,7 @@ impl<A: AudioOutput> Player<A> {
             Ok(()) => self.saved_session = Some(session),
             Err(error) => eprintln!(
                 "{}",
-                tr!("保存播放会话失败：{error}"; error = format!("{:#}", error))
+                tr!("Could not save playback session: {error}"; error = format!("{:#}", error))
             ),
         }
     }
@@ -588,7 +591,10 @@ impl<A: AudioOutput> Player<A> {
                     let result = self.apply(Action::Pause);
                     self.respond(result, reply);
                 } else if self.switching {
-                    self.respond(Err(anyhow!(tr!("正在取流，请稍候"))), reply);
+                    self.respond(
+                        Err(anyhow!(tr!("Getting audio stream; please wait"))),
+                        reply,
+                    );
                 } else if let Some(track) = self.index.and_then(|i| self.queue.get(i)).cloned() {
                     self.switching = true;
                     self.requested_play = true;
@@ -600,7 +606,7 @@ impl<A: AudioOutput> Player<A> {
                         })
                     });
                 } else {
-                    self.respond(Err(anyhow!(tr!("请先选一首歌"))), reply);
+                    self.respond(Err(anyhow!(tr!("Choose a track first"))), reply);
                 }
             }
             Message::Seeked { serial, finished } => {
@@ -616,7 +622,12 @@ impl<A: AudioOutput> Player<A> {
             }
             Message::Action(Action::Quality(quality), reply) => {
                 if self.switching {
-                    self.respond(Err(anyhow!(tr!("正在切换，请稍后再选音质"))), reply);
+                    self.respond(
+                        Err(anyhow!(tr!(
+                            "Changing track; please wait before selecting quality"
+                        ))),
+                        reply,
+                    );
                 } else if self.deferred_position.is_some() {
                     self.respond(crate::audio_quality::set_preferred(quality), reply);
                 } else if let Some(track) = self.index.and_then(|i| self.queue.get(i)).cloned() {
@@ -642,14 +653,17 @@ impl<A: AudioOutput> Player<A> {
                         Some(index)
                     }
                     Action::Select { .. } => {
-                        self.respond(Err(anyhow!(tr!("播放列表已变化，请重新选择"))), reply);
+                        self.respond(
+                            Err(anyhow!(tr!("The playlist changed; please select again"))),
+                            reply,
+                        );
                         return;
                     }
                     Action::Next => self.index.and_then(|i| i.checked_add(1)),
                     _ => self.index.and_then(|i| i.checked_sub(1)),
                 };
                 if self.switching {
-                    self.respond(Err(anyhow!(tr!("正在切换曲目"))), reply);
+                    self.respond(Err(anyhow!(tr!("Changing track"))), reply);
                 } else if let Some((index, track)) =
                     target.and_then(|i| self.queue.get(i).map(|track| (i, track)))
                 {
@@ -665,7 +679,7 @@ impl<A: AudioOutput> Player<A> {
                         });
                     });
                 } else {
-                    self.respond(Err(anyhow!(tr!("没有可切换的曲目"))), reply);
+                    self.respond(Err(anyhow!(tr!("No other track available"))), reply);
                 }
             }
             Message::Action(Action::DisplayStatus, reply) => {
@@ -720,7 +734,7 @@ impl<A: AudioOutput> Player<A> {
                             });
                         } else {
                             self.error = Some(
-                                tr!("自动续播失败，已尝试 {} 首。{error}", pending.attempt; error = error),
+                                tr!("Could not continue playback after trying {} tracks. {error}", pending.attempt; error = error),
                             );
                         }
                     }

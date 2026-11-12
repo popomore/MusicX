@@ -36,7 +36,7 @@ impl Transport for Images {
                 )?;
                 let bytes = base64::engine::general_purpose::STANDARD
                     .decode(result["data"].as_str().unwrap_or_default())?;
-                anyhow::ensure!(bytes.len() <= 4 * 1024 * 1024, tr!("封面过大"));
+                anyhow::ensure!(bytes.len() <= 4 * 1024 * 1024, tr!("Artwork is too large"));
                 return Ok(Fetched::new(
                     200,
                     nsh_core::image::CacheHeaders::from_pairs([("cache-control", "no-store")]),
@@ -50,7 +50,7 @@ impl Transport for Images {
             for _ in 0..5 {
                 anyhow::ensure!(
                     !get.cancelled.load(Ordering::Relaxed),
-                    tr!("封面请求已取消")
+                    tr!("Artwork request canceled")
                 );
                 let mut request = client.get(url.clone());
                 for (name, value) in get.headers {
@@ -62,7 +62,7 @@ impl Transport for Images {
                         .headers()
                         .get("location")
                         .and_then(|v| v.to_str().ok())
-                        .ok_or_else(|| anyhow::anyhow!(tr!("封面跳转缺少地址")))?;
+                        .ok_or_else(|| anyhow::anyhow!(tr!("Artwork redirect has no address")))?;
                     url = Url::parse(
                         &redirect(get.access, url.as_str(), next).map_err(anyhow::Error::msg)?,
                     )?;
@@ -77,12 +77,12 @@ impl Transport for Images {
                 );
                 let mut bytes = Vec::new();
                 response.take(4 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
-                anyhow::ensure!(bytes.len() <= 4 * 1024 * 1024, tr!("封面过大"));
+                anyhow::ensure!(bytes.len() <= 4 * 1024 * 1024, tr!("Artwork is too large"));
                 (get.progress)(bytes.len() as u64, bytes.len() as u64);
                 return Ok(Fetched::new(status, headers, bytes));
             }
-            anyhow::bail!(tr!("封面跳转过多"))
+            anyhow::bail!(tr!("Too many artwork redirects"))
         };
-        run().map_err(|_| tr!("封面下载失败").into())
+        run().map_err(|_| tr!("Artwork download failed").into())
     }
 }

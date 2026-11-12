@@ -167,7 +167,10 @@ export function account() {
             .is_err()
     );
     let info = MYGO.info(supplied);
-    assert_eq!(info.source_name, musicx_core::protocol::tr!("未关联来源"));
+    assert_eq!(
+        info.source_name,
+        musicx_core::protocol::tr!("No source connected")
+    );
     assert!(info.source_link.is_none());
     assert!(!root.join("state/mygo_source_catalog.json").exists());
     assert!(!root.join("state/mygo-plugins/netease").exists());

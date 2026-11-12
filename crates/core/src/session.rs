@@ -30,12 +30,15 @@ impl Session {
     }
 
     fn validate(&self) -> Result<()> {
-        ensure!(self.version == 1, tr!("不支持的播放会话版本"));
+        ensure!(
+            self.version == 1,
+            tr!("Unsupported playback session version")
+        );
         ensure!(
             self.queue.len() <= MAX_QUEUE_TRACKS
                 && self.index.is_none_or(|index| index < self.queue.len())
                 && self.queue.is_empty() == self.index.is_none(),
-            tr!("无效的播放队列")
+            tr!("Invalid playback queue")
         );
         ensure!(
             self.position.is_finite()
@@ -45,14 +48,14 @@ impl Session {
                     .queue
                     .iter()
                     .all(|track| track.duration.is_finite() && track.duration >= 0.0),
-            tr!("无效的播放进度")
+            tr!("Invalid playback position")
         );
         Ok(())
     }
 
     pub fn load() -> Result<Option<Self>> {
         let path = crate::protocol::data_dir()
-            .context(tr!("找不到用户目录"))?
+            .context(tr!("User directory not found"))?
             .join(FILE);
         let bytes = match std::fs::read(path) {
             Ok(bytes) => bytes,

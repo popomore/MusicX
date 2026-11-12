@@ -52,8 +52,8 @@ impl Language {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::System => text("跟随系统"),
-            Self::SimplifiedChinese => "简体中文",
+            Self::System => text("System"),
+            Self::SimplifiedChinese => text_for(Locale::SimplifiedChinese, "Simplified Chinese"),
             Self::English => "English",
         }
     }
@@ -74,7 +74,8 @@ impl Language {
     }
 
     pub fn save(self) -> std::io::Result<()> {
-        let dir = crate::data_dir().ok_or_else(|| std::io::Error::other(text("找不到配置目录")))?;
+        let dir = crate::data_dir()
+            .ok_or_else(|| std::io::Error::other(text("Configuration directory not found")))?;
         self.write(&dir)?;
         refresh();
         Ok(())
@@ -160,6 +161,9 @@ static CURRENT: LazyLock<AtomicU8> = LazyLock::new(|| AtomicU8::new(selected_loc
 static ENGLISH: LazyLock<BTreeMap<String, String>> = LazyLock::new(|| {
     serde_json::from_str(include_str!("locales/en.json")).expect("valid bundled English catalog")
 });
+static SIMPLIFIED_CHINESE: LazyLock<BTreeMap<String, String>> = LazyLock::new(|| {
+    serde_json::from_str(include_str!("locales/zh-CN.json")).expect("valid bundled Chinese catalog")
+});
 
 pub fn locale() -> Locale {
     match CURRENT.load(Ordering::Relaxed) {
@@ -180,7 +184,9 @@ pub fn text(source: &'static str) -> &'static str {
 
 pub fn text_for(locale: Locale, source: &'static str) -> &'static str {
     match locale {
-        Locale::SimplifiedChinese => source,
+        Locale::SimplifiedChinese => SIMPLIFIED_CHINESE
+            .get(source)
+            .map_or(source, String::as_str),
         Locale::English => ENGLISH.get(source).map_or(source, String::as_str),
     }
 }
@@ -197,19 +203,19 @@ fn plural_for(locale: Locale, count: u64, one: &'static str, other: &'static str
 }
 
 pub fn tracks(count: usize) -> String {
-    plural(count as u64, "1 首", "{} 首")
+    plural(count as u64, "1 track", "{} tracks")
 }
 
 pub fn playlists(count: usize) -> String {
-    plural(count as u64, "1 张歌单", "{} 张歌单")
+    plural(count as u64, "1 playlist", "{} playlists")
 }
 
 pub fn relative_time(seconds: u64) -> String {
     match seconds {
-        0..=59 => text("刚刚").into(),
-        60..=3599 => plural(seconds / 60, "1 分钟前", "{} 分钟前"),
-        3600..=86399 => plural(seconds / 3600, "1 小时前", "{} 小时前"),
-        _ => plural(seconds / 86400, "1 天前", "{} 天前"),
+        0..=59 => text("Just now").into(),
+        60..=3599 => plural(seconds / 60, "1 minute ago", "{} minutes ago"),
+        3600..=86399 => plural(seconds / 3600, "1 hour ago", "{} hours ago"),
+        _ => plural(seconds / 86400, "1 day ago", "{} days ago"),
     }
 }
 
@@ -256,7 +262,7 @@ pub fn format(template: &str, arguments: &[(&str, String)]) -> String {
     result
 }
 
-/// Chinese source messages act as gettext-style keys. Parameters must be explicit.
+/// English source messages act as gettext-style keys. Parameters must be explicit.
 #[macro_export]
 macro_rules! tr {
     ($source:literal) => { $crate::i18n::text($source) };
@@ -274,6 +280,7 @@ mod tests {
 
     #[test]
     fn preferred_languages_regions_and_fallback() {
+        assert_eq!(Language::default(), Language::System);
         assert_eq!(
             Language::System.resolve(["fr-FR", "zh-Hans-CN", "en-US"]),
             Locale::SimplifiedChinese
@@ -348,33 +355,40 @@ mod tests {
             text_for(Locale::English, "missing message"),
             "missing message"
         );
-        assert_eq!(text_for(Locale::SimplifiedChinese, "设置"), "设置");
-        assert_eq!(text_for(Locale::English, "设置"), "Settings");
+        assert_eq!(
+            text_for(Locale::SimplifiedChinese, "missing message"),
+            "missing message"
+        );
+        assert_eq!(text_for(Locale::SimplifiedChinese, "Settings"), "设置");
+        assert_eq!(text_for(Locale::English, "Settings"), "Settings");
     }
 
     #[test]
     fn counts_and_relative_time_have_english_singulars() {
         for (n, expected) in [(0, "0 tracks"), (1, "1 track"), (2, "2 tracks")] {
-            assert_eq!(plural_for(Locale::English, n, "1 首", "{} 首"), expected);
+            assert_eq!(
+                plural_for(Locale::English, n, "1 track", "{} tracks"),
+                expected
+            );
         }
         assert_eq!(
-            plural_for(Locale::SimplifiedChinese, 1, "1 首", "{} 首"),
+            plural_for(Locale::SimplifiedChinese, 1, "1 track", "{} tracks"),
             "1 首"
         );
         assert_eq!(
-            plural_for(Locale::English, 1, "1 张歌单", "{} 张歌单"),
+            plural_for(Locale::English, 1, "1 playlist", "{} playlists"),
             "1 playlist"
         );
         assert_eq!(
-            plural_for(Locale::English, 1, "1 分钟前", "{} 分钟前"),
+            plural_for(Locale::English, 1, "1 minute ago", "{} minutes ago"),
             "1 minute ago"
         );
         assert_eq!(
-            plural_for(Locale::English, 2, "1 小时前", "{} 小时前"),
+            plural_for(Locale::English, 2, "1 hour ago", "{} hours ago"),
             "2 hours ago"
         );
         assert_eq!(
-            plural_for(Locale::English, 1, "1 天前", "{} 天前"),
+            plural_for(Locale::English, 1, "1 day ago", "{} days ago"),
             "1 day ago"
         );
     }
@@ -387,7 +401,7 @@ mod tests {
         }))
         .unwrap();
         let stored = serde_json::to_value(&list).unwrap();
-        assert_eq!(list.display_name(), text("我喜欢"));
+        assert_eq!(list.display_name(), text("Liked Songs"));
         assert_eq!(serde_json::to_value(&list).unwrap(), stored);
         list.favorite = false;
         list.name = "我喜欢 🎵 {name}".into();
@@ -408,13 +422,26 @@ mod tests {
 
     #[test]
     fn catalog_preserves_all_message_parameters() {
-        for (source, english) in ENGLISH.iter() {
-            assert!(!english.trim().is_empty(), "empty translation: {source}");
-            assert_eq!(
-                placeholders(source),
-                placeholders(english),
-                "placeholder mismatch: {source}"
-            );
+        assert_eq!(
+            ENGLISH.keys().collect::<Vec<_>>(),
+            SIMPLIFIED_CHINESE.keys().collect::<Vec<_>>()
+        );
+        for catalog in [&*ENGLISH, &*SIMPLIFIED_CHINESE] {
+            for (source, translation) in catalog {
+                assert!(
+                    !source.chars().any(|c| matches!(c, '\u{3400}'..='\u{9fff}')),
+                    "non-English message key: {source}"
+                );
+                assert!(
+                    !translation.trim().is_empty(),
+                    "empty translation: {source}"
+                );
+                assert_eq!(
+                    placeholders(source),
+                    placeholders(translation),
+                    "placeholder mismatch: {source}"
+                );
+            }
         }
     }
 }

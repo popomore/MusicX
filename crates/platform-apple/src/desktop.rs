@@ -91,11 +91,11 @@ define_class!(
                 let menu = NSMenu::new(mtm);
                 unsafe {
                     menu.addItemWithTitle_action_keyEquivalent(
-                        &NSString::from_str(tr!("检查更新…")), Some(sel!(checkForUpdates:)), ns_string!(""),
+                        &NSString::from_str(tr!("Check for Updates…")), Some(sel!(checkForUpdates:)), ns_string!(""),
                     ).setTarget(Some(self));
                     menu.addItem(&NSMenuItem::separatorItem(mtm));
                     menu.addItemWithTitle_action_keyEquivalent(
-                        &NSString::from_str(tr!("退出 MusicX")), Some(sel!(quitFromStatus:)), ns_string!(""),
+                        &NSString::from_str(tr!("Quit MusicX")), Some(sel!(quitFromStatus:)), ns_string!(""),
                     ).setTarget(Some(self));
                 }
                 NSMenu::popUpContextMenu_withEvent_forView(&menu, &event, button);
@@ -209,7 +209,7 @@ fn package(
     let signature = codesign.arg(bundle).output()?;
     anyhow::ensure!(
         signature.status.success(),
-        tr!("无法签名 {name}：{}", String::from_utf8_lossy(&signature.stderr).trim(); name = name)
+        tr!("Could not sign {name}: {}", String::from_utf8_lossy(&signature.stderr).trim(); name = name)
     );
     Ok(())
 }
@@ -239,7 +239,7 @@ fn build_component(executable: &Path, name: &str) -> anyhow::Result<PathBuf> {
     let component = executable.with_file_name(name);
     anyhow::ensure!(
         component.is_file(),
-        tr!("缺少构建产物 {name}，请先运行 ./run"; name = name)
+        tr!("Build artifact {name} missing; run ./run first"; name = name)
     );
     Ok(component)
 }
@@ -258,7 +258,10 @@ fn package_app_from_executable(
 ) -> anyhow::Result<()> {
     anyhow::ensure!(
         !bundle.exists(),
-        tr!("目标应用包已存在：{}", bundle.display())
+        tr!(
+            "Destination app bundle already exists: {}",
+            bundle.display()
+        )
     );
     let panel = build_component(executable, PANEL_BIN)?;
     let webauth = build_component(executable, WEB_AUTH_BIN)?;
@@ -304,7 +307,7 @@ pub fn prepare_runtime(web_auth_name: &str) -> anyhow::Result<DesktopRuntime> {
             let web_auth_executable = app_executable(&helpers.join(WEB_AUTH_APP), WEB_AUTH_BIN);
             anyhow::ensure!(
                 app_executable(&panel_bundle, PANEL_BIN).is_file() && web_auth_executable.is_file(),
-                tr!("MusicX 应用包不完整")
+                tr!("MusicX app bundle is incomplete")
             );
             return Ok(DesktopRuntime {
                 working_dir: musicx_core::storage::state_dir()?,
@@ -335,7 +338,7 @@ pub fn prepare_runtime(web_auth_name: &str) -> anyhow::Result<DesktopRuntime> {
         // It never needs access to sibling files in the Downloads folder.
         anyhow::ensure!(
             private_executable.is_file(),
-            tr!("请先在项目中运行 ./run 准备私有运行文件")
+            tr!("Run ./run in the project first to prepare private runtime files")
         );
     } else {
         let panel = build_component(&executable, PANEL_BIN)?;
@@ -508,7 +511,10 @@ fn show_panel() {
         }
         let bundle = desktop.panel_bundle.clone();
         let panel_executable = app_executable(&bundle, PANEL_BIN);
-        anyhow::ensure!(panel_executable.is_file(), tr!("缺少 MusicX 播放面板"));
+        anyhow::ensure!(
+            panel_executable.is_file(),
+            tr!("MusicX player panel missing")
+        );
         NSApplication::sharedApplication(MainThreadMarker::new().expect("main thread"))
             .yieldActivationToApplicationWithBundleIdentifier(&NSString::from_str(
                 &component_app_id("panel"),
@@ -537,7 +543,7 @@ fn show_panel() {
     if let Err(error) = result {
         eprintln!(
             "{}",
-            tr!("打开选歌面板失败：{error}"; error = format!("{:#}", error))
+            tr!("Could not open the player panel: {error}"; error = format!("{:#}", error))
         );
     }
 }
@@ -566,17 +572,17 @@ pub fn refresh() {
                 || desktop.last_language != language
             {
                 let state = match status.state {
-                    State::Idle => tr!("等待选歌"),
-                    State::Loading => tr!("加载中"),
-                    State::Playing => tr!("播放中"),
-                    State::Paused => tr!("已暂停"),
-                    State::Ended => tr!("播放结束"),
-                    State::Error => tr!("播放出错"),
+                    State::Idle => tr!("Waiting for music"),
+                    State::Loading => tr!("Loading"),
+                    State::Playing => tr!("Playing"),
+                    State::Paused => tr!("Paused"),
+                    State::Ended => tr!("Playback ended"),
+                    State::Error => tr!("Playback error"),
                 };
                 let detail = if title.is_empty() {
-                    tr!("{APP_NAME} · {state} · 点击打开播放器"; APP_NAME = APP_NAME, state = state)
+                    tr!("{APP_NAME} · {state} · Click to open player"; APP_NAME = APP_NAME, state = state)
                 } else {
-                    tr!("{title} · {artist} · {state} · 点击打开播放器"; title = title, artist = artist, state = state)
+                    tr!("{title} · {artist} · {state} · Click to open player"; title = title, artist = artist, state = state)
                 };
                 if let Some(button) = desktop
                     .status_item
@@ -628,10 +634,10 @@ fn check_for_updates() {
         } else {
             let message = error.map_or_else(
                 || {
-                    tr!("此构建尚未配置自动更新。请从 MusicX 的 GitHub Releases 下载新版本。")
+                    tr!("Automatic updates are not configured for this build. Download a new version from MusicX on GitHub Releases.")
                         .to_owned()
                 },
-                |error| tr!("更新器启动失败：{error}"; error = error),
+                |error| tr!("Updater failed to start: {error}"; error = error),
             );
             crate::updater::unavailable(&message);
         }

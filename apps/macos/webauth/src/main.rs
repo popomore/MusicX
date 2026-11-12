@@ -71,7 +71,7 @@ define_class!(
     unsafe impl WKNavigationDelegate for Delegate {
         #[unsafe(method(webView:didFailProvisionalNavigation:withError:))]
         unsafe fn failed(&self,_:&WKWebView,_:Option<&WKNavigation>,error:&NSError){
-            if error.code()!=-999 {finish(serde_json::json!({"error":tr!("登录页面暂时无法加载，请检查网络后重试")}));}
+            if error.code()!=-999 {finish(serde_json::json!({"error":tr!("Could not load the sign-in page. Check your connection and try again.")}));}
         }
         #[unsafe(method(webView:decidePolicyForNavigationAction:decisionHandler:))]
         unsafe fn navigation(&self,_:&WKWebView,action:&WKNavigationAction,decision:&block2::DynBlock<dyn Fn(WKNavigationActionPolicy)>) {
@@ -93,7 +93,7 @@ fn poll() {
             finish(serde_json::json!({"cancelled":true}));
         }
         if state.started.elapsed().as_secs() >= 300 {
-            finish(serde_json::json!({"error":tr!("网页登录超时，请重试")}));
+            finish(serde_json::json!({"error":tr!("Web sign-in timed out; please try again")}));
         }
         if state.polling {
             return None;
@@ -141,7 +141,7 @@ fn poll() {
                     .collect::<Vec<_>>()
                     .join("; ");
                 if cookie.len() > 16384 {
-                    finish(serde_json::json!({"error":tr!("登录数据过大")}));
+                    finish(serde_json::json!({"error":tr!("Sign-in data is too large")}));
                 }
                 finish(serde_json::json!({"cookie":cookie}));
             }
@@ -155,14 +155,14 @@ fn run() -> Result<()> {
     use std::io::IsTerminal;
     anyhow::ensure!(
         !std::io::stdin().is_terminal() && !std::io::stdout().is_terminal(),
-        tr!("网页登录仅接受播放器私有通道")
+        tr!("Web sign-in requires the player’s private channel")
     );
     let mut input = String::new();
     std::io::stdin().take(16385).read_to_string(&mut input)?;
-    anyhow::ensure!(input.len() <= 16384, tr!("登录请求过大"));
+    anyhow::ensure!(input.len() <= 16384, tr!("Sign-in request is too large"));
     let request: Request = serde_json::from_str(&input)?;
     request.validate()?;
-    let mtm = MainThreadMarker::new().context(tr!("需要主线程"))?;
+    let mtm = MainThreadMarker::new().context(tr!("Main thread required"))?;
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
     let delegate: Retained<Delegate> = unsafe { msg_send![Delegate::alloc(mtm), init] };
@@ -170,19 +170,19 @@ fn run() -> Result<()> {
     let bar = NSMenu::new(mtm);
     for (title, entries) in [
         (
-            tr!("登录"),
+            tr!("Sign In"),
             vec![
-                (tr!("关闭登录"), sel!(closeLogin:), "w"),
-                (tr!("退出登录窗口"), sel!(closeLogin:), "q"),
+                (tr!("Close Sign-In"), sel!(closeLogin:), "w"),
+                (tr!("Quit Sign-In Window"), sel!(closeLogin:), "q"),
             ],
         ),
         (
-            tr!("编辑"),
+            tr!("Edit"),
             vec![
-                (tr!("剪切"), sel!(cut:), "x"),
-                (tr!("复制"), sel!(copy:), "c"),
-                (tr!("粘贴"), sel!(paste:), "v"),
-                (tr!("全选"), sel!(selectAll:), "a"),
+                (tr!("Cut"), sel!(cut:), "x"),
+                (tr!("Copy"), sel!(copy:), "c"),
+                (tr!("Paste"), sel!(paste:), "v"),
+                (tr!("Select All"), sel!(selectAll:), "a"),
             ],
         ),
     ] {
@@ -198,7 +198,7 @@ fn run() -> Result<()> {
                     &NSString::from_str(key),
                 )
             };
-            if title == tr!("登录") {
+            if title == tr!("Sign In") {
                 unsafe {
                     item.setTarget(Some(&delegate));
                 }
@@ -236,7 +236,7 @@ fn run() -> Result<()> {
         .unwrap_or_default()
         .to_owned();
     window.setTitle(&NSString::from_str(
-        &tr!("登录{} · {host}", request.name.chars().take(60).collect::<String>(); host = host),
+        &tr!("Sign in to {} · {host}", request.name.chars().take(60).collect::<String>(); host = host),
     ));
     window.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
     window.center();
@@ -260,8 +260,8 @@ fn run() -> Result<()> {
         }
     }
     window.setContentView(Some(&web));
-    let url =
-        NSURL::URLWithString(&NSString::from_str(&request.url)).context(tr!("登录地址无效"))?;
+    let url = NSURL::URLWithString(&NSString::from_str(&request.url))
+        .context(tr!("Invalid sign-in URL"))?;
     let load = NSURLRequest::requestWithURL(&url);
     unsafe {
         web.loadRequest(&load);
@@ -298,6 +298,6 @@ fn run() -> Result<()> {
 }
 fn main() {
     if run().is_err() {
-        finish(serde_json::json!({"error":tr!("网页登录窗口暂时无法打开")}));
+        finish(serde_json::json!({"error":tr!("Could not open the web sign-in window")}));
     }
 }

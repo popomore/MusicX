@@ -10,15 +10,14 @@ use musicx_plugin_api::Media;
 pub fn resolve_with_quality(track: Track, quality: crate::protocol::Quality) -> Result<Media> {
     ensure!(
         !track.title.is_empty() && track.title.len() <= 2048 && track.artist.len() <= 4096,
-        tr!("无效曲目信息")
+        tr!("Invalid source track information")
     );
-    let source = track
-        .source
-        .as_ref()
-        .context(tr!("歌曲未关联插件来源，请从已添加的来源重新添加"))?;
+    let source = track.source.as_ref().context(tr!(
+        "This track has no plugin source; add it again from an installed source"
+    ))?;
     ensure!(
         !source.id.is_empty() && source.id.len() <= 512 && mygo::valid_id(&source.plugin),
-        tr!("无效来源")
+        tr!("Invalid source")
     );
     mygo::resolve_with_quality(track, quality)
 }
@@ -26,7 +25,7 @@ pub fn resolve_with_quality(track: Track, quality: crate::protocol::Quality) -> 
 pub fn info(mut track: Track) -> TrackInfo {
     mygo::fill_artwork(&mut track);
     let source_name = track.source.as_ref().map_or_else(
-        || tr!("未关联来源").to_owned(),
+        || tr!("No source connected").to_owned(),
         |s| mygo::source_name(&s.plugin),
     );
     let source_link = track
@@ -34,13 +33,13 @@ pub fn info(mut track: Track) -> TrackInfo {
         .as_deref()
         .and_then(musicx_core::metadata::public_url)
         .map(|url| crate::protocol::SourceLink {
-            label: tr!("歌曲来源").into(),
+            label: tr!("Track source").into(),
             url,
         })
         .or_else(|| {
             let source = track.source.as_ref()?;
             mygo::source_repository(&source.plugin).map(|url| crate::protocol::SourceLink {
-                label: tr!("来源插件").into(),
+                label: tr!("Source plugin").into(),
                 url,
             })
         });
@@ -48,7 +47,7 @@ pub fn info(mut track: Track) -> TrackInfo {
         Ok(value) => (value, None),
         Err(_) => (
             Default::default(),
-            Some(tr!("歌词暂不可用，可稍后重试").into()),
+            Some(tr!("Lyrics unavailable; please try again later").into()),
         ),
     };
     TrackInfo {

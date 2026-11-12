@@ -19,19 +19,19 @@ pub(crate) fn javascript(name: &str, source: &str) -> Result<String> {
     let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
     ensure!(
         parsed.diagnostics.is_empty(),
-        tr!("TypeScript 插件语法无效")
+        tr!("Invalid TypeScript plugin syntax")
     );
     let mut program = parsed.program;
     let semantic = SemanticBuilder::new().with_enum_eval(true).build(&program);
     ensure!(
         semantic.diagnostics.is_empty(),
-        tr!("TypeScript 插件声明无效")
+        tr!("Invalid TypeScript plugin declaration")
     );
     let result = Transformer::new(&allocator, Path::new(name), &TransformOptions::default())
         .build_with_scoping(semantic.semantic.into_scoping(), &mut program);
     ensure!(
         result.diagnostics.is_empty(),
-        tr!("TypeScript 插件无法转译")
+        tr!("Could not transpile TypeScript plugin")
     );
     Ok(Codegen::new().build(&program).code)
 }

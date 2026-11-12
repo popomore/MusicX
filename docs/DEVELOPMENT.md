@@ -35,9 +35,10 @@ the app's data directory. The panel and background helper share this preference.
 `MUSICX_LANGUAGE=en` or `MUSICX_LANGUAGE=zh-CN` overrides it for isolated QA runs.
 
 Use `musicx_protocol::tr!` (or `crate::protocol::tr!` in the shared UI) for app
-messages. Chinese source messages are gettext-style keys; English translations
-live in `crates/protocol/src/locales/en.json`. Provide parameters explicitly:
-`tr!("查看歌手 {}", name)` or `tr!("收藏未保存：{e}"; e = error)`.
+messages. English source messages are gettext-style keys shared by the English
+and Simplified Chinese catalogs in `crates/protocol/src/locales/`. English is
+the fallback when a key is missing. Provide parameters explicitly:
+`tr!("View artist {}", name)` or `tr!("Like not saved: {e}"; e = error)`.
 Named parameters can be reordered in translations and user content is never
 interpreted as a template. Use the shared `i18n::tracks`, `playlists` and
 `relative_time` helpers for counts and relative timestamps. Catalog tests verify

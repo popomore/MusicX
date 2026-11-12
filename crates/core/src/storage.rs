@@ -9,7 +9,7 @@ use std::{
 };
 
 pub fn state_dir() -> Result<PathBuf> {
-    let path = crate::protocol::data_dir().context(tr!("找不到用户目录"))?;
+    let path = crate::protocol::data_dir().context(tr!("User directory not found"))?;
     fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)

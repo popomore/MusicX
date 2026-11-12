@@ -30,7 +30,7 @@ fn replacement(value: &str, settings: &Value, stored: &Value) -> Option<String> 
 }
 
 pub fn headers(plugin: &str, url: &Url, kind: &str) -> Result<BTreeMap<String, String>> {
-    ensure!(mygo::valid_id(plugin), tr!("无效的数据源标识"));
+    ensure!(mygo::valid_id(plugin), tr!("Invalid source identifier"));
     let m = mygo::manifest(&mygo::plugin_root()?.join(plugin))?;
     let read = |path| -> Value {
         fs::read(path)
@@ -43,7 +43,7 @@ pub fn headers(plugin: &str, url: &Url, kind: &str) -> Result<BTreeMap<String, S
         if let Some(value) = &field.value {
             settings
                 .as_object_mut()
-                .context(tr!("来源设置格式无效"))?
+                .context(tr!("Invalid source settings format"))?
                 .entry(&field.key)
                 .or_insert(json!(value));
         }
@@ -97,12 +97,12 @@ pub fn headers(plugin: &str, url: &Url, kind: &str) -> Result<BTreeMap<String, S
                             | "transfer-encoding"
                             | "proxy-authorization"
                     ),
-                    tr!("来源请求头不受支持")
+                    tr!("Unsupported source request headers")
                 );
                 reqwest::header::HeaderName::from_bytes(name.as_bytes())
-                    .context(tr!("来源请求头名称无效"))?;
+                    .context(tr!("Invalid source request header name"))?;
                 reqwest::header::HeaderValue::from_str(&value)
-                    .context(tr!("来源请求头内容无效"))?;
+                    .context(tr!("Invalid source request header value"))?;
                 result.insert(name.to_ascii_lowercase(), value);
             }
         }
@@ -119,7 +119,7 @@ pub(crate) fn artwork(plugin: &str, value: &str) -> Option<String> {
 }
 
 pub fn image(plugin: &str, value: &str) -> Result<Vec<u8>> {
-    let mut url = Url::parse(&metadata::artwork_url(value).context(tr!("无效的封面地址"))?)?;
+    let mut url = Url::parse(&metadata::artwork_url(value).context(tr!("Invalid artwork URL"))?)?;
     url.set_fragment(None);
     let headers = headers(plugin, &url, "image")?;
     let host = url.host_str().unwrap_or_default().to_owned();
@@ -142,12 +142,12 @@ pub fn image(plugin: &str, value: &str) -> Result<Vec<u8>> {
     }
     let response = request
         .send()
-        .context(tr!("封面下载失败"))?
+        .context(tr!("Artwork download failed"))?
         .error_for_status()
-        .context(tr!("来源拒绝封面请求"))?;
+        .context(tr!("The source rejected the artwork request"))?;
     let mut bytes = Vec::new();
     response.take(4 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
-    ensure!(bytes.len() <= 4 * 1024 * 1024, tr!("封面超过4MiB"));
+    ensure!(bytes.len() <= 4 * 1024 * 1024, tr!("Artwork exceeds 4 MiB"));
     Ok(bytes)
 }
 

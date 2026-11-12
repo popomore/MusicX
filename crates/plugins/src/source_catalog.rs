@@ -78,17 +78,17 @@ fn configured_url() -> Result<reqwest::Url> {
     let url = match std::env::var(URL_ENV) {
         Ok(url) => Some(url),
         Err(std::env::VarError::NotPresent) => None,
-        Err(error) => return Err(error).context(tr!("插件目录 URL 配置无效")),
+        Err(error) => return Err(error).context(tr!("Invalid plugin catalog URL configuration")),
     };
     catalog_url(url.as_deref())
 }
 
 fn catalog_url(url: Option<&str>) -> Result<reqwest::Url> {
     let url = url.unwrap_or(DEFAULT_URL);
-    let url = reqwest::Url::parse(url.trim()).context(tr!("插件目录 URL 无效"))?;
+    let url = reqwest::Url::parse(url.trim()).context(tr!("Invalid plugin catalog URL"))?;
     ensure!(
         matches!(url.scheme(), "http" | "https"),
-        tr!("插件目录 URL 必须使用 HTTP 或 HTTPS")
+        tr!("Plugin catalog URL must use HTTP or HTTPS")
     );
     Ok(url)
 }
@@ -115,7 +115,7 @@ fn finish_refresh(key: &CatalogKey, failed: bool) {
     let mut registry = REFRESHES.lock().unwrap_or_else(|e| e.into_inner());
     let state = registry.entry(key.clone()).or_default();
     state.running = false;
-    state.warning = failed.then(|| tr!("目录更新失败，正在显示已保存的目录").into());
+    state.warning = failed.then(|| tr!("Catalog update failed; showing the saved catalog").into());
     state.retry_at = if failed { now() + 60 } else { 0 };
 }
 
@@ -172,8 +172,13 @@ fn view_from_mode(url: reqwest::Url, directory: &Path, force: bool) -> Result<Ca
         });
     }
     if !begin_refresh(&key, force) {
-        ensure!(!state(&key).running, tr!("插件目录正在下载，请稍后重试"));
-        anyhow::bail!(tr!("目录暂不可用，请稍后刷新，也可直接输入仓库添加"));
+        ensure!(
+            !state(&key).running,
+            tr!("Plugin catalog is downloading; please try again shortly")
+        );
+        anyhow::bail!(tr!(
+            "Catalog unavailable; refresh later or add a repository directly"
+        ));
     }
     let result = download(&url, directory);
     finish_refresh(&key, result.is_err());
@@ -191,31 +196,33 @@ fn download(url: &reqwest::Url, directory: &Path) -> Result<Vec<Entry>> {
         previous.as_ref().and_then(|cache| cache.etag.as_deref()),
         None,
     )
-    .context(tr!("无法读取远程插件目录"))?;
+    .context(tr!("Could not read the remote plugin catalog"))?;
     let mut cached = if response.status() == reqwest::StatusCode::NOT_MODIFIED {
-        let mut cached = previous.context(tr!("插件目录没有可复用的缓存"))?;
+        let mut cached = previous.context(tr!("No reusable plugin catalog cache"))?;
         cached.fetched_at = now();
         cached
     } else {
         let response = response
             .error_for_status()
-            .context(tr!("无法读取远程插件目录"))?;
+            .context(tr!("Could not read the remote plugin catalog"))?;
         let etag = response
             .headers()
             .get("etag")
             .and_then(|value| value.to_str().ok())
             .map(str::to_owned);
-        let bytes = crate::http::read(response, MAX_BYTES).context(tr!("无法读取远程插件目录"))?;
+        let bytes = crate::http::read(response, MAX_BYTES)
+            .context(tr!("Could not read the remote plugin catalog"))?;
         CachedCatalog {
             url: url.to_string(),
             fetched_at: now(),
             etag,
-            catalog: serde_json::from_slice(&bytes).context(tr!("远程插件目录 JSON 格式无效"))?,
+            catalog: serde_json::from_slice(&bytes)
+                .context(tr!("Invalid remote plugin catalog JSON"))?,
         }
     };
     cached.catalog = lightweight_catalog(cached.catalog);
     let entries = parse(cached.catalog.clone())?;
-    write_cache(directory, &cached).context(tr!("无法保存插件目录缓存"))?;
+    write_cache(directory, &cached).context(tr!("Could not save plugin catalog cache"))?;
     Ok(entries)
 }
 
@@ -299,7 +306,7 @@ fn parse(catalog: Value) -> Result<Vec<Entry>> {
         GitHub { items: Vec<Repository> },
     }
     let catalog: Catalog =
-        serde_json::from_value(catalog).context(tr!("远程插件目录 JSON 格式无效"))?;
+        serde_json::from_value(catalog).context(tr!("Invalid remote plugin catalog JSON"))?;
     let entries = match catalog {
         Catalog::Snapshot(entries) => entries,
         Catalog::GitHub { items } => items
@@ -315,7 +322,7 @@ fn parse(catalog: Value) -> Result<Vec<Entry>> {
     };
     ensure!(
         entries.iter().all(|row| valid_repository(&row.repo)),
-        tr!("插件目录包含无效的仓库路径")
+        tr!("Plugin catalog contains an invalid repository path")
     );
     Ok(entries)
 }
@@ -431,13 +438,25 @@ mod tests {
     #[test]
     fn remote_failures_without_a_valid_cache_are_reported() {
         for (status, body, message) in [
-            ("404 Not Found", b"[]".to_vec(), "无法读取远程插件目录"),
-            ("200 OK", b"not json".to_vec(), "远程插件目录 JSON 格式无效"),
-            ("200 OK", b"{}".to_vec(), "远程插件目录 JSON 格式无效"),
+            (
+                "404 Not Found",
+                b"[]".to_vec(),
+                "Could not read the remote plugin catalog",
+            ),
+            (
+                "200 OK",
+                b"not json".to_vec(),
+                "Invalid remote plugin catalog JSON",
+            ),
+            (
+                "200 OK",
+                b"{}".to_vec(),
+                "Invalid remote plugin catalog JSON",
+            ),
             (
                 "200 OK",
                 vec![b' '; MAX_BYTES as usize + 1],
-                "无法读取远程插件目录",
+                "Could not read the remote plugin catalog",
             ),
         ] {
             let directory = Directory::new();

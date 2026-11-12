@@ -29,15 +29,15 @@ struct Release {
 pub(crate) fn parse_repository(input: &str) -> Result<String> {
     let input = input.trim().trim_end_matches('/');
     let repo = if input.contains("://") {
-        let url = reqwest::Url::parse(input).context(tr!("仓库地址无效"))?;
+        let url = reqwest::Url::parse(input).context(tr!("Invalid repository URL"))?;
         ensure!(
             matches!(url.scheme(), "http" | "https")
                 && matches!(url.host_str(), Some("github.com" | "www.github.com")),
-            tr!("请输入 GitHub 仓库地址或 owner/repo")
+            tr!("Enter a GitHub repository URL or owner/repo")
         );
         let parts: Vec<_> = url
             .path_segments()
-            .context(tr!("仓库地址无效"))?
+            .context(tr!("Invalid repository URL"))?
             .take(2)
             .collect();
         parts.join("/")
@@ -47,7 +47,7 @@ pub(crate) fn parse_repository(input: &str) -> Result<String> {
     let repo = repo.strip_suffix(".git").unwrap_or(&repo);
     ensure!(
         crate::source_catalog::valid_repository(repo),
-        tr!("请输入有效的 owner/repo")
+        tr!("Enter a valid owner/repo")
     );
     Ok(repo.to_owned())
 }
@@ -61,7 +61,8 @@ pub(crate) fn latest_version(repo: &str) -> Result<String> {
 
 fn download_from(repo: &str, api: &str) -> Result<Package> {
     let release = latest(repo, api)?;
-    let bytes = crate::http::fetch(&release.url, MAX_ARCHIVE).context(tr!("插件下载失败"))?;
+    let bytes =
+        crate::http::fetch(&release.url, MAX_ARCHIVE).context(tr!("Plugin download failed"))?;
     let (manifest, script, locales) = unpack(bytes)?;
     Ok(Package {
         manifest,
@@ -75,7 +76,7 @@ fn download_from(repo: &str, api: &str) -> Result<Package> {
 pub(crate) fn pinned(repo: &str, commit: &str) -> Result<Package> {
     ensure!(
         commit.len() == 40 && commit.bytes().all(|c| c.is_ascii_hexdigit()),
-        tr!("来源版本无效")
+        tr!("Invalid source version")
     );
     let bytes = crate::http::fetch(&format!("{API}/repos/{repo}/zipball/{commit}"), MAX_ARCHIVE)?;
     let (manifest, script, locales) = unpack(bytes)?;
@@ -91,7 +92,7 @@ pub(crate) fn pinned(repo: &str, commit: &str) -> Result<Package> {
 fn latest(repo: &str, api: &str) -> Result<Release> {
     ensure!(
         crate::source_catalog::valid_repository(repo),
-        tr!("无效的插件仓库路径")
+        tr!("Invalid plugin repository path")
     );
     let response = crate::http::request(
         &format!("{api}/repos/{repo}/releases/latest"),
@@ -115,7 +116,7 @@ fn latest(repo: &str, api: &str) -> Result<Release> {
             response.error_for_status()?,
             2 * 1024 * 1024,
         )?)?;
-        ensure!(!release.tag_name.is_empty(), tr!("Release 版本缺失"));
+        ensure!(!release.tag_name.is_empty(), tr!("Release version missing"));
         let names: Vec<_> = release.assets.iter().map(|a| a.name.as_str()).collect();
         let url = pick_asset(&names, std::env::consts::OS, std::env::consts::ARCH)
             .map(|at| release.assets[at].browser_download_url.clone())
@@ -128,10 +129,12 @@ fn latest(repo: &str, api: &str) -> Result<Release> {
     }
     let bytes = crate::http::fetch(&format!("{api}/repos/{repo}/commits/HEAD"), 2 * 1024 * 1024)?;
     let revision: Value = serde_json::from_slice(&bytes)?;
-    let sha = revision["sha"].as_str().context(tr!("来源版本缺失"))?;
+    let sha = revision["sha"]
+        .as_str()
+        .context(tr!("Source version missing"))?;
     ensure!(
         sha.len() == 40 && sha.bytes().all(|c| c.is_ascii_hexdigit()),
-        tr!("来源版本无效")
+        tr!("Invalid source version")
     );
     Ok(Release {
         url: format!("{api}/repos/{repo}/zipball/{sha}"),
@@ -175,7 +178,8 @@ fn pick_asset(names: &[&str], os: &str, arch: &str) -> Option<usize> {
 }
 
 fn entry_name(manifest: &[u8]) -> Result<String> {
-    let manifest: Value = serde_json::from_slice(manifest).context(tr!("插件清单 JSON 无效"))?;
+    let manifest: Value =
+        serde_json::from_slice(manifest).context(tr!("Invalid plugin manifest JSON"))?;
     let main = manifest["main"].as_str().unwrap_or("index.js");
     let path = Path::new(main);
     ensure!(
@@ -184,11 +188,11 @@ fn entry_name(manifest: &[u8]) -> Result<String> {
             && path
                 .components()
                 .all(|part| matches!(part, Component::Normal(_) | Component::CurDir)),
-        tr!("插件入口路径无效")
+        tr!("Invalid plugin entry path")
     );
     ensure!(
         main.ends_with(".js") || main.ends_with(".ts"),
-        tr!("当前支持单文件 JavaScript 或 TypeScript 插件入口")
+        tr!("Only single-file JavaScript or TypeScript plugin entries are supported")
     );
     Ok(main.to_owned())
 }
@@ -199,9 +203,12 @@ type Unpacked = (
     std::collections::BTreeMap<String, Vec<u8>>,
 );
 fn unpack(bytes: Vec<u8>) -> Result<Unpacked> {
-    let mut archive =
-        zip::ZipArchive::new(Cursor::new(bytes)).context(tr!("插件下载内容不是有效的 ZIP"))?;
-    ensure!(archive.len() <= 4096, tr!("插件包包含过多文件"));
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
+        .context(tr!("Downloaded plugin is not a valid ZIP"))?;
+    ensure!(
+        archive.len() <= 4096,
+        tr!("Plugin package contains too many files")
+    );
     let names = archive
         .file_names()
         .map(|name| name.map(|name| name.into_owned()))
@@ -217,7 +224,10 @@ fn unpack(bytes: Vec<u8>) -> Result<Unpacked> {
                     && !name.starts_with('.')
             })
             .collect();
-        ensure!(roots.len() == 1, tr!("插件包顶层没有唯一的 plugin.json"));
+        ensure!(
+            roots.len() == 1,
+            tr!("Plugin package must contain one top-level plugin.json")
+        );
         roots[0].to_string()
     };
     let manifest = archive_file(&mut archive, &manifest_path, 65536)?;
@@ -234,7 +244,7 @@ fn unpack(bytes: Vec<u8>) -> Result<Unpacked> {
         if names.contains(&name) {
             let bytes = archive_file(&mut archive, &name, 65536)?;
             serde_json::from_slice::<std::collections::BTreeMap<String, String>>(&bytes)
-                .context(tr!("插件语言包格式无效"))?;
+                .context(tr!("Invalid plugin language file"))?;
             locales.insert(language.into(), bytes);
         }
     }
@@ -248,19 +258,25 @@ fn archive_file(
 ) -> Result<Vec<u8>> {
     let file = archive
         .by_name(name)
-        .with_context(|| tr!("插件包缺少 {name}"; name = name))?;
+        .with_context(|| tr!("Plugin package is missing {name}"; name = name))?;
     ensure!(
         file.enclosed_name().is_some()
             && file.is_file()
             && file
                 .unix_mode()
                 .is_none_or(|mode| mode & 0o170000 != 0o120000),
-        tr!("插件包文件路径或类型无效")
+        tr!("Invalid plugin package file path or type")
     );
-    ensure!(file.size() <= limit, tr!("插件包文件超过大小限制"));
+    ensure!(
+        file.size() <= limit,
+        tr!("Plugin package file exceeds the size limit")
+    );
     let mut bytes = Vec::new();
     file.take(limit + 1).read_to_end(&mut bytes)?;
-    ensure!(bytes.len() as u64 <= limit, tr!("插件包文件超过大小限制"));
+    ensure!(
+        bytes.len() as u64 <= limit,
+        tr!("Plugin package file exceeds the size limit")
+    );
     Ok(bytes)
 }
 

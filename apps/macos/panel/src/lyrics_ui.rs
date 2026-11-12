@@ -67,11 +67,11 @@ fn timed(model: Model, timeline: Memo<Rc<Timeline>>) -> impl IntoElement {
                                 .and_then(|i| {
                                     timeline.with(|t| {
                                         t.cues.get(i).map(|cue| {
-                                            tr!("同步 · {}", super::time(cue.ms as f64 / 1000.0))
+                                            tr!("Synced · {}", super::time(cue.ms as f64 / 1000.0))
                                         })
                                     })
                                 })
-                                .unwrap_or_else(|| tr!("前奏").into())
+                                .unwrap_or_else(|| tr!("Intro").into())
                         })
                         .text_size(px(10.0))
                         .number_of_lines(1)
@@ -83,9 +83,9 @@ fn timed(model: Model, timeline: Memo<Rc<Timeline>>) -> impl IntoElement {
                         .accessibility_label(move || {
                             Some(
                                 if following.get() {
-                                    tr!("暂停跟随")
+                                    tr!("Pause follow")
                                 } else {
-                                    tr!("回到当前")
+                                    tr!("Follow current")
                                 }
                                 .into(),
                             )
@@ -101,9 +101,9 @@ fn timed(model: Model, timeline: Memo<Rc<Timeline>>) -> impl IntoElement {
                         .child(
                             text(move || {
                                 if following.get() {
-                                    tr!("暂停跟随")
+                                    tr!("Pause follow")
                                 } else {
-                                    tr!("回到当前")
+                                    tr!("Follow current")
                                 }
                             })
                             .text_size(px(10.0))
@@ -125,11 +125,11 @@ fn timed(model: Model, timeline: Memo<Rc<Timeline>>) -> impl IntoElement {
                             timeline.with(|t| {
                                 t.cues.get(at.index()).map(|cue| {
                                     SharedString::from(tr!(
-                                        "{}，跳到 {}，{}",
+                                        "{}, seek to {}, {}",
                                         if current() {
-                                            tr!("当前歌词")
+                                            tr!("Current lyric")
                                         } else {
-                                            tr!("歌词")
+                                            tr!("Lyrics")
                                         },
                                         lrc::stamp(cue.ms),
                                         cue.text
@@ -246,7 +246,7 @@ fn timed(model: Model, timeline: Memo<Rc<Timeline>>) -> impl IntoElement {
             .estimated_item_size(px(48.0))
             .content_padding_y(px(24.0))
             .scrollbar(false)
-            .label(tr!("同步歌词列表"))
+            .label(tr!("Synced lyrics"))
             .element_ref(&list)
             .on_layout(move |_: &Bounds<Points>| ready.set(true))
             .on_scroll_drag_start(move |_: &Point<Points>| following.set(false)),
@@ -268,7 +268,7 @@ fn plain(model: Model) -> impl IntoElement {
             || {
                 view()
                     .pt(px(12.0))
-                    .child(crate::controls::caption(tr!("全文歌词 · 无时间轴")))
+                    .child(crate::controls::caption(tr!("Full lyrics · No timestamps")))
             },
         ))
         .child(
@@ -277,7 +277,7 @@ fn plain(model: Model) -> impl IntoElement {
                     model.info.with(|i| {
                         let Some(i) = i else {
                             return if model.is_loading() {
-                                tr!("正在加载歌词…").into()
+                                tr!("Loading lyrics…").into()
                             } else {
                                 String::new()
                             };
@@ -288,11 +288,11 @@ fn plain(model: Model) -> impl IntoElement {
                         let text = plain_lyrics(&i.lyrics.text);
                         let translation = plain_lyrics(&i.lyrics.translation);
                         if text.is_empty() {
-                            tr!("这首歌暂无歌词").into()
+                            tr!("No lyrics for this track").into()
                         } else if translation.is_empty() {
                             text
                         } else {
-                            tr!("{text}\n\n译文\n{translation}"; text = text, translation = translation)
+                            tr!("{text}\n\nTranslation\n{translation}"; text = text, translation = translation)
                         }
                     })
                 })
@@ -334,7 +334,7 @@ pub(super) fn mini(model: Model) -> impl IntoElement {
         }))
     });
     button()
-        .accessibility_label(Some(tr!("打开同步歌词").into()))
+        .accessibility_label(Some(tr!("Open synced lyrics").into()))
         .disabled(move || model.status.with(|s| s.track.is_none()))
         .on_press(move || model.open(Page::Lyrics))
         .w_full()
@@ -351,16 +351,16 @@ pub(super) fn mini(model: Model) -> impl IntoElement {
                     if let Some(index) = t.active(playback_time(model)) {
                         let line = &t.cues[index].text;
                         if line.is_empty() {
-                            tr!("间奏").to_owned()
+                            tr!("Interlude").to_owned()
                         } else {
                             line.clone()
                         }
                     } else if !t.cues.is_empty() {
-                        tr!("前奏").into()
+                        tr!("Intro").into()
                     } else if model.info.with(Option::is_none) {
-                        tr!("正在加载歌词…").into()
+                        tr!("Loading lyrics…").into()
                     } else {
-                        tr!("暂无同步歌词").into()
+                        tr!("No synced lyrics").into()
                     }
                 })
             })

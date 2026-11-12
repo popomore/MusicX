@@ -31,7 +31,7 @@ thread_local! {
 pub fn configure(source: &'static dyn DataSource) -> Result<()> {
     SOURCE
         .set(source)
-        .map_err(|_| anyhow!(tr!("播放核心已配置")))
+        .map_err(|_| anyhow!(tr!("Playback core already configured")))
 }
 #[cfg(target_os = "macos")]
 pub(crate) fn artwork(url: &str) -> Option<Vec<u8>> {
@@ -73,7 +73,7 @@ impl AudioOutput for AppleAudio {
     fn load(output: &mut Option<Self>, media: &Media, play: bool, volume: f32) -> Result<()> {
         activate_audio_session()?;
         let url = NSURL::URLWithString(&NSString::from_str(media.url.as_str()))
-            .ok_or_else(|| anyhow!(tr!("无效的音频地址")))?;
+            .ok_or_else(|| anyhow!(tr!("Invalid audio URL")))?;
         let main = MainThreadMarker::new().expect("AVPlayer main thread");
         let output = output.get_or_insert_with(|| {
             let audio = Self {

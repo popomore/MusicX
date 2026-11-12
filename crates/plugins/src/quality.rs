@@ -73,12 +73,15 @@ mod tests {
         assert_eq!(audio.requested, Quality::Lossless);
         assert_eq!(
             audio.summary(),
-            format!("{} · MP3 · 128 kbps", musicx_core::protocol::tr!("标准"))
+            format!(
+                "{} · MP3 · 128 kbps",
+                musicx_core::protocol::tr!("Standard")
+            )
         );
         let unknown = metadata(Quality::Hires, &json!({}), true);
         assert_eq!(
             unknown.summary(),
-            musicx_core::protocol::tr!("来源未提供音质参数")
+            musicx_core::protocol::tr!("This source has no audio quality details")
         );
     }
     #[test]

@@ -14,8 +14,8 @@ pub enum UpdateChannel {
 impl UpdateChannel {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Stable => tr!("稳定版"),
-            Self::All => tr!("全部版本"),
+            Self::Stable => tr!("Stable"),
+            Self::All => tr!("All releases"),
         }
     }
 
@@ -24,7 +24,8 @@ impl UpdateChannel {
     }
 
     pub fn save(self) -> std::io::Result<()> {
-        let dir = crate::data_dir().ok_or_else(|| std::io::Error::other(tr!("找不到配置目录")))?;
+        let dir = crate::data_dir()
+            .ok_or_else(|| std::io::Error::other(tr!("Configuration directory not found")))?;
         self.write(&dir)
     }
 

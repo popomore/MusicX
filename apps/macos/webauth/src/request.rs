@@ -27,7 +27,7 @@ impl Request {
                         && !h.ends_with(".local")
                         && !h.ends_with(".localhost"))
                     && url.port_or_known_default() == Some(443),
-                tr!("无效的网页登录地址")
+                tr!("Invalid web sign-in URL")
             );
         }
         ensure!(
@@ -37,7 +37,7 @@ impl Request {
                     && s.len() <= 64
                     && s.bytes()
                         .all(|c| c.is_ascii_alphanumeric() || b"_-".contains(&c))),
-            tr!("无效的登录完成条件")
+            tr!("Invalid sign-in completion condition")
         );
         Ok(())
     }

@@ -259,7 +259,9 @@ impl Model {
                         }
                     }
                     Ok(Err(error)) => self.error.set(error.to_string()),
-                    Err(_) => self.error.set(tr!("加载已结束，请重试").into()),
+                    Err(_) => self
+                        .error
+                        .set(tr!("Loading ended; please try again").into()),
                 }
             })
         });
@@ -385,8 +387,10 @@ impl Model {
                 }
                 match result {
                     Ok(Ok(value)) => self.favorite.set(value),
-                    Ok(Err(e)) => self.error.set(tr!("收藏未保存：{e}"; e = e)),
-                    Err(_) => self.error.set(tr!("收藏请求已结束，请重试").into()),
+                    Ok(Err(e)) => self.error.set(tr!("Like not saved: {e}"; e = e)),
+                    Err(_) => self
+                        .error
+                        .set(tr!("Like request ended; please try again").into()),
                 }
             })
         });
@@ -414,7 +418,9 @@ impl Model {
                 match result {
                     Ok(Ok(info)) => self.info.set(Some(info)),
                     Ok(Err(e)) => self.error.set(e.to_string()),
-                    Err(_) => self.error.set(tr!("歌词请求已结束，请重试").into()),
+                    Err(_) => self
+                        .error
+                        .set(tr!("Lyrics request ended; please try again").into()),
                 }
             })
         });
@@ -527,7 +533,9 @@ impl Model {
                 match receive.await {
                     Ok(Ok(status)) => self.update(status),
                     Ok(Err(error)) => self.error.set(error.to_string()),
-                    Err(_) => self.error.set(tr!("音质请求已结束，请重试").into()),
+                    Err(_) => self
+                        .error
+                        .set(tr!("Quality request ended; please try again").into()),
                 }
                 self.quality_busy.set(false);
             })
@@ -551,7 +559,7 @@ impl Model {
                         self.open(Page::Player);
                     }
                     Ok(Err(error)) => self.error.set(error.to_string()),
-                    Err(_) => self.error.set(tr!("播放请求已结束").into()),
+                    Err(_) => self.error.set(tr!("Playback request ended").into()),
                 }
                 self.starting.set(false);
             })
