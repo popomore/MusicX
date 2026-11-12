@@ -1,5 +1,6 @@
 //! Range-capable loopback transport for AVPlayer's unsupported request headers.
 use anyhow::{Context, Result, ensure};
+use musicx_core::protocol::tr;
 use reqwest::{Url, blocking::Client, redirect::Policy};
 use std::{
     collections::BTreeMap,
@@ -66,14 +67,14 @@ fn start() -> Result<Proxy> {
 
 pub(crate) fn register(url: Url, headers: BTreeMap<String, String>) -> Result<(Url, Arc<()>)> {
     let proxy = PROXY
-        .get_or_init(|| start().map_err(|_| "无法启动音频传输".into()))
+        .get_or_init(|| start().map_err(|_| tr!("Could not start audio transfer").into()))
         .as_ref()
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     let key = musicx_core::storage::random_hex::<32>();
     let mut streams = proxy
         .streams
         .lock()
-        .map_err(|_| anyhow::anyhow!("音频传输不可用"))?;
+        .map_err(|_| anyhow::anyhow!(tr!("Audio transfer unavailable")))?;
     while streams.len() >= 64 {
         if let Some(oldest) = streams
             .iter()
@@ -83,7 +84,7 @@ pub(crate) fn register(url: Url, headers: BTreeMap<String, String>) -> Result<(U
         {
             streams.remove(&oldest);
         } else {
-            anyhow::bail!("音频传输繁忙，请稍后重试");
+            anyhow::bail!(tr!("Audio transfer busy; try again shortly"));
         }
     }
     let lease = Arc::new(());
@@ -111,14 +112,20 @@ fn serve(mut socket: TcpStream, streams: &Mutex<BTreeMap<String, Stream>>) -> Re
     let parts: Vec<_> = line.split_whitespace().collect();
     ensure!(
         parts.len() == 3 && matches!(parts[0], "GET" | "HEAD"),
-        "无效请求"
+        tr!("Invalid request")
     );
     let head = parts[0] == "HEAD";
-    let key = parts[1].strip_prefix('/').context("无效地址")?.to_owned();
+    let key = parts[1]
+        .strip_prefix('/')
+        .context(tr!("Invalid URL"))?
+        .to_owned();
     let mut range = None;
     loop {
         line.clear();
-        ensure!(reader.read_line(&mut line)? > 0, "请求头不完整");
+        ensure!(
+            reader.read_line(&mut line)? > 0,
+            tr!("Request headers incomplete")
+        );
         if line == "\r\n" {
             break;
         }
@@ -128,7 +135,7 @@ fn serve(mut socket: TcpStream, streams: &Mutex<BTreeMap<String, Stream>>) -> Re
             let value = value.trim();
             ensure!(
                 value.starts_with("bytes=") && value.len() < 128,
-                "无效音频范围"
+                tr!("Invalid audio range")
             );
             range = Some(value.to_owned());
         }
@@ -136,7 +143,7 @@ fn serve(mut socket: TcpStream, streams: &Mutex<BTreeMap<String, Stream>>) -> Re
     let Some(mut stream) = ({
         let mut map = streams
             .lock()
-            .map_err(|_| anyhow::anyhow!("音频传输不可用"))?;
+            .map_err(|_| anyhow::anyhow!(tr!("Audio transfer unavailable")))?;
         map.get_mut(&key).map(|s| {
             s.used = Instant::now();
             s.clone()
@@ -160,18 +167,18 @@ fn serve(mut socket: TcpStream, streams: &Mutex<BTreeMap<String, Stream>>) -> Re
         if let Some(value) = &range {
             request = request.header("Range", value);
         }
-        let mut response = request.send().context("音频下载失败")?;
+        let mut response = request.send().context(tr!("Audio download failed"))?;
         if response.status().is_redirection() {
             let next = stream.url.join(
                 response
                     .headers()
                     .get("location")
-                    .context("音频跳转无地址")?
+                    .context(tr!("Audio redirect has no address"))?
                     .to_str()?,
             )?;
             ensure!(
                 crate::assets::valid_redirect_target(&next),
-                "音频跳转地址不支持"
+                tr!("Unsupported audio redirect URL")
             );
             if next.host_str() != stream.url.host_str() {
                 stream
@@ -202,7 +209,7 @@ fn serve(mut socket: TcpStream, streams: &Mutex<BTreeMap<String, Stream>>) -> Re
         }
         return Ok(());
     }
-    anyhow::bail!("音频跳转过多")
+    anyhow::bail!(tr!("Too many audio redirects"))
 }
 
 #[cfg(test)]

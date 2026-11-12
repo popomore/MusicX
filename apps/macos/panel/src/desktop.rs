@@ -1,4 +1,5 @@
 pub use crate::drawer::{DETAILS_GAP, DETAILS_WIDTH, EXPANDED_WIDTH, PLAYER_WIDTH};
+use crate::protocol::tr;
 use nsh_platform_macos::objc2_app_kit::*;
 use nsh_platform_macos::{AppOptions, AppView, Root, set_ui_sets};
 use objc2::{
@@ -12,7 +13,20 @@ use objc2_foundation::{
     NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, ns_string,
 };
 use std::{cell::RefCell, process::ExitCode, rc::Rc};
-thread_local! { static PANEL: RefCell<Option<Panel>> = const { RefCell::new(None) }; }
+thread_local! {
+    static PANEL: RefCell<Option<Panel>> = const { RefCell::new(None) };
+    static MENU_TITLES: RefCell<Vec<(Retained<NSMenuItem>, &'static str)>> = const { RefCell::new(Vec::new()) };
+}
+
+pub fn refresh_language() {
+    dispatch2::DispatchQueue::main().exec_async(|| {
+        MENU_TITLES.with_borrow(|items| {
+            for (item, source) in items {
+                item.setTitle(&NSString::from_str(crate::protocol::i18n::text(source)));
+            }
+        });
+    });
+}
 struct Panel {
     window: Retained<NSWindow>,
     view: Rc<AppView>,
@@ -105,7 +119,7 @@ define_class!(
 fn item(
     menu: &NSMenu,
     delegate: &AnyObject,
-    title: &str,
+    title: &'static str,
     selector: Option<objc2::runtime::Sel>,
     key: &str,
 ) -> Retained<NSMenuItem> {
@@ -114,7 +128,7 @@ fn item(
     let item = unsafe {
         NSMenuItem::initWithTitle_action_keyEquivalent(
             NSMenuItem::alloc(mtm),
-            &NSString::from_str(title),
+            &NSString::from_str(crate::protocol::i18n::text(title)),
             selector,
             &NSString::from_str(key),
         )
@@ -123,6 +137,7 @@ fn item(
         item.setTarget(Some(delegate));
     }
     menu.addItem(&item);
+    MENU_TITLES.with_borrow_mut(|items| items.push((item.clone(), title)));
     item
 }
 
@@ -243,24 +258,31 @@ pub fn run_panel() -> ExitCode {
     item(
         &menu,
         &delegate,
-        "检查更新…",
+        "Check for Updates…",
         Some(sel!(checkForUpdates:)),
         "",
     );
     menu.addItem(&NSMenuItem::separatorItem(mtm));
-    item(&menu, &delegate, "关闭面板", Some(sel!(closePanel:)), "w");
-    item(&menu, &delegate, "退出 MusicX", Some(sel!(quit:)), "q");
+    item(
+        &menu,
+        &delegate,
+        "Close Panel",
+        Some(sel!(closePanel:)),
+        "w",
+    );
+    item(&menu, &delegate, "Quit MusicX", Some(sel!(quit:)), "q");
     holder.setSubmenu(Some(&menu));
     let edit_holder = NSMenuItem::new(mtm);
-    edit_holder.setTitle(ns_string!("编辑"));
+    edit_holder.setTitle(&NSString::from_str(tr!("Edit")));
+    MENU_TITLES.with_borrow_mut(|items| items.push((edit_holder.clone(), "Edit")));
     let edit = NSMenu::new(mtm);
     for (title, selector, key) in [
-        ("撤销", sel!(undo:), "z"),
-        ("重做", sel!(redo:), "Z"),
-        ("剪切", sel!(cut:), "x"),
-        ("复制", sel!(copy:), "c"),
-        ("粘贴", sel!(paste:), "v"),
-        ("全选", sel!(selectAll:), "a"),
+        ("Undo", sel!(undo:), "z"),
+        ("Redo", sel!(redo:), "Z"),
+        ("Cut", sel!(cut:), "x"),
+        ("Copy", sel!(copy:), "c"),
+        ("Paste", sel!(paste:), "v"),
+        ("Select All", sel!(selectAll:), "a"),
     ] {
         // Standard AppKit text actions follow the responder chain.
         unsafe {

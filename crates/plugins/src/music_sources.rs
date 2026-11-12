@@ -1,6 +1,7 @@
 //! Sources adapt a bounded subset of the MyGo contract; local playlists stay ours.
 use crate::{mygo, protocol::*, repository, source_catalog};
 use anyhow::{Context, Result, ensure};
+use musicx_core::protocol::tr;
 use musicx_core::{metadata, storage};
 use serde_json::{Value, json};
 use std::{
@@ -25,8 +26,10 @@ static LOGIN: Mutex<LoginRegistry> = Mutex::new(LoginRegistry {
 });
 
 fn plugin(source: &str) -> Result<&str> {
-    let id = source.strip_prefix("mygo:").context("请选择插件数据源")?;
-    ensure!(mygo::valid_id(id), "无效的数据源标识");
+    let id = source
+        .strip_prefix("mygo:")
+        .context(tr!("Choose a plugin source"))?;
+    ensure!(mygo::valid_id(id), tr!("Invalid source identifier"));
     Ok(id)
 }
 
@@ -298,7 +301,7 @@ pub(crate) fn check_single_file_script(source: &str) -> Result<()> {
     check_script_syntax(source)?;
     ensure!(
         !uses_module_imports(source),
-        "此插件需要多个模块，当前支持单文件入口"
+        tr!("This plugin needs multiple modules; only single-file entries are supported")
     );
     Ok(())
 }
@@ -313,7 +316,9 @@ fn check_script_syntax(source: &str) -> Result<()> {
         rquickjs::Module::declare(ctx.clone(), "plugin-install", source)
             .catch(&ctx)
             .map(|_| ())
-            .map_err(|error| anyhow::anyhow!("插件入口无法编译：{error}"))
+            .map_err(|error| {
+                anyhow::anyhow!(tr!("Could not compile the plugin entry: {error}"; error = error))
+            })
     })
 }
 fn legacy_fields(source: &str) -> Vec<SourceSettingDefinition> {
@@ -338,8 +343,8 @@ fn legacy_fields(source: &str) -> Vec<SourceSettingDefinition> {
                 fields.push(SourceSettingDefinition {
                     key: key.into(),
                     label: match key {
-                        "quality" => "音质偏好",
-                        "autoVip" => "每日免费 VIP",
+                        "quality" => tr!("Quality preference"),
+                        "autoVip" => tr!("Daily free VIP"),
                         _ => key,
                     }
                     .into(),
@@ -374,7 +379,10 @@ fn settings_value(id: &str) -> Result<BTreeMap<String, String>> {
     let path = mygo::plugin_root()?.join(id).join("settings.json");
     match fs::read(&path) {
         Ok(bytes) => {
-            ensure!(bytes.len() <= 65536, "数据源配置文件过大");
+            ensure!(
+                bytes.len() <= 65536,
+                tr!("Source configuration file is too large")
+            );
             Ok(serde_json::from_slice(&bytes)?)
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(BTreeMap::new()),
@@ -385,17 +393,28 @@ pub(crate) fn limitation(m: &mygo::Manifest, entry_error: bool, imports: bool) -
     if let Some(reason) = mygo::minimum_version_limitation(m) {
         Some(reason)
     } else if m.playback != "stream" {
-        Some("此插件控制远程播放器，当前只接入音频来源".into())
+        Some(tr!("This plugin controls a remote player; only audio sources are supported").into())
     } else if !mygo::compatible(m) {
-        Some("此插件需要外部程序，当前宿主尚未接入".into())
+        Some(tr!("This plugin requires an external program that is not supported yet").into())
     } else if !m.main.ends_with(".js") && !m.main.ends_with(".ts") {
-        Some("当前支持单文件 JavaScript 或 TypeScript".into())
+        Some(tr!("Only single-file JavaScript or TypeScript is supported").into())
     } else if entry_error {
-        Some("仓库未提供可直接读取的入口，需要插件发布包".into())
+        Some(
+            tr!("The repository has no readable entry; a plugin release package is required")
+                .into(),
+        )
     } else if imports {
-        Some("此插件需要多个模块，当前支持单文件入口".into())
+        Some(
+            tr!("This plugin needs multiple modules; only single-file entries are supported")
+                .into(),
+        )
     } else if m.permissions.network.iter().any(|v| v == "*") {
-        Some("此插件需要动态服务器网络权限，当前尚未接入".into())
+        Some(
+            tr!(
+                "This plugin requires dynamic server network permissions that are not supported yet"
+            )
+            .into(),
+        )
     } else {
         None
     }
@@ -546,9 +565,9 @@ fn catalog_from(entries: Vec<source_catalog::Entry>) -> Result<Vec<MusicSource>>
                 can_install: row.discovered,
                 limitation: Some(
                     if row.discovered {
-                        "添加时检查来源兼容性"
+                        tr!("Compatibility will be checked when adding the source")
                     } else {
-                        "仓库没有可读取的插件清单"
+                        tr!("No readable plugin manifest in the repository")
                     }
                     .into(),
                 ),
@@ -567,7 +586,9 @@ fn catalog_from(entries: Vec<source_catalog::Entry>) -> Result<Vec<MusicSource>>
             !row.imports.is_empty(),
         );
         if !has_source && row.entry_error.is_none() {
-            limit = Some("这是界面或歌词扩展，未提供音乐数据源接口".into());
+            limit = Some(
+                tr!("This is a UI or lyrics extension without a music source interface").into(),
+            );
         }
         let exists = ids.contains(&m.id.as_str());
         let fields = m.settings.clone();
@@ -585,7 +606,10 @@ fn catalog_from(entries: Vec<source_catalog::Entry>) -> Result<Vec<MusicSource>>
 }
 fn save_settings(id: &str, values: &BTreeMap<String, String>) -> Result<()> {
     let bytes = serde_json::to_vec(values)?;
-    ensure!(bytes.len() <= 65536, "数据源配置超过64KiB");
+    ensure!(
+        bytes.len() <= 65536,
+        tr!("Source configuration exceeds 64 KiB")
+    );
     let dir = mygo::plugin_root()?.join(id);
     let temp = dir.join(format!(".settings-{}", storage::random_hex::<8>()));
     let result = (|| -> Result<()> {
@@ -605,19 +629,22 @@ fn save_settings(id: &str, values: &BTreeMap<String, String>) -> Result<()> {
 }
 pub fn configure(source: &str, changes: BTreeMap<String, String>) -> Result<Value> {
     let id = plugin(source)?;
-    ensure!(!auth_active(id), "请先完成或取消此来源的账号关联");
+    ensure!(
+        !auth_active(id),
+        tr!("Complete or cancel account connection for this source first")
+    );
     let info = get_source(source)?;
-    ensure!(changes.len() <= 64, "配置项过多");
+    ensure!(changes.len() <= 64, tr!("Too many settings"));
     let guard = SETTINGS_WRITER
         .lock()
-        .map_err(|_| anyhow::anyhow!("配置写入暂不可用"))?;
+        .map_err(|_| anyhow::anyhow!(tr!("Settings cannot be saved right now")))?;
     let mut values = settings_value(id)?;
     for (key, value) in &changes {
         ensure!(
             info.settings.iter().any(|f| &f.definition.key == key),
-            "未声明的配置项"
+            tr!("Undeclared setting")
         );
-        ensure!(value.len() <= 16384, "单个配置项过长");
+        ensure!(value.len() <= 16384, tr!("Setting value is too long"));
         if value.is_empty() {
             values.remove(key);
         } else {
@@ -630,7 +657,9 @@ pub fn configure(source: &str, changes: BTreeMap<String, String>) -> Result<Valu
     if info.capabilities.iter().any(|v| v == "setSetting") {
         for (key, value) in changes {
             if mygo::invoke(id, "setSetting", json!({"key":key,"value":value})).is_err() {
-                warning = Some("配置已保存，但来源刷新未完成；请检查来源配置");
+                warning = Some(tr!(
+                    "Settings saved, but the source could not refresh. Check its configuration."
+                ));
                 break;
             }
         }
@@ -640,12 +669,12 @@ pub fn configure(source: &str, changes: BTreeMap<String, String>) -> Result<Valu
 fn ensure_installable(row: &source_catalog::Entry) -> Result<()> {
     let info = catalog_from(vec![row.clone()])?
         .pop()
-        .context("来源不在目录中")?;
+        .context(tr!("Source not found in the catalog"))?;
     ensure!(
         info.can_install,
         "{}",
         info.limitation
-            .unwrap_or_else(|| "相同标识的数据源已经添加".into())
+            .unwrap_or_else(|| tr!("A source with this identifier has already been added").into())
     );
     Ok(())
 }
@@ -674,17 +703,20 @@ fn install_package(repository: &str, replacing: Option<&str>) -> Result<MusicSou
     use sha2::{Digest, Sha256};
     let mut m: mygo::Manifest = serde_json::from_slice(&manifest)?;
     if let Some(id) = replacing {
-        ensure!(m.id == id, "更新包的数据源标识与已安装来源不一致");
+        ensure!(
+            m.id == id,
+            tr!("Update source identifier does not match the installed source")
+        );
     }
     if !row.discovered {
         ensure!(
             format!("{:x}", Sha256::digest(&manifest)) == row.manifest_sha256,
-            "来源清单校验失败"
+            tr!("Source manifest verification failed")
         );
         ensure!(
             m.id == row.manifest["id"].as_str().unwrap_or_default()
                 && m.version == row.manifest["version"].as_str().unwrap_or_default(),
-            "来源清单与目录版本不符"
+            tr!("Source manifest version does not match the catalog")
         );
         if m.settings.is_empty() {
             m.settings =
@@ -693,9 +725,9 @@ fn install_package(repository: &str, replacing: Option<&str>) -> Result<MusicSou
     }
     ensure!(
         mygo::valid_id(&m.id) && limitation(&m, false, false).is_none(),
-        "来源超出当前宿主支持范围"
+        tr!("This source is not supported by the current host")
     );
-    let original = std::str::from_utf8(&script).context("插件入口不是有效的 UTF-8")?;
+    let original = std::str::from_utf8(&script).context(tr!("Plugin entry is not valid UTF-8"))?;
     let compiled = crate::script::javascript(&m.main, original)?;
     let code = compiled.as_str();
     check_single_file_script(code)?;
@@ -708,7 +740,7 @@ fn install_package(repository: &str, replacing: Option<&str>) -> Result<MusicSou
     } else {
         ensure!(
             format!("{:x}", Sha256::digest(&script)) == row.entry_sha256,
-            "来源入口校验失败"
+            tr!("Source entry verification failed")
         );
     }
     m.repository = Some(format!("https://github.com/{repo}"));
@@ -751,16 +783,19 @@ fn install_package(repository: &str, replacing: Option<&str>) -> Result<MusicSou
 pub fn update(source: &str) -> Result<MusicSource> {
     let id = plugin(source)?;
     let info = get_source(source)?;
-    let repository = info
-        .repository
-        .context("此来源没有记录仓库，请使用本地插件目录更新")?;
+    let repository = info.repository.context(tr!(
+        "No repository recorded for this source; update from a local plugin directory"
+    ))?;
     install_package(&repository, Some(id))
 }
 pub fn check_update(source: &str) -> Result<Value> {
     let id = plugin(source)?;
     let m = mygo::manifest(&mygo::plugin_root()?.join(id))?;
-    let repo =
-        repository::parse_repository(m.repository.as_deref().context("此来源没有记录仓库")?)?;
+    let repo = repository::parse_repository(
+        m.repository
+            .as_deref()
+            .context(tr!("No repository recorded for this source"))?,
+    )?;
     let latest = if let Some(row) = source_catalog::cached_entry(&repo).filter(|r| !r.discovered) {
         row.commit
     } else {
@@ -780,8 +815,11 @@ pub fn account(source: &str) -> Result<SourceAccount> {
     if !info.capabilities.iter().any(|v| v == "account") {
         return Ok(SourceAccount::default());
     }
-    let v = mygo::invoke(id, "account", json!({}))
-        .map_err(|_| anyhow::anyhow!("账号状态读取失败，请检查数据源配置"))?;
+    let v = mygo::invoke(id, "account", json!({})).map_err(|_| {
+        anyhow::anyhow!(tr!(
+            "Could not read account status; check the source settings"
+        ))
+    })?;
     Ok(SourceAccount {
         connected: !v.is_null() && v["id"].is_string(),
         name: v["name"].as_str().map(|v| v.chars().take(100).collect()),
@@ -789,13 +827,16 @@ pub fn account(source: &str) -> Result<SourceAccount> {
 }
 pub fn playlists(source: &str) -> Result<Vec<SourcePlaylist>> {
     let id = plugin(source)?;
-    let v = mygo::invoke(id, "playlists", json!({}))
-        .map_err(|_| anyhow::anyhow!("来源歌单读取失败，请先关联账号或检查配置"))?;
+    let v = mygo::invoke(id, "playlists", json!({})).map_err(|_| {
+        anyhow::anyhow!(tr!(
+            "Could not read source playlists; connect an account or check settings"
+        ))
+    })?;
     let rows = v
         .as_array()
         .or_else(|| v["playlists"].as_array())
-        .context("来源未返回歌单列表")?;
-    ensure!(rows.len() <= 1000, "来源歌单过多");
+        .context(tr!("The source returned no playlist list"))?;
+    ensure!(rows.len() <= 1000, tr!("Too many source playlists"));
     Ok(rows
         .iter()
         .filter_map(|v| {
@@ -806,7 +847,10 @@ pub fn playlists(source: &str) -> Result<Vec<SourcePlaylist>> {
             Some(SourcePlaylist {
                 cover_url: v["imageUrl"].as_str().and_then(metadata::artwork_url),
                 id,
-                name: v["name"].as_str().unwrap_or("未命名歌单").into(),
+                name: v["name"]
+                    .as_str()
+                    .unwrap_or(tr!("Untitled playlist"))
+                    .into(),
                 track_count: v["trackCount"].as_u64().unwrap_or(0) as usize,
             })
         })
@@ -814,10 +858,16 @@ pub fn playlists(source: &str) -> Result<Vec<SourcePlaylist>> {
 }
 pub fn playlist_snapshot(source: &str, id: &str) -> Result<(PlaylistOrigin, Vec<Track>)> {
     let id = id.trim();
-    ensure!(!id.is_empty() && id.len() <= 1024, "无效的歌单标识");
+    ensure!(
+        !id.is_empty() && id.len() <= 1024,
+        tr!("Invalid playlist identifier")
+    );
     let plugin = plugin(source)?;
-    let value = mygo::invoke(plugin, "playlist", json!({"id":id}))
-        .map_err(|_| anyhow::anyhow!("来源歌单加载失败，请检查账号和配置"))?;
+    let value = mygo::invoke(plugin, "playlist", json!({"id":id})).map_err(|_| {
+        anyhow::anyhow!(tr!(
+            "Could not load the source playlist; check your account and settings"
+        ))
+    })?;
     let page = if value["playlist"].is_object() {
         &value["playlist"]
     } else {
@@ -826,24 +876,30 @@ pub fn playlist_snapshot(source: &str, id: &str) -> Result<(PlaylistOrigin, Vec<
     let rows = page["tracks"]
         .as_array()
         .or_else(|| value["tracks"].as_array())
-        .context("来源没有返回歌单曲目")?;
-    ensure!(rows.len() <= 10000, "歌单超过10000首");
+        .context(tr!("The source returned no playlist tracks"))?;
+    ensure!(rows.len() <= 10000, tr!("Playlist exceeds 10,000 tracks"));
     let tracks: Vec<_> = rows
         .iter()
         .filter_map(|v| mygo::catalog_track(plugin, v))
         .collect();
-    ensure!(tracks.len() == rows.len(), "来源曲目信息不完整，未导入");
+    ensure!(
+        tracks.len() == rows.len(),
+        tr!("Source track information is incomplete; nothing was imported")
+    );
     ensure!(
         page["trackCount"]
             .as_u64()
             .is_none_or(|n| n as usize <= tracks.len()),
-        "来源未返回完整歌单，未导入"
+        tr!("The source returned an incomplete playlist; nothing was imported")
     );
     Ok((
         PlaylistOrigin {
             provider: source.into(),
             id: id.into(),
-            name: page["name"].as_str().unwrap_or("导入歌单").into(),
+            name: page["name"]
+                .as_str()
+                .unwrap_or(tr!("Import playlist"))
+                .into(),
         },
         tracks,
     ))
@@ -862,17 +918,17 @@ impl LoginJob {
         self.cancel.load(Ordering::SeqCst)
     }
     pub fn prompt(&self, text: &str) -> Result<()> {
-        ensure!(!self.cancelled(), "关联已取消");
+        ensure!(!self.cancelled(), tr!("Connection canceled"));
         let value: Value = serde_json::from_str(text)?;
         let mut state = self
             .state
             .lock()
-            .map_err(|_| anyhow::anyhow!("关联状态不可用"))?;
+            .map_err(|_| anyhow::anyhow!(tr!("Connection status unavailable")))?;
         if let Some(text) = value["text"].as_str() {
             state.text = text.chars().take(512).collect();
         }
         if let Some(qr) = value["qr"].as_str() {
-            ensure!(qr.len() <= 8192, "二维码过大");
+            ensure!(qr.len() <= 8192, tr!("QR code is too large"));
             state.qr_url = Some(qr.to_owned());
             state.svg = Some(
                 qrcode::QrCode::new(qr.as_bytes())?
@@ -887,7 +943,7 @@ impl LoginJob {
         Ok(self
             .state
             .lock()
-            .map_err(|_| anyhow::anyhow!("关联状态不可用"))?
+            .map_err(|_| anyhow::anyhow!(tr!("Connection status unavailable")))?
             .clone())
     }
 }
@@ -927,20 +983,23 @@ pub fn begin_sign_in_method(
             SignInMethod::Qr => info.qr_sign_in,
             SignInMethod::Oauth => info.oauth_sign_in,
         },
-        "此来源的关联方式暂未接入，请检查来源配置项"
+        tr!("This connection method is not supported; check the source settings")
     );
     let request = requested.unwrap_or_else(storage::random_hex::<12>);
-    ensure!(valid_job(&request), "无效的关联任务");
+    ensure!(valid_job(&request), tr!("Invalid connection task"));
     let mut registry = LOGIN
         .lock()
-        .map_err(|_| anyhow::anyhow!("关联状态不可用"))?;
-    ensure!(!registry.cancelled.contains(&request), "关联已取消");
+        .map_err(|_| anyhow::anyhow!(tr!("Connection status unavailable")))?;
+    ensure!(
+        !registry.cancelled.contains(&request),
+        tr!("Connection canceled")
+    );
     ensure!(
         !registry
             .active
             .as_ref()
             .is_some_and(|j| j.running.load(Ordering::SeqCst)),
-        "请先完成或取消当前的数据源关联"
+        tr!("Complete or cancel the current source connection first")
     );
     let job = Arc::new(LoginJob {
         state: Mutex::new(SourceLogin {
@@ -948,11 +1007,11 @@ pub fn begin_sign_in_method(
             source: info.id.clone(),
             status: "waiting".into(),
             text: if method == SignInMethod::Web {
-                "请在网页登录窗口中完成登录"
+                tr!("Complete sign-in in the web sign-in window")
             } else if method == SignInMethod::Oauth {
-                "请在浏览器中完成来源登录"
+                tr!("Complete source sign-in in your browser")
             } else {
-                "正在获取登录二维码…"
+                tr!("Getting sign-in QR code…")
             }
             .into(),
             svg: None,
@@ -966,22 +1025,22 @@ pub fn begin_sign_in_method(
     drop(registry);
     std::thread::spawn(move || {
         let result = std::panic::catch_unwind(|| mygo::invoke_sign_in(&id, job.clone(), method))
-            .unwrap_or_else(|_| Err(anyhow::anyhow!("关联任务已结束")));
+            .unwrap_or_else(|_| Err(anyhow::anyhow!(tr!("Connection task ended"))));
         if let Ok(mut state) = job.state.lock() {
             state.svg = None;
             state.qr_url = None;
             if job.cancelled() {
                 state.status = "cancelled".into();
-                state.text = "账号关联已取消".into();
+                state.text = tr!("Source account connection canceled").into();
             } else if result.is_ok_and(|v| !v["id"].is_null()) {
                 state.status = "success".into();
-                state.text = "账号已关联".into();
+                state.text = tr!("Account connected").into();
             } else {
                 state.status = "error".into();
                 state.text = if method == SignInMethod::Web {
-                    "网页登录未完成，请重新打开窗口或使用扫码登录"
+                    tr!("Web sign-in incomplete; reopen the window or use QR sign-in")
                 } else {
-                    "关联未完成，请重新生成二维码或检查数据源配置"
+                    tr!("Connection incomplete; generate a new QR code or check source settings")
                 }
                 .into();
             }
@@ -991,10 +1050,10 @@ pub fn begin_sign_in_method(
     Ok(initial)
 }
 pub fn login_state(id: &str, cancel: bool) -> Result<SourceLogin> {
-    ensure!(valid_job(id), "无效的关联任务");
+    ensure!(valid_job(id), tr!("Invalid connection task"));
     let mut registry = LOGIN
         .lock()
-        .map_err(|_| anyhow::anyhow!("关联状态不可用"))?;
+        .map_err(|_| anyhow::anyhow!(tr!("Connection status unavailable")))?;
     let current = registry
         .active
         .clone()
@@ -1011,7 +1070,7 @@ pub fn login_state(id: &str, cancel: bool) -> Result<SourceLogin> {
                 job.cancel.store(true, Ordering::SeqCst);
                 if let Ok(mut state) = job.state.lock() {
                     state.status = "cancelling".into();
-                    state.text = "正在取消关联…".into();
+                    state.text = tr!("Canceling connection…").into();
                     state.svg = None;
                     state.qr_url = None;
                 }
@@ -1021,11 +1080,13 @@ pub fn login_state(id: &str, cancel: bool) -> Result<SourceLogin> {
         return Ok(SourceLogin {
             job: id.into(),
             status: "cancelled".into(),
-            text: "关联已取消".into(),
+            text: tr!("Connection canceled").into(),
             ..Default::default()
         });
     }
-    current.context("关联已更新，请重新打开")?.snapshot()
+    current
+        .context(tr!("Connection changed; please reopen"))?
+        .snapshot()
 }
 
 pub fn execute(input: MusicSourceAction) -> Result<Value> {
@@ -1054,7 +1115,7 @@ pub fn execute(input: MusicSourceAction) -> Result<Value> {
         MusicSourceAction::SignOut { source } => {
             let id = plugin(&source)?;
             mygo::invoke(id, "signOut", json!({}))
-                .map_err(|_| anyhow::anyhow!("来源退出登录失败"))?;
+                .map_err(|_| anyhow::anyhow!(tr!("Could not sign out of the source")))?;
             json!({"ok":true})
         }
         MusicSourceAction::Playlists { source } => serde_json::to_value(playlists(&source)?)?,
