@@ -529,12 +529,24 @@ pub(crate) fn entry(dir: &Path, manifest: &Manifest) -> Result<PathBuf> {
 }
 
 pub fn install(source: &Path) -> Result<String> {
-    install_mode(source, false)
+    install_mode(source, false, false, None)
 }
 pub fn update_local(source: &Path) -> Result<String> {
-    install_mode(source, true)
+    install_mode(source, true, false, None)
 }
-fn install_mode(source: &Path, replace: bool) -> Result<String> {
+pub(crate) fn install_repository(
+    source: &Path,
+    replace: bool,
+    expected: Option<&crate::installation::Snapshot>,
+) -> Result<String> {
+    install_mode(source, replace, true, expected)
+}
+fn install_mode(
+    source: &Path,
+    replace: bool,
+    repository: bool,
+    expected: Option<&crate::installation::Snapshot>,
+) -> Result<String> {
     let manifest = manifest(source)?;
     ensure!(
         crate::music_sources::limitation(&manifest, false, false).is_none(),
@@ -561,6 +573,9 @@ fn install_mode(source: &Path, replace: bool) -> Result<String> {
         replace || !target.exists(),
         tr!("Plugin {} already exists", manifest.id)
     );
+    let _updates = expected
+        .map(|_| crate::plugin_updates::enabled_guard())
+        .transpose()?;
     let pending = root.join(format!(
         ".install-{}",
         musicx_core::storage::random_hex::<8>()
@@ -568,6 +583,10 @@ fn install_mode(source: &Path, replace: bool) -> Result<String> {
     fs::create_dir(&pending)?;
     let result = (|| -> Result<()> {
         let mut installed = manifest;
+        if !repository {
+            installed.metadata.remove("sourceVersion");
+            installed.metadata.remove("sourceCommit");
+        }
         installed.main = "index.js".into();
         let code =
             crate::script::javascript(&script.to_string_lossy(), &fs::read_to_string(&script)?)?;
@@ -593,6 +612,12 @@ fn install_mode(source: &Path, replace: bool) -> Result<String> {
                     bytes,
                 )?;
             }
+        }
+        if repository {
+            crate::installation::write(&pending, &installed)?;
+        }
+        if let Some(expected) = expected {
+            expected.verify(&target)?;
         }
         if replace && target.exists() {
             ensure!(

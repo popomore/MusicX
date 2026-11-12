@@ -44,7 +44,6 @@ struct Browser {
     imported: Signal<bool>,
     disconnecting: Signal<bool>,
     removing: Signal<bool>,
-    update_available: Signal<bool>,
     owner: Owner,
     page: Signal<Page>,
     busy: Signal<bool>,
@@ -152,7 +151,6 @@ impl Browser {
     fn populate(self, source: MusicSource) {
         self.imported.set(false);
         self.removing.set(false);
-        self.update_available.set(false);
         self.configuring
             .set(source.settings.iter().any(|f| f.secret && !f.configured));
         let values = source
@@ -391,7 +389,6 @@ impl Browser {
             move || request::<serde_json::Value>(Action::CheckUpdate { source: source.id }),
             |this, result| {
                 let available = result["available"].as_bool().unwrap_or(false);
-                this.update_available.set(available);
                 this.message.set(if available {
                     tr!(
                         "Update available: {}",
@@ -411,7 +408,6 @@ impl Browser {
             move || request::<MusicSource>(Action::Update { source: source.id }),
             |this, source| {
                 this.populate(source);
-                this.update_available.set(false);
                 this.message
                     .set(tr!("Source updated; account and settings kept").into());
             },
@@ -503,7 +499,6 @@ pub fn sources_view(
         imported: signal(false),
         disconnecting: signal(false),
         removing: signal(false),
-        update_available: signal(false),
         owner: Owner::current(),
         page: signal(Page::List),
         busy: signal(false),
@@ -631,7 +626,8 @@ pub fn sources_view(
                         .child(action(tr!("More options"),move||this.busy.get(),move||{this.managing.update(|v|*v = !*v);this.disconnecting.set(false);} ))
                         .child(when(move||this.managing.get(),move||view().gap(px(5.0))
                             .child(action(tr!("Check for updates"),move||this.busy.get(),move||this.check_update()))
-                            .child(when(move||this.update_available.get(),move||action(tr!("Update source"),move||this.busy.get(),move||this.update())))
+                            .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.repository.is_some())),move||action(tr!("Update source"),move||this.busy.get(),move||this.update())))
+                            .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.repository.is_some())),||caption(tr!("Update older plugins manually once to enable automatic updates. Updating replaces plugin files."))))
                             .child(action(tr!("Remove source"),move||this.busy.get(),move||this.removing.set(true)))
                             .child(when(move||this.removing.get(),move||view().gap(px(4.0))
                                 .child(caption(tr!("Local playlists will be kept. Add the source again to play its tracks.")))

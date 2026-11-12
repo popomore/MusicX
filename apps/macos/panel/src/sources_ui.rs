@@ -3,10 +3,9 @@ use crate::protocol::tr;
 use crate::{
     controls::{action, caption, heading, section},
     model::{Model, Page},
-    protocol::MusicSource,
+    protocol::{MusicSource, MusicSourceAction, PluginUpdateSettings},
     remote,
 };
-#[cfg(target_os = "macos")]
 use nsh_base::switch;
 use nsh_base::{button, theme};
 use nsh_core::prelude::*;
@@ -24,6 +23,7 @@ struct Sources {
     busy: Signal<bool>,
     message: Signal<String>,
     plugins: Signal<Vec<MusicSource>>,
+    auto_update: Signal<Option<bool>>,
     selected: Signal<Option<MusicSource>>,
     catalog: Signal<bool>,
     import_mode: bool,
@@ -59,8 +59,26 @@ impl Sources {
     }
     fn refresh(self) {
         self.work(
-            || remote::read_json::<Vec<MusicSource>>("/ui/music-sources"),
-            |this, rows| this.plugins.set(rows),
+            move || {
+                let rows = remote::read_json::<Vec<MusicSource>>("/ui/music-sources")?;
+                let updates = (!self.import_mode).then(|| {
+                    remote::post_json::<_, PluginUpdateSettings>(
+                        "/ui/music-sources",
+                        &MusicSourceAction::AutoUpdateSettings,
+                    )
+                });
+                Ok((rows, updates))
+            },
+            |this, (rows, updates)| {
+                this.plugins.set(rows);
+                match updates {
+                    Some(Ok(settings)) => this.auto_update.set(Some(settings.enabled)),
+                    Some(Err(error)) => this
+                        .message
+                        .set(tr!("Could not read plugin update settings: {error}"; error = error)),
+                    None => {}
+                }
+            },
         );
     }
     fn home(self) {
@@ -243,24 +261,27 @@ fn playback_settings(model: Model) -> impl IntoElement {
         .child(setting_toggle(
             tr!("Volume normalization"),
             move || model.status.with(|s| s.normalization_enabled),
+            || false,
             move |enabled| remote::submit(remote::Action::Normalization(enabled), None),
         ))
         .child(setting_toggle(
             tr!("Lyric preview"),
             move || model.show_mini_lyrics.get(),
+            || false,
             move |_| model.toggle_mini_lyrics(),
         ))
 }
 
-#[cfg(target_os = "macos")]
 fn setting_toggle(
     label: &'static str,
     checked: impl Fn() -> bool + Copy + 'static,
+    disabled: impl Fn() -> bool + 'static,
     change: impl Fn(bool) + 'static,
 ) -> impl IntoElement {
     switch()
         .accessibility_label(label)
         .checked(checked)
+        .disabled(disabled)
         .on_change(move |enabled: &bool| change(*enabled))
         .flex_row_reverse()
         .items_center()
@@ -272,6 +293,7 @@ fn setting_toggle(
         .rounded(px(6.0))
         .hover(|s| s.bg(theme().muted.opacity(0.5)))
         .active(|s| s.opacity(0.65))
+        .disabled_style(|s| s.opacity(0.4))
         .track_style(move |s| {
             s.w(px(28.0))
                 .min_w(px(28.0))
@@ -400,6 +422,7 @@ fn flow(model: Model, importing: bool, back: impl Fn() + Copy + 'static) -> impl
         busy: signal(false),
         message: signal(String::new()),
         plugins: signal(Vec::new()),
+        auto_update: signal(None),
         selected: signal(None),
         catalog: signal(false),
         import_mode: importing,
@@ -519,6 +542,32 @@ fn source_settings(this: Sources, importing: bool) -> impl IntoElement {
                                     .text_color(move || theme().foreground),
                             ),
                     )
+            },
+        ))
+        .child(when(
+            move || !importing,
+            move || {
+                view()
+                    .gap(px(4.0))
+                    .child(setting_toggle(
+                        tr!("Automatically update plugins"),
+                        move || this.auto_update.get().unwrap_or(false),
+                        move || this.busy.get() || this.auto_update.get().is_none(),
+                        move |enabled| {
+                            this.work(
+                                move || {
+                                    remote::post_json::<_, PluginUpdateSettings>(
+                                        "/ui/music-sources",
+                                        &MusicSourceAction::SetAutoUpdate { enabled },
+                                    )
+                                },
+                                |this, settings| this.auto_update.set(Some(settings.enabled)),
+                            )
+                        },
+                    ))
+                    .child(caption(
+                        tr!("Update repository plugins daily and keep accounts and settings. Update older plugins manually once first."),
+                    ))
             },
         ))
         .child(when(

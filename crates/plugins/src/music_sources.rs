@@ -683,6 +683,14 @@ pub fn install(repository: &str) -> Result<MusicSource> {
     install_package(repository, None)
 }
 fn install_package(repository: &str, replacing: Option<&str>) -> Result<MusicSource> {
+    install_package_from(repository, replacing, repository::API, None)
+}
+fn install_package_from(
+    repository: &str,
+    replacing: Option<&str>,
+    api: &str,
+    expected: Option<&crate::installation::Snapshot>,
+) -> Result<MusicSource> {
     let repo = repository::parse_repository(repository)?;
     // Discovery is optional. Only an already-cached explicit snapshot pins a version.
     let mut row = source_catalog::cached_entry(&repo).unwrap_or_else(|| source_catalog::Entry {
@@ -696,7 +704,7 @@ fn install_package(repository: &str, replacing: Option<&str>) -> Result<MusicSou
     let package = if !row.discovered {
         repository::pinned(&repo, &row.commit)?
     } else {
-        repository::download(&repo)?
+        repository::download_from(&repo, api)?
     };
     let manifest = package.manifest;
     let script = package.script;
@@ -707,6 +715,18 @@ fn install_package(repository: &str, replacing: Option<&str>) -> Result<MusicSou
             m.id == id,
             tr!("Update source identifier does not match the installed source")
         );
+    }
+    if let Some(expected) = expected {
+        let installed: mygo::Manifest = serde_json::from_slice(&expected.manifest)?;
+        if let (Ok(current), Ok(next)) = (
+            semver::Version::parse(installed.version.trim_start_matches('v')),
+            semver::Version::parse(m.version.trim_start_matches('v')),
+        ) {
+            ensure!(
+                next >= current,
+                tr!("Automatic updates skipped an older plugin version")
+            );
+        }
     }
     if !row.discovered {
         ensure!(
@@ -751,6 +771,7 @@ fn install_package(repository: &str, replacing: Option<&str>) -> Result<MusicSou
     }
     m.metadata
         .insert("sourceVersion".into(), json!(package.version));
+    m.metadata.remove("sourceCommit");
     if let Some(commit) = package.commit {
         m.metadata.insert("sourceCommit".into(), json!(commit));
     }
@@ -769,11 +790,7 @@ fn install_package(repository: &str, replacing: Option<&str>) -> Result<MusicSou
                 )?;
             }
         }
-        if replacing.is_some() {
-            mygo::update_local(&staging)
-        } else {
-            mygo::install(&staging)
-        }
+        mygo::install_repository(&staging, replacing.is_some(), expected)
     })();
     let _ = fs::remove_dir_all(staging);
     let id = result?;
@@ -796,17 +813,54 @@ pub fn check_update(source: &str) -> Result<Value> {
             .as_deref()
             .context(tr!("No repository recorded for this source"))?,
     )?;
-    let latest = if let Some(row) = source_catalog::cached_entry(&repo).filter(|r| !r.discovered) {
-        row.commit
-    } else {
-        repository::latest_version(&repo)?
-    };
-    let current = m
-        .metadata
+    let latest = latest_source_version(&repo, repository::API)?;
+    let current = source_version(&m);
+    Ok(json!({"available":current != latest,"installed_version":current,"latest_version":latest}))
+}
+
+fn latest_source_version(repo: &str, api: &str) -> Result<String> {
+    Ok(
+        if let Some(row) = source_catalog::cached_entry(repo).filter(|r| !r.discovered) {
+            row.commit
+        } else {
+            repository::latest_version(repo, api)?
+        },
+    )
+}
+
+pub(crate) fn repository_version(m: &mygo::Manifest) -> Option<&str> {
+    m.metadata
         .get("sourceVersion")
         .and_then(Value::as_str)
-        .unwrap_or(&m.version);
-    Ok(json!({"available":current != latest,"installed_version":current,"latest_version":latest}))
+        .filter(|version| !version.is_empty())
+        .or_else(|| {
+            m.metadata
+                .get("sourceCommit")
+                .and_then(Value::as_str)
+                .filter(|sha| sha.len() == 40 && sha.bytes().all(|c| c.is_ascii_hexdigit()))
+        })
+}
+
+pub(crate) fn source_version(m: &mygo::Manifest) -> &str {
+    repository_version(m).unwrap_or(&m.version)
+}
+
+pub(crate) fn auto_update(
+    id: &str,
+    api: &str,
+    expected: &crate::installation::Snapshot,
+) -> Result<String> {
+    let m: mygo::Manifest = serde_json::from_slice(&expected.manifest)?;
+    let repository = m
+        .repository
+        .as_deref()
+        .context(tr!("No repository recorded for this source"))?;
+    let repo = repository::parse_repository(repository)?;
+    if source_version(&m) != latest_source_version(&repo, api)? {
+        install_package_from(repository, Some(id), api, Some(expected))?;
+    }
+    let installed = mygo::manifest(&mygo::plugin_root()?.join(id))?;
+    Ok(source_version(&installed).to_owned())
 }
 
 pub fn account(source: &str) -> Result<SourceAccount> {
@@ -1092,6 +1146,12 @@ pub fn login_state(id: &str, cancel: bool) -> Result<SourceLogin> {
 pub fn execute(input: MusicSourceAction) -> Result<Value> {
     Ok(match input {
         MusicSourceAction::List => serde_json::to_value(list()?)?,
+        MusicSourceAction::AutoUpdateSettings => {
+            serde_json::to_value(crate::plugin_updates::settings()?)?
+        }
+        MusicSourceAction::SetAutoUpdate { enabled } => {
+            serde_json::to_value(crate::plugin_updates::set_enabled(enabled)?)?
+        }
         MusicSourceAction::Catalog => serde_json::to_value(catalog()?)?,
         MusicSourceAction::CatalogView => serde_json::to_value(catalog_view(false)?)?,
         MusicSourceAction::RefreshCatalog => serde_json::to_value(catalog_view(true)?)?,

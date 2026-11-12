@@ -1,3 +1,9 @@
+# Contributions
+
+- Write all commit messages, including the subject and body, in English.
+- Write pull request titles and descriptions in English; titles may become squash commit subjects.
+- Use English message keys in i18n code; keep translated text in locale resources.
+
 # Releases
 
 1. Fetch `origin/main` and use a clean checkout with passing CI.
@@ -11,8 +17,3 @@ Get approval before moving pushed tags. Create branches or worktrees only when e
 
 - Manage the minimum Rust version in root `Cargo.toml` and the compiler toolchain in `rust-toolchain.toml`.
 - Run iOS Cargo commands from `apps/ios`.
-
-# Contributions
-
-- Write commit messages, pull request titles, and pull request descriptions in English.
-- Use English message keys in i18n code; keep translated text in locale resources.

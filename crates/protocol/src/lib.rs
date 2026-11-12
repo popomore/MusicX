@@ -619,10 +619,19 @@ pub struct SourcePage {
     pub next_offset: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginUpdateSettings {
+    pub enabled: bool,
+}
+
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum MusicSourceAction {
     List,
+    AutoUpdateSettings,
+    SetAutoUpdate {
+        enabled: bool,
+    },
     Catalog,
     CatalogView,
     RefreshCatalog,

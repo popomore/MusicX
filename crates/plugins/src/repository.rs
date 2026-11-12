@@ -8,7 +8,7 @@ use std::{
     path::{Component, Path},
 };
 
-const API: &str = "https://api.github.com";
+pub(crate) const API: &str = "https://api.github.com";
 const MAX_ARCHIVE: u64 = 16 * 1024 * 1024;
 const MAX_SCRIPT: u64 = 2 * 1024 * 1024;
 
@@ -52,14 +52,11 @@ pub(crate) fn parse_repository(input: &str) -> Result<String> {
     Ok(repo.to_owned())
 }
 
-pub(crate) fn download(repo: &str) -> Result<Package> {
-    download_from(repo, API)
-}
-pub(crate) fn latest_version(repo: &str) -> Result<String> {
-    Ok(latest(repo, API)?.version)
+pub(crate) fn latest_version(repo: &str, api: &str) -> Result<String> {
+    Ok(latest(repo, api)?.version)
 }
 
-fn download_from(repo: &str, api: &str) -> Result<Package> {
+pub(crate) fn download_from(repo: &str, api: &str) -> Result<Package> {
     let release = latest(repo, api)?;
     let bytes =
         crate::http::fetch(&release.url, MAX_ARCHIVE).context(tr!("Plugin download failed"))?;

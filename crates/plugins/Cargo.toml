@@ -12,6 +12,7 @@ musicx-plugin-api = { path = "../plugin-api" }
 anyhow = "1"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
+semver = "1"
 reqwest = { version = "0.13", features = ["blocking", "form", "json", "query"] }
 aes = "0.8"
 base64 = "0.22"
