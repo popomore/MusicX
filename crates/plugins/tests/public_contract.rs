@@ -77,6 +77,8 @@ export function search({kind='tracks',query}={}) {
 }
 export function stream({id,quality}) {
   host.storage.set('stream',{id,quality});
+  if(id.startsWith('audio-url:')) return {url:id.slice('audio-url:'.length)};
+  if(id==='http-audio-with-headers') return {url:'http://fs.youthandroid2.kugou.com/fixture.mp3',headers:{Authorization:'fixture'}};
   if(id==='unsupported-headers') return {url:'https://example.com/track.mp3',headers:{Authorization:'fixture'}};
   return {url:'https://example.com/'+id+'.mp3',type:'mp3',headers:{'User-Agent':'Fixture Player'}};
 }
@@ -141,6 +143,29 @@ export function account() {
     );
     assert_eq!(media.url.as_str(), "https://example.com/track:123.mp3");
     assert_eq!(media.user_agent.as_deref(), Some("Fixture Player"));
+    for id in [
+        "audio-url:http://fs.youthandroid2.kugou.com/fixture.mp3?key=fixture",
+        "audio-url:HTTP://example.com:443/fixture.mp3",
+        "http-audio-with-headers",
+    ] {
+        let mut http_track = track.clone();
+        http_track.source.as_mut().unwrap().id = id.into();
+        let error = MYGO
+            .resolve(http_track, Default::default())
+            .err()
+            .expect("HTTP audio must be rejected before playback or proxy registration");
+        let expected = if std::env::var("MUSICX_LANGUAGE").as_deref() == Ok("zh-CN") {
+            "此来源返回了 HTTP 音频地址；MusicX 仅支持 HTTPS"
+        } else {
+            "This source returned an HTTP audio URL; MusicX requires HTTPS"
+        };
+        assert_eq!(error.to_string(), expected);
+    }
+    let https_url = "https://example.com/fixture.mp3?key=fixture&signature=a%2Bb";
+    let mut https_track = track.clone();
+    https_track.source.as_mut().unwrap().id = format!("audio-url:{https_url}");
+    let https_media = MYGO.resolve(https_track, Default::default()).unwrap();
+    assert_eq!(https_media.url.as_str(), https_url);
     let info = MYGO.info(media.track.clone());
     assert_eq!(info.lyrics.lines[0].start, 1000);
     assert_eq!(info.lyrics.lines[0].words[1].start, 1500);

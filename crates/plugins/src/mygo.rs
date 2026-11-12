@@ -1045,10 +1045,10 @@ pub fn resolve_with_quality(mut track: Track, quality: crate::protocol::Quality)
             .as_str()
             .context(tr!("The plugin returned no audio URL"))?,
     )?;
-    if url.scheme() == "http" {
-        url.set_scheme("https")
-            .map_err(|_| anyhow!(tr!("Invalid audio URL")))?;
-    }
+    ensure!(
+        url.scheme() != "http",
+        tr!("This source returned an HTTP audio URL; MusicX requires HTTPS")
+    );
     ensure!(
         url.scheme() == "https"
             && url.username().is_empty()

@@ -623,6 +623,7 @@
   "Source request failed": "来源调用失败",
   "Plugin track identifier missing": "缺少插件曲目标识",
   "The plugin returned no audio URL": "插件未返回音频地址",
+  "This source returned an HTTP audio URL; MusicX requires HTTPS": "此来源返回了 HTTP 音频地址；MusicX 仅支持 HTTPS",
   "The plugin returned an unsupported audio URL": "插件返回了不支持的音频地址",
   "Unsupported audio request headers": "音频请求头不受支持",
   "Audio request header values must be strings": "音频请求头值必须是字符串",
