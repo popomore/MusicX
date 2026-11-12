@@ -1,6 +1,7 @@
 //! A durable listening session contains metadata, never resolved audio URLs.
 use crate::protocol::{MAX_QUEUE_TRACKS, QueueContext, Status, Track};
 use anyhow::{Context, Result, ensure};
+use musicx_protocol::tr;
 use serde::{Deserialize, Serialize};
 use std::{io::ErrorKind, sync::Arc};
 
@@ -29,12 +30,15 @@ impl Session {
     }
 
     fn validate(&self) -> Result<()> {
-        ensure!(self.version == 1, "不支持的播放会话版本");
+        ensure!(
+            self.version == 1,
+            tr!("Unsupported playback session version")
+        );
         ensure!(
             self.queue.len() <= MAX_QUEUE_TRACKS
                 && self.index.is_none_or(|index| index < self.queue.len())
                 && self.queue.is_empty() == self.index.is_none(),
-            "无效的播放队列"
+            tr!("Invalid playback queue")
         );
         ensure!(
             self.position.is_finite()
@@ -44,14 +48,14 @@ impl Session {
                     .queue
                     .iter()
                     .all(|track| track.duration.is_finite() && track.duration >= 0.0),
-            "无效的播放进度"
+            tr!("Invalid playback position")
         );
         Ok(())
     }
 
     pub fn load() -> Result<Option<Self>> {
         let path = crate::protocol::data_dir()
-            .context("找不到用户目录")?
+            .context(tr!("User directory not found"))?
             .join(FILE);
         let bytes = match std::fs::read(path) {
             Ok(bytes) => bytes,

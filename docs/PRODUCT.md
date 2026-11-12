@@ -29,6 +29,14 @@ MusicX starts without a default source. Users explicitly add compatible MyGo Mus
 
 Connect accounts with QR sign-in or, where supported on macOS, an embedded web sign-in window. Credentials belong to the source's local account session. Imported playlists are local snapshots that remain available after signing out. Playback of their tracks still depends on the source and its account requirements.
 
+## Languages
+
+The macOS and iPhone interfaces support English and Simplified Chinese. Language
+in settings can follow the system or use an explicit choice, which takes effect
+immediately and is remembered. Music metadata, lyrics, and user playlist names
+remain in their original language. Installed plugins receive the same language
+preference and provide their own translations.
+
 ## Local data
 
 Install the macOS app by dragging MusicX from its disk image to Applications. Accounts, playlists, history, preferences, and the MCP token live in `~/Library/Application Support/MusicX/`. Installed plugins live in `mygo-plugins/`.

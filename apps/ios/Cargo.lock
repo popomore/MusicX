@@ -1992,8 +1992,10 @@ dependencies = [
 name = "musicx-protocol"
 version = "0.2.0"
 dependencies = [
+ "objc2-foundation",
  "schemars",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

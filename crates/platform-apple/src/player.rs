@@ -1,4 +1,5 @@
 use anyhow::{Result, anyhow};
+use musicx_core::protocol::tr;
 use musicx_core::{
     audio::{AudioOutput, AudioSnapshot, AudioState},
     player::{Message, Player, Reply},
@@ -28,7 +29,9 @@ thread_local! {
 }
 
 pub fn configure(source: &'static dyn DataSource) -> Result<()> {
-    SOURCE.set(source).map_err(|_| anyhow!("播放核心已配置"))
+    SOURCE
+        .set(source)
+        .map_err(|_| anyhow!(tr!("Playback core already configured")))
 }
 #[cfg(target_os = "macos")]
 pub(crate) fn artwork(url: &str) -> Option<Vec<u8>> {
@@ -70,7 +73,7 @@ impl AudioOutput for AppleAudio {
     fn load(output: &mut Option<Self>, media: &Media, play: bool, volume: f32) -> Result<()> {
         activate_audio_session()?;
         let url = NSURL::URLWithString(&NSString::from_str(media.url.as_str()))
-            .ok_or_else(|| anyhow!("无效的音频地址"))?;
+            .ok_or_else(|| anyhow!(tr!("Invalid audio URL")))?;
         let main = MainThreadMarker::new().expect("AVPlayer main thread");
         let output = output.get_or_insert_with(|| {
             let audio = Self {

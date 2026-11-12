@@ -10,6 +10,10 @@ publish = false
 name = "window_lifecycle"
 harness = false
 
+[[test]]
+name = "localization"
+harness = false
+
 [dependencies]
 musicx-protocol = { path = "../../../crates/protocol" }
 nsh-core = "=0.4.0"

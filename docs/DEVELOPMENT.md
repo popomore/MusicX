@@ -26,6 +26,31 @@ Use the same build settings and data directory when connecting to the test sessi
 
 Runtime overrides are `MUSICX_DATA_DIR`, `MUSICX_PORT`, and `MUSICX_WEB_AUTH`. Only these current names are supported; previous names are ignored, and previous data directories are not migrated. Production builds leave `MUSICX_BUILD_*` unset and use the MusicX name, `local.musicx` IDs, and the default listener.
 
+## UI languages
+
+MusicX supports English and Simplified Chinese on macOS and iPhone. Language in
+settings defaults to the system's preferred supported language, falling back to
+English. Choosing a language applies immediately and saves it in `language` in
+the app's data directory. The panel and background helper share this preference.
+`MUSICX_LANGUAGE=en` or `MUSICX_LANGUAGE=zh-CN` overrides it for isolated QA runs.
+
+Use `musicx_protocol::tr!` (or `crate::protocol::tr!` in the shared UI) for app
+messages. English source messages are gettext-style keys shared by the English
+and Simplified Chinese catalogs in `crates/protocol/src/locales/`. English is
+the fallback when a key is missing. Provide parameters explicitly:
+`tr!("View artist {}", name)` or `tr!("Like not saved: {e}"; e = error)`.
+Named parameters can be reordered in translations and user content is never
+interpreted as a template. Use the shared `i18n::tracks`, `playlists` and
+`relative_time` helpers for counts and relative timestamps. Catalog tests verify
+parameter parity; the headless localization test exercises real settings buttons,
+language persistence and refresh without resetting the playback model.
+
+Plugins receive the same `en` or `zh-CN` locale and use their own language files,
+with the other supported locale as a fallback for missing keys. Track titles,
+lyrics, user playlist names, and third-party errors retain their original text.
+The protected Liked Songs playlist has a localized display name; its persisted
+identity and name are preserved. MCP tool schemas retain their static descriptions.
+
 ## Package the macOS app
 
 Run the packager from the repository root. It builds a DMG for the build machine's architecture with `MusicX.app` and an Applications shortcut. The app includes its panel and web sign-in helpers.
