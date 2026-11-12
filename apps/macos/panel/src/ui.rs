@@ -795,7 +795,9 @@ pub fn App() -> impl IntoElement {
             refreshing.set(false);
         });
     });
-    dynamic(move || {
+    // Keep the application root at window height while its localized children
+    // are replaced. A bare root region otherwise gets an intrinsic-size host.
+    view().flex_1().child(dynamic(move || {
         model.language.get();
         // Only a language change should recreate static labels. Playback ticks
         // keep their fine-grained bindings and the same authoritative Model.
@@ -809,7 +811,7 @@ pub fn App() -> impl IntoElement {
                 mobile_shell(model)
             }
         })
-    })
+    }))
 }
 
 #[cfg(target_os = "ios")]

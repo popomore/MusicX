@@ -29,7 +29,10 @@ use musicx_protocol as protocol;
 use nsh_core::{Size, element::Root, prelude::*};
 use nsh_engine::EngineConfig;
 use nsh_testing::Headless;
-use std::time::Duration;
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 fn on_disconnected() {}
 
@@ -59,6 +62,55 @@ fn start() -> Headless {
     app
 }
 
+fn player_layout() {
+    let mut config = EngineConfig::new(Root::of::<ui::App>());
+    config.viewport = Size::new(px(320.0), px(512.0));
+    config.environment.window = config.viewport;
+    let mut player = Headless::start(config).unwrap();
+    let root = Arc::new(Mutex::new((None, None)));
+    let observed_root = root.clone();
+    player.observe(move |_, batch| {
+        let mut root = observed_root.lock().unwrap();
+        for item in &batch.items {
+            match item {
+                nsh_core::MountItem::Insert {
+                    parent: nsh_core::ROOT_ID,
+                    child,
+                    ..
+                } => {
+                    *root = (Some(*child), None);
+                }
+                nsh_core::MountItem::Frame { id, frame } if root.0 == Some(*id) => {
+                    root.1 = Some(frame.size);
+                }
+                _ => {}
+            }
+        }
+    });
+    player.first_render().unwrap();
+    assert_eq!(
+        root.lock().unwrap().1,
+        Some(Size::new(px(320.0), px(512.0))),
+        "the real application root must fill the window so the player body is not clipped"
+    );
+    for (language, width, height) in [("en", 628.0, 512.0), ("zh-CN", 320.0, 640.0)] {
+        std::fs::write(protocol::data_dir().unwrap().join("language"), language).unwrap();
+        protocol::i18n::refresh();
+        let size = Size::new(px(width), px(height));
+        player.set_viewport(size).unwrap();
+        player.wait(Duration::from_millis(600)).unwrap();
+        assert_eq!(
+            root.lock().unwrap().1,
+            Some(size),
+            "localized root must follow the window size"
+        );
+        assert!(
+            player.shows(protocol::tr!("Connecting to player…")),
+            "the player body must stay visible after resizing and changing language"
+        );
+    }
+}
+
 fn exercise() {
     let directory = protocol::data_dir().unwrap();
     assert_eq!(
@@ -67,6 +119,7 @@ fn exercise() {
     );
     std::fs::write(directory.join("language"), "zh-CN\n").unwrap();
     protocol::i18n::refresh();
+    player_layout();
     let mut app = start();
     assert!(app.shows("语言"));
     app.press("English").unwrap();
@@ -104,7 +157,7 @@ fn exercise() {
         "reopening settings must use the saved language"
     );
     println!(
-        "localization: system default, manual language switching, Model preservation and reopen passed"
+        "localization: real App layout, resizing, language refresh, system default, manual switching, Model preservation and reopen passed"
     );
 }
 
