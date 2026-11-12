@@ -1,4 +1,5 @@
 //! The disposable NSH process controls the existing background player.
+use crate::protocol::tr;
 use anyhow::{Context, Result, bail};
 use reqwest::blocking::Client;
 use std::sync::{OnceLock, mpsc};
@@ -40,8 +41,8 @@ pub enum Action {
 }
 pub type Reply = Option<oneshot::Sender<Result<Status>>>;
 fn read_token() -> Result<String> {
-    let directory = data_dir().context("找不到用户目录")?;
-    std::fs::read_to_string(directory.join("mcp-token")).context("请先启动后台播放器")
+    let directory = data_dir().context(tr!("找不到用户目录"))?;
+    std::fs::read_to_string(directory.join("mcp-token")).context(tr!("请先启动后台播放器"))
 }
 type Request = (Option<UiAction>, Reply);
 static REQUESTS: OnceLock<mpsc::Sender<Request>> = OnceLock::new();
@@ -70,11 +71,11 @@ pub fn start() -> Result<()> {
     let token = read_token()?;
     CONNECTION
         .set((client.clone(), token.clone()))
-        .map_err(|_| anyhow::anyhow!("界面连接已启动"))?;
+        .map_err(|_| anyhow::anyhow!(tr!("界面连接已启动")))?;
     let (send, receive) = mpsc::channel::<Request>();
     REQUESTS
         .set(send)
-        .map_err(|_| anyhow::anyhow!("界面客户端已经启动"))?;
+        .map_err(|_| anyhow::anyhow!(tr!("界面客户端已经启动")))?;
     std::thread::spawn(move || {
         for (action, reply) in receive {
             let result = request(&client, &token, action.as_ref());
@@ -117,10 +118,10 @@ fn request(client: &Client, token: &str, action: Option<&UiAction>) -> Result<St
     let response = request
         .bearer_auth(token.trim())
         .send()
-        .context("后台播放器连接失败")?;
+        .context(tr!("后台播放器连接失败"))?;
     if !response.status().is_success() {
         let error: serde_json::Value = response.json()?;
-        bail!("{}", error["error"].as_str().unwrap_or("后台请求失败"));
+        bail!("{}", error["error"].as_str().unwrap_or(tr!("后台请求失败")));
     }
     Ok(response.json()?)
 }
@@ -128,10 +129,10 @@ fn request(client: &Client, token: &str, action: Option<&UiAction>) -> Result<St
 fn send(action: Option<UiAction>, reply: Reply) {
     if let Some(sender) = REQUESTS.get() {
         if let Err(mpsc::SendError((_, Some(reply)))) = sender.send((action, reply)) {
-            let _ = reply.send(Err(anyhow::anyhow!("后台连接已经结束")));
+            let _ = reply.send(Err(anyhow::anyhow!(tr!("后台连接已经结束"))));
         }
     } else if let Some(reply) = reply {
-        let _ = reply.send(Err(anyhow::anyhow!("界面客户端未初始化")));
+        let _ = reply.send(Err(anyhow::anyhow!(tr!("界面客户端未初始化"))));
     }
 }
 
@@ -181,7 +182,7 @@ pub fn submit(action: Action, reply: Reply) {
         std::thread::spawn(move || {
             let result = CONNECTION
                 .get()
-                .context("界面连接尚未启动")
+                .context(tr!("界面连接尚未启动"))
                 .and_then(|(client, token)| request(client, token, action.as_ref()));
             if let Some(reply) = reply {
                 let _ = reply.send(result);
@@ -212,15 +213,15 @@ pub fn quit_background() {
 
 /// Catalog requests use their own short-lived worker so lyrics never delay pause/seek.
 pub fn read_json<T: serde::de::DeserializeOwned>(path: &str) -> Result<T> {
-    let (client, token) = CONNECTION.get().context("界面连接尚未启动")?;
+    let (client, token) = CONNECTION.get().context(tr!("界面连接尚未启动"))?;
     let response = client
         .get(format!("http://{}{path}", address()))
         .bearer_auth(token.trim())
         .send()
-        .context("后台连接失败")?;
+        .context(tr!("后台连接失败"))?;
     if !response.status().is_success() {
         let error: serde_json::Value = response.json()?;
-        bail!("{}", error["error"].as_str().unwrap_or("请求失败"));
+        bail!("{}", error["error"].as_str().unwrap_or(tr!("请求失败")));
     }
     Ok(response.json()?)
 }
@@ -229,17 +230,17 @@ pub fn post_json<B: serde::Serialize, T: serde::de::DeserializeOwned>(
     path: &str,
     body: &B,
 ) -> Result<T> {
-    let (client, token) = CONNECTION.get().context("界面连接尚未启动")?;
+    let (client, token) = CONNECTION.get().context(tr!("界面连接尚未启动"))?;
     let response = client
         .post(format!("http://{}{path}", address()))
         .timeout(Duration::from_secs(180))
         .bearer_auth(token.trim())
         .json(body)
         .send()
-        .context("后台连接失败")?;
+        .context(tr!("后台连接失败"))?;
     if !response.status().is_success() {
         let error: serde_json::Value = response.json()?;
-        bail!("{}", error["error"].as_str().unwrap_or("请求失败"));
+        bail!("{}", error["error"].as_str().unwrap_or(tr!("请求失败")));
     }
     Ok(response.json()?)
 }

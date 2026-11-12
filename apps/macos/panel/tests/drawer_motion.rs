@@ -222,7 +222,7 @@ fn escape_and_the_gap_close_on_both_sides() {
         app.press(side).unwrap();
         app.wait_for("text:opened:2 closed:1").unwrap();
         app.press_at(
-            "label:收起详情侧栏",
+            &format!("label:{}", musicx_protocol::tr!("收起详情侧栏")),
             point(px(if side == "Left" { 302.0 } else { 6.0 }), px(256.0)),
         )
         .unwrap();

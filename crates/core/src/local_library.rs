@@ -1,6 +1,7 @@
 //! On-demand local playlists. No background sync, audio cache or resident library copy.
 use crate::{metadata, protocol::*, storage};
 use anyhow::{Context, Result, ensure};
+use musicx_protocol::tr;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -31,9 +32,9 @@ fn read() -> Result<Library> {
     let path = storage::state_dir()?.join("local-playlists.json");
     match fs::File::open(&path) {
         Ok(file) => {
-            ensure!(file.metadata()?.len() <= MAX_BYTES, "本地歌单文件过大");
+            ensure!(file.metadata()?.len() <= MAX_BYTES, tr!("本地歌单文件过大"));
             serde_json::from_reader(std::io::BufReader::new(file))
-                .context("本地歌单文件无法读取，原文件保持不变")
+                .context(tr!("本地歌单文件无法读取，原文件保持不变"))
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Library::default()),
         Err(e) => Err(e.into()),
@@ -43,7 +44,7 @@ fn read() -> Result<Library> {
 fn save(library: &Library) -> Result<()> {
     ensure!(
         library.playlists.len() <= MAX_LISTS,
-        "最多创建200个本地歌单"
+        tr!("最多创建200个本地歌单")
     );
     ensure!(
         library
@@ -52,10 +53,10 @@ fn save(library: &Library) -> Result<()> {
             .map(|p| p.tracks.len())
             .sum::<usize>()
             <= MAX_TOTAL,
-        "本地歌单曲目总数超过50000首"
+        tr!("本地歌单曲目总数超过50000首")
     );
     let value = serde_json::to_string(library)?;
-    ensure!(value.len() as u64 <= MAX_BYTES, "本地歌单文件过大");
+    ensure!(value.len() as u64 <= MAX_BYTES, tr!("本地歌单文件过大"));
     storage::save_private("local-playlists.json", &value)?;
     REVISION.fetch_add(1, Ordering::Relaxed);
     Ok(())
@@ -65,7 +66,7 @@ fn name(value: String) -> Result<String> {
     let value = value.trim();
     ensure!(
         !value.is_empty() && value.chars().count() <= 80,
-        "歌单名称需为1至80个字"
+        tr!("歌单名称需为1至80个字")
     );
     Ok(value.to_owned())
 }
@@ -75,7 +76,7 @@ fn identity(track: &Track) -> String {
 }
 
 fn append(list: &mut LocalPlaylist, tracks: Vec<Track>) -> Result<()> {
-    ensure!(tracks.len() <= MAX_TRACKS, "一次最多添加10000首歌");
+    ensure!(tracks.len() <= MAX_TRACKS, tr!("一次最多添加10000首歌"));
     let mut keys: std::collections::HashSet<_> = list.tracks.iter().map(identity).collect();
     for track in tracks {
         ensure!(
@@ -84,20 +85,23 @@ fn append(list: &mut LocalPlaylist, tracks: Vec<Track>) -> Result<()> {
                 && track.artist.len() <= 4096
                 && track.duration.is_finite()
                 && track.duration >= 0.0,
-            "曲目信息不完整"
+            tr!("曲目信息不完整")
         );
         ensure!(
             track
                 .source
                 .as_ref()
                 .map_or(track.id > 0, |s| !s.plugin.is_empty() && !s.id.is_empty()),
-            "歌曲缺少来源标识"
+            tr!("歌曲缺少来源标识")
         );
         if keys.insert(identity(&track)) {
             list.tracks.push(track);
         }
     }
-    ensure!(list.tracks.len() <= MAX_TRACKS, "每个歌单最多10000首歌");
+    ensure!(
+        list.tracks.len() <= MAX_TRACKS,
+        tr!("每个歌单最多10000首歌")
+    );
     Ok(())
 }
 
@@ -153,7 +157,7 @@ impl Library {
         self.playlists
             .iter()
             .find(|p| p.id == id)
-            .context("本地歌单不存在，请刷新")
+            .context(tr!("本地歌单不存在，请刷新"))
     }
     fn edit(&mut self, action: LocalLibraryAction) -> Result<Value> {
         if let LocalLibraryAction::SetFavorite { track, liked } = action {
@@ -178,20 +182,20 @@ impl Library {
             | LocalLibraryAction::Add { id, .. }
             | LocalLibraryAction::Remove { id, .. }
             | LocalLibraryAction::Delete { id } => id,
-            _ => anyhow::bail!("无效的本地歌单操作"),
+            _ => anyhow::bail!(tr!("无效的本地歌单操作")),
         };
         let index = self
             .playlists
             .iter()
             .position(|p| &p.id == id)
-            .context("本地歌单不存在，请刷新")?;
+            .context(tr!("本地歌单不存在，请刷新"))?;
         if self.playlists[index].favorite
             && matches!(
                 action,
                 LocalLibraryAction::Delete { .. } | LocalLibraryAction::Rename { .. }
             )
         {
-            anyhow::bail!("我喜欢是收藏歌单，可移除歌曲，不能重命名或删除");
+            anyhow::bail!(tr!("我喜欢是收藏歌单，可移除歌曲，不能重命名或删除"));
         }
         if matches!(action, LocalLibraryAction::Delete { .. }) {
             self.playlists.remove(index);
@@ -201,15 +205,15 @@ impl Library {
         match action {
             LocalLibraryAction::Rename { name: title, .. } => list.name = name(title)?,
             LocalLibraryAction::SetPinned { pinned, .. } => {
-                ensure!(!list.favorite, "我喜欢已固定在首位");
+                ensure!(!list.favorite, tr!("我喜欢已固定在首位"));
                 list.pinned = pinned;
             }
             LocalLibraryAction::Add { tracks, .. } => append(list, tracks)?,
             LocalLibraryAction::Remove {
                 index, revision, ..
             } => {
-                ensure!(list.revision == revision, "歌单已更新，请刷新后再移除");
-                ensure!(index < list.tracks.len(), "无效的歌曲位置");
+                ensure!(list.revision == revision, tr!("歌单已更新，请刷新后再移除"));
+                ensure!(index < list.tracks.len(), tr!("无效的歌曲位置"));
                 list.tracks.remove(index);
             }
             _ => unreachable!(),
@@ -246,7 +250,7 @@ pub fn playlist(id: &str) -> Result<LocalPlaylist> {
 fn update(edit: impl FnOnce(&mut Library) -> Result<Value>) -> Result<Value> {
     let _guard = WRITER
         .lock()
-        .map_err(|_| anyhow::anyhow!("本地歌单暂时不可用"))?;
+        .map_err(|_| anyhow::anyhow!(tr!("本地歌单暂时不可用")))?;
     let mut library = read()?;
     let result = edit(&mut library)?;
     save(&library)?;
@@ -276,7 +280,7 @@ pub fn import(origin: PlaylistOrigin, tracks: Vec<Track>) -> Result<Value> {
 }
 
 pub fn favorite(key: &str) -> Result<FavoriteState> {
-    ensure!(!key.is_empty() && key.len() <= 2048, "无效的歌曲标识");
+    ensure!(!key.is_empty() && key.len() <= 2048, tr!("无效的歌曲标识"));
     Ok(read()?.favorite_state(key))
 }
 

@@ -1,12 +1,13 @@
 use musicx_mcp as mcp;
 use musicx_platform_apple::{desktop, player};
 use musicx_plugins::{MYGO, configure_web_auth, mygo};
+use musicx_protocol::tr;
 
 use anyhow::{Context, Result, bail};
 use std::process::ExitCode;
 
 fn run() -> Result<ExitCode> {
-    let web_auth_name = format!("{} 网页登录", desktop::APP_NAME);
+    let web_auth_name = tr!("{} 网页登录", desktop::APP_NAME);
     let mut args = std::env::args().skip(1);
     let command = args.next();
     if command.as_deref() == Some("package-app") {
@@ -18,24 +19,29 @@ fn run() -> Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
     if matches!(command.as_deref(), Some("plugin-install" | "plugin-update")) {
-        let directory = args
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("用法：musicx plugin-install/plugin-update <目录>"))?;
+        let directory = args.next().ok_or_else(|| {
+            anyhow::anyhow!(tr!("用法：musicx plugin-install/plugin-update <目录>"))
+        })?;
         if args.next().is_some() {
-            bail!("只接受一个插件目录");
+            bail!(tr!("只接受一个插件目录"));
         }
         println!(
-            "已保存 MyGo 插件 {}",
-            if command.as_deref() == Some("plugin-update") {
-                mygo::update_local(std::path::Path::new(&directory))?
-            } else {
-                mygo::install(std::path::Path::new(&directory))?
-            }
+            "{}",
+            tr!(
+                "已保存 MyGo 插件 {}",
+                if command.as_deref() == Some("plugin-update") {
+                    mygo::update_local(std::path::Path::new(&directory))?
+                } else {
+                    mygo::install(std::path::Path::new(&directory))?
+                }
+            )
         );
         return Ok(ExitCode::SUCCESS);
     }
     if args.next().is_some() {
-        bail!("用法：musicx [start|mcp-token|plugin-install/plugin-update <目录>]");
+        bail!(tr!(
+            "用法：musicx [start|mcp-token|plugin-install/plugin-update <目录>]"
+        ));
     }
     match command.as_deref() {
         None | Some("start") => {
@@ -53,9 +59,14 @@ fn run() -> Result<ExitCode> {
             println!("{}", mcp::read_token()?);
         }
         Some("--help" | "-h") => {
-            println!("用法：musicx [start|mcp-token|plugin-install/plugin-update <目录>]")
+            println!(
+                "{}",
+                tr!("用法：musicx [start|mcp-token|plugin-install/plugin-update <目录>]")
+            )
         }
-        _ => bail!("用法：musicx [start|mcp-token|plugin-install/plugin-update <目录>]"),
+        _ => bail!(tr!(
+            "用法：musicx [start|mcp-token|plugin-install/plugin-update <目录>]"
+        )),
     }
     Ok(ExitCode::SUCCESS)
 }

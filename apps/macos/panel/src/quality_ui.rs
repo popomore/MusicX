@@ -1,4 +1,5 @@
 //! Quality selection is anchored to the playback page, independent of detail navigation.
+use crate::protocol::tr;
 use crate::{
     controls::section,
     model::Model,
@@ -10,8 +11,8 @@ use nsh_core::prelude::*;
 fn actual(model: Model) -> String {
     model.status.with(|s| match &s.audio_quality {
         Some(quality) => quality.summary(),
-        None if s.state == State::Paused => "继续播放后显示".into(),
-        None => "来源未提供音质参数".into(),
+        None if s.state == State::Paused => tr!("继续播放后显示").into(),
+        None => tr!("来源未提供音质参数").into(),
     })
 }
 pub(super) fn badge(model: Model) -> impl IntoElement {
@@ -38,10 +39,7 @@ pub(super) fn badge(model: Model) -> impl IntoElement {
         .trigger(
             button()
                 .accessibility_label(move || {
-                    Some(SharedString::from(format!(
-                        "音质：{}，点击选择",
-                        actual(model)
-                    )))
+                    Some(SharedString::from(tr!("音质：{}，点击选择", actual(model))))
                 })
                 .disabled(move || model.status.with(|s| s.track.is_none()))
                 .px(px(6.0))
@@ -54,7 +52,7 @@ pub(super) fn badge(model: Model) -> impl IntoElement {
                         model.status.with(|s| {
                             s.audio_quality
                                 .as_ref()
-                                .map_or_else(|| "音质".into(), |q| q.short_label())
+                                .map_or_else(|| tr!("音质").into(), |q| q.short_label())
                         })
                     })
                     .text_size(px(10.0))
@@ -69,22 +67,25 @@ pub(super) fn controls(model: Model) -> impl IntoElement {
     view()
         .gap(px(8.0))
         .child(
-            view().gap(px(4.0)).child(section("本曲实际音质")).child(
-                text(move || actual(model))
-                    .text_size(px(13.0))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .number_of_lines(2)
-                    .text_color(move || theme().foreground),
-            ),
+            view()
+                .gap(px(4.0))
+                .child(section(tr!("本曲实际音质")))
+                .child(
+                    text(move || actual(model))
+                        .text_size(px(13.0))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .number_of_lines(2)
+                        .text_color(move || theme().foreground),
+                ),
         )
-        .child(section("播放偏好"))
+        .child(section(tr!("播放偏好")))
         .child(view().flex_row().gap(px(4.0)).child(each(
             || Quality::choices(true).to_vec(),
             |quality| *quality as u8,
             move |quality, _| {
                 button()
                     .accessibility_label(move || {
-                        Some(SharedString::from(format!(
+                        Some(SharedString::from(tr!(
                             "切换音质为{}",
                             quality.get().label()
                         )))
@@ -120,17 +121,17 @@ pub(super) fn controls(model: Model) -> impl IntoElement {
                     return model.error.get();
                 }
                 if model.quality_busy.get() {
-                    return "正在切换音质…".into();
+                    return tr!("正在切换音质…").into();
                 }
                 model.status.with(|s| {
                     let preference = s.preferred_quality;
                     let request = s.audio_quality.as_ref().map(|q| q.requested);
                     if preference == Quality::Hires {
-                        "已保存 Hi-Res，此来源按无损请求".into()
+                        tr!("已保存 Hi-Res，此来源按无损请求").into()
                     } else if let Some(request) = request {
-                        format!("本曲请求{}，下一首沿用播放偏好", request.label())
+                        tr!("本曲请求{}，下一首沿用播放偏好", request.label())
                     } else {
-                        "继续播放和下一首都会使用此偏好".into()
+                        tr!("继续播放和下一首都会使用此偏好").into()
                     }
                 })
             })

@@ -1,5 +1,6 @@
 //! Player-owned local playlists, independent of connected source accounts.
 use crate::controls::{action, caption, heading, primary};
+use crate::protocol::tr;
 use crate::{
     model::Model,
     protocol::{LocalLibraryAction as Edit, LocalPlaylist, LocalPlaylistSummary, Status},
@@ -48,7 +49,7 @@ impl Browser {
                     match result {
                         Ok(Ok(value)) => done(self, value),
                         Ok(Err(e)) => self.error.set(e.to_string()),
-                        Err(_) => self.error.set("请求已结束，请重试".into()),
+                        Err(_) => self.error.set(tr!("请求已结束，请重试").into()),
                     }
                 });
             })
@@ -122,9 +123,13 @@ impl Browser {
                 let tracks = if queue {
                     state.queue.as_ref().clone()
                 } else {
-                    vec![state.track.ok_or_else(|| anyhow::anyhow!("当前没有歌曲"))?]
+                    vec![
+                        state
+                            .track
+                            .ok_or_else(|| anyhow::anyhow!(tr!("当前没有歌曲")))?,
+                    ]
                 };
-                anyhow::ensure!(!tracks.is_empty(), "当前播放列表为空");
+                anyhow::ensure!(!tracks.is_empty(), tr!("当前播放列表为空"));
                 remote::post_json::<_, LocalPlaylist>(
                     "/ui/local-playlists",
                     &Edit::Add { id, tracks },
@@ -202,14 +207,14 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                 .items_center()
                                 .justify_between()
                                 .child(caption(move || {
-                                    this.lists.with(|v| format!("{} 张歌单", v.len()))
+                                    this.lists.with(|v| crate::protocol::i18n::playlists(v.len()))
                                 }))
                                 .child(
                                     view()
                                         .flex_row()
                                         .gap(px(2.0))
                                         .child(action(
-                                            "新建歌单",
+                                            tr!("新建歌单"),
                                             move || this.busy.get(),
                                             move || {
                                                 this.name.set(String::new());
@@ -217,7 +222,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                             },
                                         ))
                                         .child(action(
-                                            "导入歌单",
+                                            tr!("导入歌单"),
                                             move || this.busy.get(),
                                             move || this.importing.set(true),
                                         )),
@@ -229,12 +234,12 @@ pub fn library_view(model: Model) -> impl IntoElement {
                         move || {
                             view()
                                 .gap(px(10.0))
-                                .child(heading("新建歌单"))
+                                .child(heading(tr!("新建歌单")))
                                 .child(
                                     input()
                                         .value(move || this.name.get())
-                                        .placeholder("歌单名称")
-                                        .label("新歌单名称")
+                                        .placeholder(tr!("歌单名称"))
+                                        .label(tr!("新歌单名称"))
                                         .on_change(move |v: &str| this.name.set(v.into()))
                                         .h(px(36.0))
                                         .px(px(10.0))
@@ -247,7 +252,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                         .flex_row()
                                         .gap(px(6.0))
                                         .child(primary(
-                                            "创建歌单",
+                                            tr!("创建歌单"),
                                             move || {
                                                 this.busy.get()
                                                     || this.name.with(|v| v.trim().is_empty())
@@ -259,7 +264,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                             },
                                         ))
                                         .child(action(
-                                            "取消新建",
+                                            tr!("取消新建"),
                                             move || this.busy.get(),
                                             move || {
                                                 this.creating.set(false);
@@ -283,15 +288,15 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                 .justify_center()
                                 .gap(px(10.0))
                                 .pb(px(64.0))
-                                .child(heading("还没有歌单"))
-                                .child(caption("把喜欢的歌曲收集在一起。"))
+                                .child(heading(tr!("还没有歌单")))
+                                .child(caption(tr!("把喜欢的歌曲收集在一起。")))
                                 .child(
                                     view()
                                         .mt(px(10.0))
                                         .gap(px(6.0))
                                         .items_center()
                                         .child(primary(
-                                            "新建歌单",
+                                            tr!("新建歌单"),
                                             move || this.busy.get(),
                                             move || {
                                                 this.name.set(String::new());
@@ -299,7 +304,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                             },
                                         ))
                                         .child(action(
-                                            "导入歌单",
+                                            tr!("导入歌单"),
                                             move || this.busy.get(),
                                             move || this.importing.set(true),
                                         )),
@@ -321,10 +326,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                             };
                                             button()
                                                 .accessibility_label(move || {
-                                                    Some(SharedString::from(format!(
-                                                        "打开本地歌单 {}",
-                                                        item().map_or_else(String::new, |p| p.name)
-                                                    )))
+                                                    Some(SharedString::from(tr!("打开本地歌单 {}", item().map_or_else(String::new, |p| p.display_name().to_owned()))))
                                                 })
                                                 .on_press(move || {
                                                     if let Some(p) = item() {
@@ -344,11 +346,8 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                                 .child(crate::controls::artwork(
                                                     move || item().and_then(|p| p.cover_url),
                                                     move || {
-                                                        format!(
-                                                            "{}封面",
-                                                            item().map_or_else(String::new, |p| p
-                                                                .name)
-                                                        )
+                                                        tr!("{}封面", item().map_or_else(String::new, |p| p
+                                                                .display_name().to_owned()))
                                                     },
                                                     40.0,
                                                 ))
@@ -361,7 +360,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                                             text(move || {
                                                                 item()
                                                                     .map_or_else(String::new, |p| {
-                                                                        p.name
+                                                                        p.display_name().to_owned()
                                                                     })
                                                             })
                                                             .number_of_lines(1)
@@ -371,14 +370,11 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                                         .child(caption(move || {
                                                             item().map_or_else(String::new, |p| {
                                                                 let prefix = if p.pinned {
-                                                                    "已置顶 · "
+                                                                    tr!("已置顶 · ")
                                                                 } else {
                                                                     ""
                                                                 };
-                                                                format!(
-                                                                    "{prefix}{} 首",
-                                                                    p.track_count
-                                                                )
+                                                                tr!("{prefix}{tracks}"; prefix = prefix, tracks = crate::protocol::i18n::tracks(p.track_count))
                                                             })
                                                         })),
                                                 )
@@ -387,7 +383,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                     .flex_1()
                                     .min_h(px(0.0))
                                     .estimated_item_size(px(56.0))
-                                    .label("本地歌单列表")
+                                    .label(tr!("本地歌单列表"))
                                 },
                             )
                         },
@@ -406,7 +402,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                             .flex_row()
                             .justify_between()
                             .child(action(
-                                "所有歌单",
+                                tr!("所有歌单"),
                                 move || this.busy.get(),
                                 move || this.lists(),
                             ))
@@ -414,7 +410,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                 move || !this.managing.get(),
                                 move || {
                                     action(
-                                        "管理歌单",
+                                        tr!("管理歌单"),
                                         move || this.busy.get(),
                                         move || {
                                             this.managing.set(true);
@@ -429,7 +425,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                 move || this.managing.get(),
                                 move || {
                                     action(
-                                        "完成管理",
+                                        tr!("完成管理"),
                                         move || this.busy.get(),
                                         move || {
                                             this.managing.set(false);
@@ -445,7 +441,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                         move || {
                             heading(move || {
                                 this.selected.with(|p| {
-                                    p.as_ref().map_or_else(String::new, |p| p.name.clone())
+                                    p.as_ref().map_or_else(String::new, |p| p.display_name().to_owned())
                                 })
                             })
                         },
@@ -453,7 +449,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                     .child(caption(move || {
                         this.selected.with(|p| {
                             p.as_ref().map_or_else(String::new, |p| {
-                                format!("{} 首 · 本地歌单", p.tracks.len())
+                                tr!("{tracks} · 本地歌单"; tracks = crate::protocol::i18n::tracks(p.tracks.len()))
                             })
                         })
                     }))
@@ -466,7 +462,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                     input()
                                         .value(move || this.name.get())
                                         .on_change(move |v: &str| this.name.set(v.into()))
-                                        .label("歌单名称")
+                                        .label(tr!("歌单名称"))
                                         .h(px(34.0))
                                         .px(px(8.0))
                                         .bg(move || theme().muted)
@@ -478,7 +474,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                         .flex_row()
                                         .gap(px(4.0))
                                         .child(primary(
-                                            "保存名称",
+                                            tr!("保存名称"),
                                             move || {
                                                 this.busy.get()
                                                     || this.name.with(|v| v.trim().is_empty())
@@ -493,7 +489,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                             },
                                         ))
                                         .child(action(
-                                            "取消重命名",
+                                            tr!("取消重命名"),
                                             move || this.busy.get(),
                                             move || this.editing.set(false),
                                         )),
@@ -510,7 +506,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                         .flex_row()
                                         .gap(px(6.0))
                                         .child(primary(
-                                            "播放歌单",
+                                            tr!("播放歌单"),
                                             move || {
                                                 model.starting.get()
                                                     || this.busy.get()
@@ -526,7 +522,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                             },
                                         ))
                                         .child(action(
-                                            "添加歌曲",
+                                            tr!("添加歌曲"),
                                             move || this.busy.get(),
                                             move || this.adding.update(|v| *v = !*v),
                                         )),
@@ -537,7 +533,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                         view()
                                             .gap(px(2.0))
                                             .child(action(
-                                                "加入当前歌曲",
+                                                tr!("加入当前歌曲"),
                                                 move || {
                                                     this.busy.get()
                                                         || model.status.with(|s| s.track.is_none())
@@ -545,7 +541,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                                 move || this.add(false),
                                             ))
                                             .child(action(
-                                                "加入播放队列",
+                                                tr!("加入播放队列"),
                                                 move || {
                                                     this.busy.get()
                                                         || model
@@ -581,7 +577,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                                     },
                                                     move || {
                                                         action(
-                                                            "取消置顶",
+                                                            tr!("取消置顶"),
                                                             move || {
                                                                 this.busy.get()
                                                                     || this.deleting.get()
@@ -592,7 +588,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                                 )
                                                 .otherwise(move || {
                                                     action(
-                                                        "置顶",
+                                                        tr!("置顶"),
                                                         move || {
                                                             this.busy.get() || this.deleting.get()
                                                         },
@@ -601,7 +597,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                                 }),
                                             )
                                             .child(action(
-                                                "重命名",
+                                                tr!("重命名"),
                                                 move || this.busy.get(),
                                                 move || {
                                                     if let Some(p) = this.selected.get() {
@@ -611,7 +607,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                                 },
                                             ))
                                             .child(action(
-                                                "删除歌单",
+                                                tr!("删除歌单"),
                                                 move || this.busy.get(),
                                                 move || this.deleting.set(true),
                                             ))
@@ -623,18 +619,18 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                         view()
                                             .gap(px(4.0))
                                             .child(caption(
-                                                "删除这张本地歌单？当前播放队列会保留。",
+                                                tr!("删除这张本地歌单？当前播放队列会保留。"),
                                             ))
                                             .child(
                                                 view()
                                                     .flex_row()
                                                     .child(action(
-                                                        "取消删除",
+                                                        tr!("取消删除"),
                                                         move || this.busy.get(),
                                                         move || this.deleting.set(false),
                                                     ))
                                                     .child(action(
-                                                        "确认删除歌单",
+                                                        tr!("确认删除歌单"),
                                                         move || this.busy.get(),
                                                         move || this.delete(),
                                                     )),
@@ -648,7 +644,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                             this.selected
                                 .with(|p| p.as_ref().is_some_and(|p| p.tracks.is_empty()))
                         },
-                        || caption("歌单为空，点「添加歌曲」加入当前歌曲或队列。"),
+                        || caption(tr!("歌单为空，点「添加歌曲」加入当前歌曲或队列。")),
                     ))
                     .child(when(
                         move || {
@@ -686,14 +682,10 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                                 .child(
                                                     button()
                                                         .accessibility_label(move || {
-                                                            Some(SharedString::from(format!(
-                                                                "播放本地歌单第{}首 {}",
-                                                                at.index() + 1,
-                                                                track().map_or_else(
+                                                            Some(SharedString::from(tr!("播放本地歌单第{}首 {}", at.index() + 1, track().map_or_else(
                                                                     String::new,
                                                                     |t| t.title
-                                                                )
-                                                            )))
+                                                                ))))
                                                         })
                                                         .disabled(move || {
                                                             model.starting.get() || this.busy.get()
@@ -717,13 +709,10 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                                                 track().and_then(|t| t.cover_url)
                                                             },
                                                             move || {
-                                                                format!(
-                                                                    "{}封面",
-                                                                    track().map_or_else(
+                                                                tr!("{}封面", track().map_or_else(
                                                                         String::new,
                                                                         |t| t.title
-                                                                    )
-                                                                )
+                                                                    ))
                                                             },
                                                             36.0,
                                                         ))
@@ -757,7 +746,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                                     move || this.managing.get(),
                                                     move || {
                                                         action(
-                                                            "移除",
+                                                            tr!("移除"),
                                                             move || this.busy.get(),
                                                             move || {
                                                                 if let Some(p) = this.selected.get()
@@ -777,7 +766,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                     .flex_1()
                                     .min_h(px(0.0))
                                     .estimated_item_size(px(52.0))
-                                    .label("本地歌单曲目")
+                                    .label(tr!("本地歌单曲目"))
                                 },
                             )
                         },
@@ -786,7 +775,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
         ))
         .child(when(
             move || this.busy.get() && !this.importing.get(),
-            || caption("正在读取或保存…"),
+            || caption(tr!("正在读取或保存…")),
         ))
         .child(when(
             move || this.error.with(|v| !v.is_empty()),

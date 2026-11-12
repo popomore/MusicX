@@ -1,5 +1,6 @@
 //! Download the configured catalog into the application's data directory on demand.
 use anyhow::{Context, Result, ensure};
+use musicx_core::protocol::tr;
 use musicx_core::storage;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -77,17 +78,17 @@ fn configured_url() -> Result<reqwest::Url> {
     let url = match std::env::var(URL_ENV) {
         Ok(url) => Some(url),
         Err(std::env::VarError::NotPresent) => None,
-        Err(error) => return Err(error).context("插件目录 URL 配置无效"),
+        Err(error) => return Err(error).context(tr!("插件目录 URL 配置无效")),
     };
     catalog_url(url.as_deref())
 }
 
 fn catalog_url(url: Option<&str>) -> Result<reqwest::Url> {
     let url = url.unwrap_or(DEFAULT_URL);
-    let url = reqwest::Url::parse(url.trim()).context("插件目录 URL 无效")?;
+    let url = reqwest::Url::parse(url.trim()).context(tr!("插件目录 URL 无效"))?;
     ensure!(
         matches!(url.scheme(), "http" | "https"),
-        "插件目录 URL 必须使用 HTTP 或 HTTPS"
+        tr!("插件目录 URL 必须使用 HTTP 或 HTTPS")
     );
     Ok(url)
 }
@@ -114,7 +115,7 @@ fn finish_refresh(key: &CatalogKey, failed: bool) {
     let mut registry = REFRESHES.lock().unwrap_or_else(|e| e.into_inner());
     let state = registry.entry(key.clone()).or_default();
     state.running = false;
-    state.warning = failed.then(|| "目录更新失败，正在显示已保存的目录".into());
+    state.warning = failed.then(|| tr!("目录更新失败，正在显示已保存的目录").into());
     state.retry_at = if failed { now() + 60 } else { 0 };
 }
 
@@ -171,8 +172,8 @@ fn view_from_mode(url: reqwest::Url, directory: &Path, force: bool) -> Result<Ca
         });
     }
     if !begin_refresh(&key, force) {
-        ensure!(!state(&key).running, "插件目录正在下载，请稍后重试");
-        anyhow::bail!("目录暂不可用，请稍后刷新，也可直接输入仓库添加");
+        ensure!(!state(&key).running, tr!("插件目录正在下载，请稍后重试"));
+        anyhow::bail!(tr!("目录暂不可用，请稍后刷新，也可直接输入仓库添加"));
     }
     let result = download(&url, directory);
     finish_refresh(&key, result.is_err());
@@ -190,31 +191,31 @@ fn download(url: &reqwest::Url, directory: &Path) -> Result<Vec<Entry>> {
         previous.as_ref().and_then(|cache| cache.etag.as_deref()),
         None,
     )
-    .context("无法读取远程插件目录")?;
+    .context(tr!("无法读取远程插件目录"))?;
     let mut cached = if response.status() == reqwest::StatusCode::NOT_MODIFIED {
-        let mut cached = previous.context("插件目录没有可复用的缓存")?;
+        let mut cached = previous.context(tr!("插件目录没有可复用的缓存"))?;
         cached.fetched_at = now();
         cached
     } else {
         let response = response
             .error_for_status()
-            .context("无法读取远程插件目录")?;
+            .context(tr!("无法读取远程插件目录"))?;
         let etag = response
             .headers()
             .get("etag")
             .and_then(|value| value.to_str().ok())
             .map(str::to_owned);
-        let bytes = crate::http::read(response, MAX_BYTES).context("无法读取远程插件目录")?;
+        let bytes = crate::http::read(response, MAX_BYTES).context(tr!("无法读取远程插件目录"))?;
         CachedCatalog {
             url: url.to_string(),
             fetched_at: now(),
             etag,
-            catalog: serde_json::from_slice(&bytes).context("远程插件目录 JSON 格式无效")?,
+            catalog: serde_json::from_slice(&bytes).context(tr!("远程插件目录 JSON 格式无效"))?,
         }
     };
     cached.catalog = lightweight_catalog(cached.catalog);
     let entries = parse(cached.catalog.clone())?;
-    write_cache(directory, &cached).context("无法保存插件目录缓存")?;
+    write_cache(directory, &cached).context(tr!("无法保存插件目录缓存"))?;
     Ok(entries)
 }
 
@@ -297,7 +298,8 @@ fn parse(catalog: Value) -> Result<Vec<Entry>> {
         Snapshot(Vec<Entry>),
         GitHub { items: Vec<Repository> },
     }
-    let catalog: Catalog = serde_json::from_value(catalog).context("远程插件目录 JSON 格式无效")?;
+    let catalog: Catalog =
+        serde_json::from_value(catalog).context(tr!("远程插件目录 JSON 格式无效"))?;
     let entries = match catalog {
         Catalog::Snapshot(entries) => entries,
         Catalog::GitHub { items } => items
@@ -313,7 +315,7 @@ fn parse(catalog: Value) -> Result<Vec<Entry>> {
     };
     ensure!(
         entries.iter().all(|row| valid_repository(&row.repo)),
-        "插件目录包含无效的仓库路径"
+        tr!("插件目录包含无效的仓库路径")
     );
     Ok(entries)
 }
@@ -444,7 +446,10 @@ mod tests {
                 .err()
                 .expect("invalid catalog");
             server.join().unwrap();
-            assert_eq!(error.to_string(), message);
+            assert_eq!(
+                error.to_string(),
+                musicx_core::protocol::i18n::text(message)
+            );
             assert!(!directory.0.join(CACHE_FILE).exists());
         }
     }

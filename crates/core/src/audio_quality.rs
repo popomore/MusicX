@@ -1,6 +1,7 @@
 //! One tiny persisted preference; no stream URLs or per-track probe caches.
 use crate::protocol::Quality;
 use anyhow::{Context, Result};
+use musicx_protocol::tr;
 use std::sync::{OnceLock, RwLock};
 
 fn preference() -> &'static RwLock<Quality> {
@@ -20,9 +21,9 @@ pub fn preferred() -> Quality {
 pub fn set_preferred(quality: Quality) -> Result<()> {
     let mut value = preference()
         .write()
-        .map_err(|_| anyhow::anyhow!("音质设置不可用"))?;
+        .map_err(|_| anyhow::anyhow!(tr!("音质设置不可用")))?;
     crate::storage::save_private("audio-quality.json", &serde_json::to_string(&quality)?)
-        .context("无法保存音质设置")?;
+        .context(tr!("无法保存音质设置"))?;
     *value = quality;
     Ok(())
 }
@@ -43,7 +44,7 @@ pub fn normalization_enabled() -> bool {
 pub fn set_normalization(enabled: bool) -> Result<()> {
     let mut value = normalization()
         .write()
-        .map_err(|_| anyhow::anyhow!("音量均衡设置不可用"))?;
+        .map_err(|_| anyhow::anyhow!(tr!("音量均衡设置不可用")))?;
     crate::storage::save_private("normalization.json", &serde_json::to_string(&enabled)?)?;
     *value = enabled;
     Ok(())

@@ -2,24 +2,30 @@
 use crate::{mygo, protocol::*};
 use anyhow::{Context, Result, ensure};
 use musicx_core::local_library;
+use musicx_core::protocol::tr;
 use serde_json::{Value, json};
 use std::collections::HashSet;
 
 fn source_id(source: &str) -> Result<&str> {
-    let id = source.strip_prefix("mygo:").context("请选择插件数据源")?;
-    ensure!(mygo::valid_id(id), "无效的数据源标识");
+    let id = source
+        .strip_prefix("mygo:")
+        .context(tr!("请选择插件数据源"))?;
+    ensure!(mygo::valid_id(id), tr!("无效的数据源标识"));
     Ok(id)
 }
 
 fn bounded_id(id: &str) -> Result<&str> {
-    ensure!(!id.is_empty() && id.len() <= 1024, "无效的来源项目标识");
+    ensure!(
+        !id.is_empty() && id.len() <= 1024,
+        tr!("无效的来源项目标识")
+    );
     Ok(id)
 }
 
 fn tracks(plugin: &str, rows: &[Value]) -> Result<Vec<Track>> {
-    ensure!(rows.len() <= MAX_QUEUE_TRACKS, "来源曲目超过10000首");
+    ensure!(rows.len() <= MAX_QUEUE_TRACKS, tr!("来源曲目超过10000首"));
     rows.iter()
-        .map(|v| mygo::catalog_track(plugin, v).context("来源曲目信息不完整"))
+        .map(|v| mygo::catalog_track(plugin, v).context(tr!("来源曲目信息不完整")))
         .collect()
 }
 
@@ -41,29 +47,29 @@ pub fn import(source: &str, liked: bool) -> Result<Value> {
     loop {
         ensure!(
             std::time::Instant::now() < deadline,
-            "来源导入超时，未保存不完整副本"
+            tr!("来源导入超时，未保存不完整副本")
         );
         let value = mygo::invoke(plugin, export, json!({"offset":all.len()}))?;
         ensure!(
             std::time::Instant::now() < deadline,
-            "来源导入超时，未保存不完整副本"
+            tr!("来源导入超时，未保存不完整副本")
         );
         let rows = if liked {
             value["tracks"].as_array()
         } else {
             value.as_array().or_else(|| value["tracks"].as_array())
         }
-        .context("来源未返回曲目列表")?;
+        .context(tr!("来源未返回曲目列表"))?;
         let page = tracks(plugin, rows)?;
         ensure!(
             all.len() + page.len() <= MAX_QUEUE_TRACKS,
-            "导入超过10000首，未保存不完整副本"
+            tr!("导入超过10000首，未保存不完整副本")
         );
         let continuing = liked && more(&value);
         if continuing {
-            ensure!(!page.is_empty(), "来源分页没有前进，未导入");
+            ensure!(!page.is_empty(), tr!("来源分页没有前进，未导入"));
             let fingerprint = serde_json::to_string(rows)?;
-            ensure!(seen.insert(fingerprint), "来源重复返回同一页，未导入");
+            ensure!(seen.insert(fingerprint), tr!("来源重复返回同一页，未导入"));
         }
         all.extend(page);
         if !continuing {
@@ -71,9 +77,9 @@ pub fn import(source: &str, liked: bool) -> Result<Value> {
         }
     }
     let label = if liked {
-        "云端喜欢"
+        tr!("云端喜欢")
     } else {
-        "云端播放记录"
+        tr!("云端播放记录")
     };
     local_library::import(
         PlaylistOrigin {
@@ -110,7 +116,7 @@ fn collection(plugin: &str, kind: &str, v: &Value) -> Option<SourceCollection> {
 
 pub fn browse(source: &str, kind: &str, id: &str, offset: u64) -> Result<SourcePage> {
     let plugin = source_id(source)?;
-    ensure!(offset <= MAX_QUEUE_TRACKS as u64, "分页超出范围");
+    ensure!(offset <= MAX_QUEUE_TRACKS as u64, tr!("分页超出范围"));
     if kind != "shows" {
         bounded_id(id)?;
     }
@@ -119,11 +125,11 @@ pub fn browse(source: &str, kind: &str, id: &str, offset: u64) -> Result<SourceP
         let rows = value
             .as_array()
             .or_else(|| value["shows"].as_array())
-            .context("来源未返回播客列表")?;
-        ensure!(rows.len() <= 1000, "来源播客过多");
+            .context(tr!("来源未返回播客列表"))?;
+        ensure!(rows.len() <= 1000, tr!("来源播客过多"));
         return Ok(SourcePage {
             id: "shows".into(),
-            title: "播客".into(),
+            title: tr!("播客").into(),
             collections: rows
                 .iter()
                 .filter_map(|v| collection(plugin, "show", v))
@@ -142,7 +148,7 @@ pub fn browse(source: &str, kind: &str, id: &str, offset: u64) -> Result<SourceP
         value["tracks"].as_array()
     };
     let rows = rows.map(Vec::as_slice).unwrap_or_default();
-    ensure!(!more(&value) || !rows.is_empty(), "来源分页没有前进");
+    ensure!(!more(&value) || !rows.is_empty(), tr!("来源分页没有前进"));
     Ok(SourcePage {
         id: id.into(),
         title: descriptor["name"]

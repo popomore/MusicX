@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, anyhow, ensure};
 use md5::{Digest, Md5};
+use musicx_core::protocol::tr;
 use reqwest::{Method, Url, blocking::Client, redirect::Policy};
 use rquickjs::{
     CatchResultExt, Context as JsContext, Function, Module, Runtime, Value as JsValue,
@@ -26,8 +27,8 @@ fn aes_ecb(key: &str, text: &str) -> Result<String> {
         cipher::{Block, BlockEncrypt, KeyInit},
     };
     let cipher =
-        Aes128::new_from_slice(key.as_bytes()).map_err(|_| anyhow!("AES密钥必须为16字节"))?;
-    ensure!(text.len() <= MAX_BODY as usize, "加密输入过大");
+        Aes128::new_from_slice(key.as_bytes()).map_err(|_| anyhow!(tr!("AES密钥必须为16字节")))?;
+    ensure!(text.len() <= MAX_BODY as usize, tr!("加密输入过大"));
     let padding = 16 - text.len() % 16;
     let mut bytes = text.as_bytes().to_vec();
     bytes.resize(bytes.len() + padding, padding as u8);
@@ -56,12 +57,12 @@ pub fn search_kind(plugin: &str, query: &str, kind: &str, offset: u64) -> Result
             kind,
             "tracks" | "albums" | "artists" | "playlists" | "shows"
         ),
-        "不支持此搜索类型"
+        tr!("不支持此搜索类型")
     );
     let query = query.trim();
     ensure!(
         !query.is_empty() && query.chars().count() <= 120,
-        "请输入 1 到 120 个字符"
+        tr!("请输入 1 到 120 个字符")
     );
     let mut result = invoke(
         plugin,
@@ -71,7 +72,9 @@ pub fn search_kind(plugin: &str, query: &str, kind: &str, offset: u64) -> Result
     if kind != "tracks" {
         return Ok(result);
     }
-    let rows = result["tracks"].as_array().context("来源未返回歌曲列表")?;
+    let rows = result["tracks"]
+        .as_array()
+        .context(tr!("来源未返回歌曲列表"))?;
     let tracks: Vec<_> = rows
         .iter()
         .filter_map(|row| catalog_track(plugin, row))
@@ -166,7 +169,7 @@ pub(crate) fn catalog_track(plugin: &str, value: &Value) -> Option<Track> {
                 id: id.chars().take(512).collect(),
                 name: album["name"]
                     .as_str()
-                    .unwrap_or("专辑")
+                    .unwrap_or(tr!("专辑"))
                     .chars()
                     .take(512)
                     .collect(),
@@ -242,7 +245,7 @@ pub(crate) fn fill_artwork(track: &mut Track) {
 
 pub fn source_name(plugin: &str) -> String {
     if !valid_id(plugin) {
-        return "未关联来源".into();
+        return tr!("未关联来源").into();
     }
     plugin_root()
         .and_then(|root| manifest(&root.join(plugin)))
@@ -266,8 +269,8 @@ pub(crate) fn source_repository(plugin: &str) -> Option<String> {
 }
 
 pub fn album(track: &Track) -> Result<crate::protocol::AlbumPage> {
-    let source = track.source.as_ref().context("缺少来源")?;
-    let mut album = track.album.clone().context("当前来源没有专辑信息")?;
+    let source = track.source.as_ref().context(tr!("缺少来源"))?;
+    let mut album = track.album.clone().context(tr!("当前来源没有专辑信息"))?;
     let result = invoke(&source.plugin, "album", json!({"id":album.id}))?;
     let descriptor = if result["album"].is_object() {
         &result["album"]
@@ -288,7 +291,7 @@ pub fn album(track: &Track) -> Result<crate::protocol::AlbumPage> {
 }
 
 pub fn lyrics(track: &Track) -> Result<crate::protocol::Lyrics> {
-    let source = track.source.as_ref().context("缺少来源")?;
+    let source = track.source.as_ref().context(tr!("缺少来源"))?;
     let result = invoke(&source.plugin, "lyrics", json!({"id":source.id}))?;
     Ok(parse_lyrics(&result))
 }
@@ -496,7 +499,7 @@ pub(crate) fn valid_id(id: &str) -> bool {
 
 pub(crate) fn manifest(dir: &Path) -> Result<Manifest> {
     let mut value: Manifest = serde_json::from_str(&fs::read_to_string(dir.join("plugin.json"))?)?;
-    ensure!(valid_id(&value.id), "无效的 MyGo 插件 ID");
+    ensure!(valid_id(&value.id), tr!("无效的 MyGo 插件 ID"));
     if value.name.is_empty() {
         value.name = value.id.clone();
     }
@@ -510,9 +513,12 @@ pub(crate) fn entry(dir: &Path, manifest: &Manifest) -> Result<PathBuf> {
             && path
                 .extension()
                 .is_some_and(|ext| ext == "js" || ext == "ts"),
-        "目前只支持插件目录内的 JavaScript 或 TypeScript 入口"
+        tr!("目前只支持插件目录内的 JavaScript 或 TypeScript 入口")
     );
-    ensure!(fs::metadata(&path)?.len() <= MAX_BODY, "插件入口超过 2 MiB");
+    ensure!(
+        fs::metadata(&path)?.len() <= MAX_BODY,
+        tr!("插件入口超过 2 MiB")
+    );
     Ok(path)
 }
 
@@ -526,23 +532,26 @@ fn install_mode(source: &Path, replace: bool) -> Result<String> {
     let manifest = manifest(source)?;
     ensure!(
         crate::music_sources::limitation(&manifest, false, false).is_none(),
-        "来源超出当前宿主支持范围"
+        tr!("来源超出当前宿主支持范围")
     );
     let script = entry(source, &manifest)?;
     let root = plugin_root()?;
     let target = root.join(&manifest.id);
-    ensure!(!replace || target.is_dir(), "请先安装此来源，再更新");
+    ensure!(!replace || target.is_dir(), tr!("请先安装此来源，再更新"));
     let _settings = crate::music_sources::SETTINGS_WRITER
         .lock()
-        .map_err(|_| anyhow!("配置写入暂不可用"))?;
+        .map_err(|_| anyhow!(tr!("配置写入暂不可用")))?;
     let _guard = PLUGIN_CALL
         .lock()
-        .map_err(|_| anyhow!("插件运行锁不可用"))?;
+        .map_err(|_| anyhow!(tr!("插件运行锁不可用")))?;
     ensure!(
         !crate::music_sources::auth_active(&manifest.id),
-        "请先完成或取消此来源的账号关联"
+        tr!("请先完成或取消此来源的账号关联")
     );
-    ensure!(replace || !target.exists(), "插件 {} 已存在", manifest.id);
+    ensure!(
+        replace || !target.exists(),
+        tr!("插件 {} 已存在", manifest.id)
+    );
     let pending = root.join(format!(
         ".install-{}",
         musicx_core::storage::random_hex::<8>()
@@ -561,9 +570,9 @@ fn install_mode(source: &Path, replace: bool) -> Result<String> {
             if path.exists() {
                 ensure!(
                     path.canonicalize()?.starts_with(source.canonicalize()?),
-                    "插件语言包路径无效"
+                    tr!("插件语言包路径无效")
                 );
-                ensure!(fs::metadata(&path)?.len() <= 65536, "插件语言包过大");
+                ensure!(fs::metadata(&path)?.len() <= 65536, tr!("插件语言包过大"));
                 let bytes = fs::read(path)?;
                 serde_json::from_slice::<std::collections::BTreeMap<String, String>>(&bytes)?;
                 fs::create_dir_all(pending.join("locales"))?;
@@ -576,7 +585,7 @@ fn install_mode(source: &Path, replace: bool) -> Result<String> {
         if replace && target.exists() {
             ensure!(
                 !fs::symlink_metadata(&target)?.file_type().is_symlink(),
-                "插件目录类型无效"
+                tr!("插件目录类型无效")
             );
             if target.join("settings.json").is_file() {
                 fs::copy(target.join("settings.json"), pending.join("settings.json"))?;
@@ -604,21 +613,21 @@ fn install_mode(source: &Path, replace: bool) -> Result<String> {
 }
 
 pub(crate) fn uninstall(id: &str) -> Result<()> {
-    ensure!(valid_id(id), "无效的插件 ID");
+    ensure!(valid_id(id), tr!("无效的插件 ID"));
     let _settings = crate::music_sources::SETTINGS_WRITER
         .lock()
-        .map_err(|_| anyhow!("配置写入暂不可用"))?;
+        .map_err(|_| anyhow!(tr!("配置写入暂不可用")))?;
     let _guard = PLUGIN_CALL
         .lock()
-        .map_err(|_| anyhow!("插件运行锁不可用"))?;
+        .map_err(|_| anyhow!(tr!("插件运行锁不可用")))?;
     ensure!(
         !crate::music_sources::auth_active(id),
-        "请先完成或取消此来源的账号关联"
+        tr!("请先完成或取消此来源的账号关联")
     );
     let target = plugin_root()?.join(id);
     ensure!(
         target.is_dir() && !fs::symlink_metadata(&target)?.file_type().is_symlink(),
-        "来源未安装或目录类型无效"
+        tr!("来源未安装或目录类型无效")
     );
     fs::remove_dir_all(target)?;
     let account = state_dir()?.join(format!("mygo-{id}-storage.json"));
@@ -633,17 +642,17 @@ pub(crate) fn uninstall(id: &str) -> Result<()> {
 pub(crate) fn minimum_version_limitation(m: &Manifest) -> Option<String> {
     let version = m.metadata.get("minAppVersion")?;
     let Some(version) = version.as_str() else {
-        return Some("插件最低版本声明格式无效".into());
+        return Some(tr!("插件最低版本声明格式无效").into());
     };
     if version.is_empty() {
         return None;
     }
     let parsed: Option<Vec<u64>> = version.split('.').map(|v| v.parse().ok()).collect();
     let Some(parsed) = parsed.filter(|v| v.len() == 3) else {
-        return Some("插件最低版本声明格式无效".into());
+        return Some(tr!("插件最低版本声明格式无效").into());
     };
     (parsed.as_slice() > [0, 1, 22].as_slice())
-        .then(|| format!("此插件要求 MyGo {version} 协议，当前兼容基线为 0.1.22"))
+        .then(|| tr!("此插件要求 MyGo {version} 协议，当前兼容基线为 0.1.22"; version = version))
 }
 
 pub fn list() -> Result<Value> {
@@ -695,13 +704,13 @@ pub(crate) fn permitted(url: &Url, hosts: &[String]) -> bool {
 fn fetch(client: &Client, input: &str, grants: &[String], deadline: Instant) -> Result<Value> {
     let input: Fetch = serde_json::from_str(input)?;
     let url = Url::parse(&input.url)?;
-    ensure!(permitted(&url, grants), "插件网络权限未覆盖目标");
+    ensure!(permitted(&url, grants), tr!("插件网络权限未覆盖目标"));
     let remaining = deadline.saturating_duration_since(Instant::now());
-    ensure!(!remaining.is_zero(), "插件请求超时");
+    ensure!(!remaining.is_zero(), tr!("插件请求超时"));
     let method = Method::from_bytes(input.method.as_deref().unwrap_or("GET").as_bytes())?;
     ensure!(
         matches!(method, Method::GET | Method::POST | Method::HEAD),
-        "不支持此 HTTP 方法"
+        tr!("不支持此 HTTP 方法")
     );
     let mut request = client
         .request(method, url)
@@ -711,14 +720,16 @@ fn fetch(client: &Client, input: &str, grants: &[String], deadline: Instant) -> 
             !["host", "connection", "proxy-authorization"]
                 .iter()
                 .any(|header| name.eq_ignore_ascii_case(header)),
-            "插件请求含有禁止的 HTTP 头"
+            tr!("插件请求含有禁止的 HTTP 头")
         );
         request = request.header(name, value);
     }
     if let Some(body) = input.body {
         request = request.body(body);
     }
-    let response = request.send().map_err(|_| anyhow!("插件网络请求失败"))?;
+    let response = request
+        .send()
+        .map_err(|_| anyhow!(tr!("插件网络请求失败")))?;
     let status = response.status().as_u16();
     // Preserve repeated Set-Cookie fields: joining them corrupts Expires dates.
     // These values stay inside the short-lived plugin VM, never in UI results.
@@ -734,7 +745,7 @@ fn fetch(client: &Client, input: &str, grants: &[String], deadline: Instant) -> 
         .collect();
     let mut bytes = Vec::new();
     response.take(MAX_BODY + 1).read_to_end(&mut bytes)?;
-    ensure!(bytes.len() as u64 <= MAX_BODY, "插件响应超过 2 MiB");
+    ensure!(bytes.len() as u64 <= MAX_BODY, tr!("插件响应超过 2 MiB"));
     Ok(json!({"status":status,"headers":headers,"body":String::from_utf8_lossy(&bytes)}))
 }
 
@@ -749,10 +760,10 @@ fn optional_json(path: &Path) -> Result<String> {
 pub fn invoke(id: &str, export: &str, args: Value) -> Result<Value> {
     let _guard = PLUGIN_CALL
         .lock()
-        .map_err(|_| anyhow!("插件运行锁不可用"))?;
+        .map_err(|_| anyhow!(tr!("插件运行锁不可用")))?;
     ensure!(
         !crate::music_sources::auth_active(id),
-        "此数据源正在关联账号，请先完成或取消"
+        tr!("此数据源正在关联账号，请先完成或取消")
     );
     invoke_inner(id, export, args, None, Duration::from_secs(18))
 }
@@ -767,7 +778,7 @@ pub(crate) fn invoke_sign_in(
     drop(
         PLUGIN_CALL
             .lock()
-            .map_err(|_| anyhow!("插件运行锁不可用"))?,
+            .map_err(|_| anyhow!(tr!("插件运行锁不可用")))?,
     );
     invoke_inner(
         id,
@@ -785,15 +796,15 @@ fn invoke_inner(
     login: Option<std::sync::Arc<crate::music_sources::LoginJob>>,
     timeout: Duration,
 ) -> Result<Value> {
-    ensure!(valid_id(id), "无效的插件 ID");
+    ensure!(valid_id(id), tr!("无效的插件 ID"));
     let dir = plugin_root()?.join(id);
-    let manifest = manifest(&dir).context("未安装此 MyGo 插件")?;
+    let manifest = manifest(&dir).context(tr!("未安装此 MyGo 插件"))?;
     if let Some(reason) = minimum_version_limitation(&manifest) {
         anyhow::bail!("{reason}");
     }
     ensure!(
         id == manifest.id && compatible(&manifest),
-        "此插件需要外部进程或远程播放"
+        tr!("此插件需要外部进程或远程播放")
     );
     let script = fs::read(entry(&dir, &manifest)?)?;
     let storage_name = format!("mygo-{id}-storage.json");
@@ -804,7 +815,7 @@ fn invoke_inner(
         if let Some(default) = &field.value {
             settings
                 .as_object_mut()
-                .context("插件设置格式错误")?
+                .context(tr!("插件设置格式错误"))?
                 .entry(&field.key)
                 .or_insert(json!(default));
         }
@@ -845,10 +856,10 @@ fn invoke_inner(
         let web_job=login.clone();let web_grants=grants.clone();let web_name=manifest.name.clone();
         global.set("__webSignIn",Function::new(ctx.clone(),move|text:String|{
             let result=(||->Result<Value>{
-                let job=web_job.clone().context("请先发起来源登录")?;
+                let job=web_job.clone().context(tr!("请先发起来源登录"))?;
                 crate::web_auth::sign_in(serde_json::from_str(&text)?,&web_grants,&web_name,job,deadline)
             })();
-            result.unwrap_or_else(|_|json!({"error":"网页登录未完成，请重试或使用扫码登录"})).to_string()
+            result.unwrap_or_else(|_|json!({"error":tr!("网页登录未完成，请重试或使用扫码登录")})).to_string()
         })?)?;
         global.set("__aesEcb", Function::new(ctx.clone(), |key: String, text: String| {
             match aes_ecb(&key, &text) {
@@ -970,14 +981,14 @@ fn invoke_inner(
                 .transpose()
         })()
         .catch(&ctx)
-        .map_err(|error| anyhow!("插件 {id} 的 {export} 失败：{error}"))?;
+        .map_err(|error| anyhow!(tr!("插件 {id} 的 {export} 失败：{error}"; id = id, export = export, error = error)))?;
         let result: Value = serde_json::from_str(
             &result.unwrap_or_else(|| "null".into()),
         )?;
         if result["ok"].as_bool() == Some(true) { Ok(result["value"].clone()) }
         else {
             let code = result["code"].as_str().unwrap_or_default();
-            let prompt = match code { "signIn" => "请先在音乐来源中关联账号", "setup" => "请检查来源设置", "unavailable" => "来源暂不能播放此项目", "unsupported" => "此来源未实现该能力", _ => "来源调用失败" };
+            let prompt = match code { "signIn" => tr!("请先在音乐来源中关联账号"), "setup" => tr!("请检查来源设置"), "unavailable" => tr!("来源暂不能播放此项目"), "unsupported" => tr!("此来源未实现该能力"), _ => tr!("来源调用失败") };
             Err(anyhow!(PluginFailure { code:code.into(), message: format!("{prompt}：{}", result["message"].as_str().unwrap_or_default().chars().take(512).collect::<String>()) }))
         }
     })
@@ -1002,16 +1013,16 @@ pub fn error_code(error: &anyhow::Error) -> Option<&str> {
 }
 
 pub fn resolve_with_quality(mut track: Track, quality: crate::protocol::Quality) -> Result<Media> {
-    let source = track.source.as_ref().context("缺少插件曲目标识")?;
+    let source = track.source.as_ref().context(tr!("缺少插件曲目标识"))?;
     let stream = invoke(
         &source.plugin,
         "stream",
         json!({"id":source.id,"quality":quality.plugin_quality()}),
     )?;
-    let mut url = Url::parse(stream["url"].as_str().context("插件未返回音频地址")?)?;
+    let mut url = Url::parse(stream["url"].as_str().context(tr!("插件未返回音频地址"))?)?;
     if url.scheme() == "http" {
         url.set_scheme("https")
-            .map_err(|_| anyhow!("无效的音频地址"))?;
+            .map_err(|_| anyhow!(tr!("无效的音频地址")))?;
     }
     ensure!(
         url.scheme() == "https"
@@ -1021,7 +1032,7 @@ pub fn resolve_with_quality(mut track: Track, quality: crate::protocol::Quality)
             && url.domain().is_some_and(|host| host.contains('.')
                 && !host.ends_with(".local")
                 && !host.ends_with(".localhost")),
-        "插件返回了不支持的音频地址"
+        tr!("插件返回了不支持的音频地址")
     );
     let mut request_headers = crate::assets::headers(&source.plugin, &url, "audio")?;
     if let Some(headers) = stream["headers"].as_object() {
@@ -1035,12 +1046,12 @@ pub fn resolve_with_quality(mut track: Track, quality: crate::protocol::Quality)
                         | "transfer-encoding"
                         | "proxy-authorization"
                 ),
-                "音频请求头不受支持"
+                tr!("音频请求头不受支持")
             );
-            let value = value.as_str().context("音频请求头值必须是字符串")?;
+            let value = value.as_str().context(tr!("音频请求头值必须是字符串"))?;
             reqwest::header::HeaderName::from_bytes(key.as_bytes())
-                .context("音频请求头名称无效")?;
-            reqwest::header::HeaderValue::from_str(value).context("音频请求头内容无效")?;
+                .context(tr!("音频请求头名称无效"))?;
+            reqwest::header::HeaderValue::from_str(value).context(tr!("音频请求头内容无效"))?;
             request_headers.insert(key.to_ascii_lowercase(), value.into());
         }
     }

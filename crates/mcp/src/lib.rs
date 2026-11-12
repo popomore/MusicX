@@ -1,4 +1,5 @@
 //! Streamable HTTP MCP and authenticated panel routes.
+use musicx_core::protocol::tr;
 mod local_library_ui;
 mod source_ui;
 
@@ -42,7 +43,7 @@ pub struct Services {
 
 pub fn read_token() -> Result<String> {
     fs::read_to_string(storage::state_dir()?.join("mcp-token"))
-        .context("请先启动播放器，再运行 musicx mcp-token")
+        .context(tr!("请先启动播放器，再运行 musicx mcp-token"))
 }
 
 async fn authorize(State(expected): State<Arc<String>>, request: Request, next: Next) -> Response {
@@ -66,7 +67,7 @@ async fn authorize(State(expected): State<Arc<String>>, request: Request, next: 
 
 pub fn start(services: Services) -> Result<()> {
     let address = address();
-    let listener = TcpListener::bind(address).context("无法监听 MCP，本机可能已启动播放器")?;
+    let listener = TcpListener::bind(address).context(tr!("无法监听 MCP，本机可能已启动播放器"))?;
     listener.set_nonblocking(true)?;
     let path = storage::state_dir()?.join("mcp-token");
     let token = match fs::read_to_string(&path) {
@@ -115,7 +116,7 @@ pub fn start(services: Services) -> Result<()> {
             axum::serve(listener, app).await
         });
         if let Err(error) = result {
-            eprintln!("MCP 服务退出：{error}");
+            eprintln!("{}", tr!("MCP 服务退出：{error}"; error = error));
         }
     });
     eprintln!("Streamable HTTP MCP：http://{address}/mcp");
@@ -142,8 +143,8 @@ async fn ui_status(services: Services, action: Action, include_queue: bool) -> U
     (services.submit)(action, Some(send));
     let status = tokio::time::timeout(Duration::from_secs(28), receive)
         .await
-        .map_err(|_| ui_error("播放器响应超时"))?
-        .map_err(|_| ui_error("播放器已经退出"))?
+        .map_err(|_| ui_error(tr!("播放器响应超时")))?
+        .map_err(|_| ui_error(tr!("播放器已经退出")))?
         .map_err(ui_error)?;
     let mut status = status;
     if !include_queue {
@@ -161,7 +162,7 @@ async fn current_track(
         .await?
         .0
         .track
-        .ok_or_else(|| ui_error("还没有播放歌曲"))
+        .ok_or_else(|| ui_error(tr!("还没有播放歌曲")))
 }
 async fn ui_info(
     State(services): State<Services>,
@@ -186,7 +187,7 @@ async fn ui_album(
         tokio::task::spawn_blocking(move || services.sources.album(track))
             .await
             .map_err(ui_error)?
-            .map_err(|_| ui_error("当前来源暂时无法提供这张专辑的曲目，可稍后重试"))?,
+            .map_err(|_| ui_error(tr!("当前来源暂时无法提供这张专辑的曲目，可稍后重试")))?,
     ))
 }
 async fn ui_history()
@@ -277,16 +278,16 @@ fn local_queue(services: Services, id: String, index: usize) -> Result<Action> {
 fn validate_list(tracks: &[protocol::Track], index: usize) -> Result<()> {
     anyhow::ensure!(
         !tracks.is_empty() && tracks.len() <= protocol::MAX_QUEUE_TRACKS,
-        "播放列表应包含1至10000首歌"
+        tr!("播放列表应包含1至10000首歌")
     );
-    anyhow::ensure!(index < tracks.len(), "无效的播放位置");
+    anyhow::ensure!(index < tracks.len(), tr!("无效的播放位置"));
     anyhow::ensure!(
         tracks.iter().all(|t| !t.title.is_empty()
             && t.title.len() <= 2048
             && t.artist.len() <= 4096
             && t.duration.is_finite()
             && t.duration >= 0.0),
-        "无效的曲目信息"
+        tr!("无效的曲目信息")
     );
     Ok(())
 }
@@ -323,23 +324,23 @@ async fn ui_restore(State(services): State<Services>, Json(snapshot): Json<Statu
 fn validate_snapshot(snapshot: &Status) -> Result<()> {
     anyhow::ensure!(
         snapshot.queue.len() <= protocol::MAX_QUEUE_TRACKS,
-        "队列过长"
+        tr!("队列过长")
     );
     anyhow::ensure!(
         snapshot
             .index
             .is_none_or(|index| index < snapshot.queue.len()),
-        "无效的队列位置"
+        tr!("无效的队列位置")
     );
     anyhow::ensure!(
         snapshot.queue.is_empty() == snapshot.index.is_none(),
-        "会话缺少当前曲目"
+        tr!("会话缺少当前曲目")
     );
     anyhow::ensure!(
         (0.0..=1.0).contains(&snapshot.volume)
             && snapshot.position.is_finite()
             && snapshot.position >= 0.0,
-        "无效的音量或进度"
+        tr!("无效的音量或进度")
     );
     anyhow::ensure!(
         snapshot.queue.iter().all(|track| !track.title.is_empty()
@@ -347,7 +348,7 @@ fn validate_snapshot(snapshot: &Status) -> Result<()> {
             && track.artist.len() <= 4096
             && track.duration.is_finite()
             && track.duration >= 0.0),
-        "无效的曲目信息"
+        tr!("无效的曲目信息")
     );
     Ok(())
 }
@@ -495,8 +496,8 @@ impl PlayerTools {
         (self.services.submit)(action, Some(send));
         let status: Status = tokio::time::timeout(Duration::from_secs(28), receive)
             .await
-            .map_err(|_| tool_error("播放器响应超时"))?
-            .map_err(|_| tool_error("播放器已退出"))?
+            .map_err(|_| tool_error(tr!("播放器响应超时")))?
+            .map_err(|_| tool_error(tr!("播放器已退出")))?
             .map_err(tool_error)?;
         output(status)
     }
@@ -513,7 +514,7 @@ impl PlayerTools {
     ) -> Result<CallToolResult, ErrorData> {
         let action: protocol::MusicSourceAction =
             serde_json::from_value(serde_json::to_value(input).map_err(tool_error)?)
-                .map_err(|_| tool_error("无效的数据源操作参数"))?;
+                .map_err(|_| tool_error(tr!("无效的数据源操作参数")))?;
         blocking(move || music_sources::execute(action))
             .await
             .and_then(output)
@@ -531,10 +532,16 @@ impl PlayerTools {
             input
                 .playlist_id
                 .clone()
-                .context("需要playlist_id")
+                .context(tr!("需要playlist_id"))
                 .map_err(tool_error)
         };
-        let title = || input.name.clone().context("需要name").map_err(tool_error);
+        let title = || {
+            input
+                .name
+                .clone()
+                .context(tr!("需要name"))
+                .map_err(tool_error)
+        };
         if matches!(input.action, LibraryOperation::List) {
             return blocking(local_library::lists).await.and_then(output);
         }
@@ -565,14 +572,20 @@ impl PlayerTools {
             LibraryOperation::Delete => Edit::Delete { id: id()? },
             LibraryOperation::Remove => Edit::Remove {
                 id: id()?,
-                index: input.index.context("需要index").map_err(tool_error)?,
-                revision: input.revision.context("需要revision").map_err(tool_error)?,
+                index: input.index.context(tr!("需要index")).map_err(tool_error)?,
+                revision: input
+                    .revision
+                    .context(tr!("需要revision"))
+                    .map_err(tool_error)?,
             },
             LibraryOperation::ImportSource => Edit::ImportSource {
-                source: input.source.context("需要source").map_err(tool_error)?,
+                source: input
+                    .source
+                    .context(tr!("需要source"))
+                    .map_err(tool_error)?,
                 playlist_id: input
                     .source_playlist_id
-                    .context("需要source_playlist_id")
+                    .context(tr!("需要source_playlist_id"))
                     .map_err(tool_error)?,
             },
             LibraryOperation::AddCurrent | LibraryOperation::AddQueue => {
@@ -580,7 +593,12 @@ impl PlayerTools {
                     .await
                     .map_err(|(_, v)| tool_error(v.0))?;
                 let tracks = if matches!(input.action, LibraryOperation::AddCurrent) {
-                    vec![snapshot.track.context("当前没有歌曲").map_err(tool_error)?]
+                    vec![
+                        snapshot
+                            .track
+                            .context(tr!("当前没有歌曲"))
+                            .map_err(tool_error)?,
+                    ]
                 } else {
                     snapshot.queue.as_ref().clone()
                 };
@@ -702,9 +720,9 @@ impl ServerHandler for PlayerTools {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("MusicX", env!("CARGO_PKG_VERSION")))
-            .with_instructions(
+            .with_instructions(musicx_core::protocol::i18n::text(
                 "选歌和控制本机 MusicX 播放器。导入个人歌单前，请在音乐来源设置中关联账号。",
-            )
+            ))
     }
 }
 

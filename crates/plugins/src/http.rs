@@ -1,4 +1,5 @@
 use anyhow::{Result, ensure};
+use musicx_core::protocol::tr;
 use std::{io::Read, time::Duration};
 
 pub(crate) fn request(
@@ -22,7 +23,7 @@ pub(crate) fn request(
 pub(crate) fn read(response: reqwest::blocking::Response, limit: u64) -> Result<Vec<u8>> {
     let mut out = Vec::new();
     response.take(limit + 1).read_to_end(&mut out)?;
-    ensure!(out.len() as u64 <= limit, "插件文件超过大小限制");
+    ensure!(out.len() as u64 <= limit, tr!("插件文件超过大小限制"));
     Ok(out)
 }
 

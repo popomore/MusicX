@@ -1,4 +1,5 @@
 //! Provider pages share the existing player; this state owns browsing only.
+use crate::protocol::tr;
 use crate::{
     controls::*,
     model::Model,
@@ -35,7 +36,7 @@ fn append_page(old: &mut SourcePage, mut page: SourcePage) -> Result<(), &'stati
     if old.tracks.len() + page.tracks.len() > crate::protocol::MAX_QUEUE_TRACKS
         || (page.more && (page.tracks.is_empty() || page.next_offset <= old.next_offset))
     {
-        return Err("来源分页没有前进，或曲目超过10000首");
+        return Err(tr!("来源分页没有前进，或曲目超过10000首"));
     }
     old.tracks.extend(page.tracks);
     old.more = page.more;
@@ -82,7 +83,7 @@ impl Browser {
                         }
                     }
                     Ok(Err(error)) => self.error.set(error.to_string()),
-                    Err(_) => self.error.set("加载已结束，请重试".into()),
+                    Err(_) => self.error.set(tr!("加载已结束，请重试").into()),
                 }
             })
         });
@@ -118,7 +119,7 @@ pub fn artist_links(model: Model) -> impl IntoElement {
         move |artist, _| {
             button()
                 .accessibility_label(move || {
-                    Some(SharedString::from(format!(
+                    Some(SharedString::from(tr!(
                         "查看歌手 {}",
                         artist.with(|a| a.name.clone())
                     )))
@@ -139,7 +140,7 @@ pub fn artist_links(model: Model) -> impl IntoElement {
                 .rounded(px(4.0))
                 .hover(|s| s.bg(theme().muted))
                 .child(
-                    text(move || artist.with(|a| format!("歌手 · {}", a.name)))
+                    text(move || artist.with(|a| tr!("歌手 · {}", a.name)))
                         .text_size(px(12.0))
                         .number_of_lines(1)
                         .text_color(move || theme().foreground),
@@ -169,7 +170,7 @@ pub fn episode_details(model: Model) -> impl IntoElement {
             },
             move || {
                 action(
-                    "查看所属播客",
+                    tr!("查看所属播客"),
                     || false,
                     move || {
                         if let Some((plugin, id)) = model.status.with(|s| {
@@ -214,7 +215,7 @@ pub fn browse(model: Model) -> impl IntoElement {
                 .items_center()
                 .justify_between()
                 .child(action(
-                    "返回",
+                    tr!("返回"),
                     move || this.busy.get(),
                     move || {
                         let mut history = this.history.get();
@@ -228,7 +229,7 @@ pub fn browse(model: Model) -> impl IntoElement {
                     },
                 ))
                 .child(action(
-                    "刷新",
+                    tr!("刷新"),
                     move || this.busy.get(),
                     move || this.load(this.action.get(), false),
                 )),
@@ -237,7 +238,7 @@ pub fn browse(model: Model) -> impl IntoElement {
         .child(caption(move || this.page.with(|p| p.description.clone())))
         .child(when(
             move || this.busy.get(),
-            || caption("正在读取来源内容…"),
+            || caption(tr!("正在读取来源内容…")),
         ))
         .child(when(
             move || this.error.with(|e| !e.is_empty()),
@@ -251,7 +252,7 @@ pub fn browse(model: Model) -> impl IntoElement {
                         .page
                         .with(|p| p.tracks.is_empty() && p.collections.is_empty())
             },
-            || caption("此来源暂无内容，可刷新重试。"),
+            || caption(tr!("此来源暂无内容，可刷新重试。")),
         ))
         .child(
             virtual_list(
@@ -271,8 +272,8 @@ pub fn browse(model: Model) -> impl IntoElement {
                         .accessibility_label(move || {
                             Some(SharedString::from(
                                 collection()
-                                    .map(|c| format!("打开 {}", c.name))
-                                    .or_else(|| track().map(|t| format!("播放 {}", t.title)))
+                                    .map(|c| tr!("打开 {}", c.name))
+                                    .or_else(|| track().map(|t| tr!("播放 {}", t.title)))
                                     .unwrap_or_default(),
                             ))
                         })
@@ -300,7 +301,7 @@ pub fn browse(model: Model) -> impl IntoElement {
                                     .and_then(|c| c.cover_url)
                                     .or_else(|| track().and_then(|t| t.cover_url))
                             },
-                            move || "来源封面".into(),
+                            move || tr!("来源封面").into(),
                             36.0,
                         ))
                         .child(
@@ -335,7 +336,7 @@ pub fn browse(model: Model) -> impl IntoElement {
             .flex_1()
             .min_h(px(0.0))
             .estimated_item_size(px(64.0))
-            .label("来源作品与播客"),
+            .label(tr!("来源作品与播客")),
         )
         .child(when(
             move || {
@@ -343,7 +344,7 @@ pub fn browse(model: Model) -> impl IntoElement {
             },
             move || {
                 action(
-                    "加载更多单集",
+                    tr!("加载更多单集"),
                     move || this.busy.get(),
                     move || {
                         if let Action::Show { source, id, .. } = this.action.get() {

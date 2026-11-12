@@ -20,22 +20,26 @@ fn all_sources_are_explicit_plugins() {
             .as_nanos()
     ));
     fs::create_dir(&directory).unwrap();
-    let result = Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "public_exports_child", "--nocapture"])
-        .env("MUSICX_PUBLIC_CONTRACT_CHILD", "1")
-        .env("MUSICX_PUBLIC_CONTRACT_ROOT", &directory)
-        .env("MUSICX_DATA_DIR", directory.join("state"))
-        .env("MUSICX_LANGUAGE", "zh-CN")
-        .env("MUSICX_PLUGIN_CATALOG_URL", "not-a-url")
-        .output()
-        .unwrap();
+    for language in ["zh-CN", "en"] {
+        let root = directory.join(language);
+        fs::create_dir(&root).unwrap();
+        let result = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "public_exports_child", "--nocapture"])
+            .env("MUSICX_PUBLIC_CONTRACT_CHILD", "1")
+            .env("MUSICX_PUBLIC_CONTRACT_ROOT", &root)
+            .env("MUSICX_DATA_DIR", root.join("state"))
+            .env("MUSICX_LANGUAGE", language)
+            .env("MUSICX_PLUGIN_CATALOG_URL", "not-a-url")
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{language}: {}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
     fs::remove_dir_all(&directory).unwrap();
-    assert!(
-        result.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&result.stdout),
-        String::from_utf8_lossy(&result.stderr)
-    );
 }
 
 #[test]
@@ -58,6 +62,11 @@ fn public_exports_child() {
     fs::write(
         fixture.join("locales/zh-CN.json"),
         r#"{"Hello source":"来源你好"}"#,
+    )
+    .unwrap();
+    fs::write(
+        fixture.join("locales/en.json"),
+        r#"{"Hello source":"Hello source"}"#,
     )
     .unwrap();
     fs::write(fixture.join("index.js"), r#"
@@ -158,7 +167,7 @@ export function account() {
             .is_err()
     );
     let info = MYGO.info(supplied);
-    assert_eq!(info.source_name, "未关联来源");
+    assert_eq!(info.source_name, musicx_core::protocol::tr!("未关联来源"));
     assert!(info.source_link.is_none());
     assert!(!root.join("state/mygo_source_catalog.json").exists());
     assert!(!root.join("state/mygo-plugins/netease").exists());
@@ -216,9 +225,16 @@ export function account() {
     .unwrap();
     assert!(execute(json!({"action":"import_liked","source":"mygo:fixture-source"})).is_err());
     assert_eq!(musicx_core::local_library::lists().unwrap().len(), before);
+    let translated = mygo::invoke("fixture-source", "translated", json!({})).unwrap();
+    let language = musicx_core::protocol::i18n::locale().tag();
+    assert_eq!(translated["language"], language);
     assert_eq!(
-        mygo::invoke("fixture-source", "translated", json!({})).unwrap()["text"],
-        "来源你好"
+        translated["text"],
+        if language == "en" {
+            "Hello source"
+        } else {
+            "来源你好"
+        }
     );
     let error = mygo::invoke("fixture-source", "requiresSignIn", json!({})).unwrap_err();
     assert_eq!(mygo::error_code(&error), Some("signIn"));

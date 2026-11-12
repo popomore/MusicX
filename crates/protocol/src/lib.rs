@@ -2,6 +2,7 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+pub mod i18n;
 mod update_channel;
 pub use update_channel::UpdateChannel;
 
@@ -161,9 +162,9 @@ pub enum Quality {
 impl Quality {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Standard => "标准",
-            Self::High => "高音质",
-            Self::Lossless => "无损",
+            Self::Standard => tr!("标准"),
+            Self::High => tr!("高音质"),
+            Self::Lossless => tr!("无损"),
             Self::Hires => "Hi-Res",
         }
     }
@@ -197,7 +198,7 @@ impl std::str::FromStr for Quality {
             "high" => Ok(Self::High),
             "lossless" => Ok(Self::Lossless),
             "hires" => Ok(Self::Hires),
-            _ => Err("音质应为standard、high、lossless或hires"),
+            _ => Err(tr!("音质应为standard、high、lossless或hires")),
         }
     }
 }
@@ -225,14 +226,14 @@ impl AudioQuality {
             return None;
         }
         match level {
-            "standard" => Some("标准"),
-            "higher" => Some("较高"),
-            "high" | "exhigh" => Some("高音质"),
-            "lossless" => Some("无损"),
+            "standard" => Some(tr!("标准")),
+            "higher" => Some(tr!("较高")),
+            "high" | "exhigh" => Some(tr!("高音质")),
+            "lossless" => Some(tr!("无损")),
             "hires" => Some("Hi-Res"),
-            "jyeffect" => Some("高清臻音"),
-            "sky" | "vivid" => Some("全景声"),
-            "jymaster" => Some("超清母带"),
+            "jyeffect" => Some(tr!("高清臻音")),
+            "sky" | "vivid" => Some(tr!("全景声")),
+            "jymaster" => Some(tr!("超清母带")),
             _ => None,
         }
     }
@@ -240,7 +241,7 @@ impl AudioQuality {
         self.level_label()
             .map(str::to_owned)
             .or_else(|| self.format.clone())
-            .unwrap_or_else(|| "音质未知".into())
+            .unwrap_or_else(|| tr!("音质未知").into())
     }
     pub fn summary(&self) -> String {
         let mut parts = Vec::with_capacity(5);
@@ -260,7 +261,7 @@ impl AudioQuality {
             parts.push(format!("{depth} bit"));
         }
         if parts.is_empty() {
-            "来源未提供音质参数".into()
+            tr!("来源未提供音质参数").into()
         } else {
             parts.join(" · ")
         }
@@ -457,6 +458,26 @@ pub struct LocalPlaylistSummary {
     pub imported_from: Option<PlaylistOrigin>,
     #[serde(default)]
     pub cover_url: Option<String>,
+}
+
+impl LocalPlaylist {
+    pub fn display_name(&self) -> &str {
+        if self.favorite {
+            tr!("我喜欢")
+        } else {
+            &self.name
+        }
+    }
+}
+
+impl LocalPlaylistSummary {
+    pub fn display_name(&self) -> &str {
+        if self.favorite {
+            tr!("我喜欢")
+        } else {
+            &self.name
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]

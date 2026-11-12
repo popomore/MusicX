@@ -1,4 +1,5 @@
 use anyhow::{Result, ensure};
+use musicx_protocol::tr;
 use serde::Deserialize;
 use url::Url;
 
@@ -26,7 +27,7 @@ impl Request {
                         && !h.ends_with(".local")
                         && !h.ends_with(".localhost"))
                     && url.port_or_known_default() == Some(443),
-                "无效的网页登录地址"
+                tr!("无效的网页登录地址")
             );
         }
         ensure!(
@@ -36,7 +37,7 @@ impl Request {
                     && s.len() <= 64
                     && s.bytes()
                         .all(|c| c.is_ascii_alphanumeric() || b"_-".contains(&c))),
-            "无效的登录完成条件"
+            tr!("无效的登录完成条件")
         );
         Ok(())
     }
