@@ -30,8 +30,8 @@ Runtime overrides are `MUSICX_DATA_DIR`, `MUSICX_PORT`, and `MUSICX_WEB_AUTH`. O
 
 `cargo test --locked -p musicx-platform-apple` includes both the FFT/PCM unit
 tests and an isolated real AVPlayer integration test. The integration test pumps
-the main run loop, plays generated stereo WAV fixtures with volume zero, and
-checks pause, seek, track replacement, and shutdown. It requires an operational
+the main run loop, plays generated stereo WAV fixtures with a silent lead-in and
+volume zero, and checks pause, seek, track replacement, and shutdown. It requires an operational
 macOS audio service. `cargo test --locked -p musicx-panel --test localization`
 also checks the production spectrum canvas, state changes, and stale-track
 filtering without an audio device.

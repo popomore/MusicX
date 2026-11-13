@@ -63,12 +63,20 @@ fn assert_tone(frame: &Spectrum, frequency: f32) {
         .0;
     assert!(
         frequency >= band_edge(peak.saturating_sub(1)) && frequency < band_edge(peak + 2),
-        "{frequency} Hz landed in band {peak}"
+        "{frequency} Hz landed in band {peak}, sample_rate={}, levels={:?}",
+        frame.sample_rate,
+        frame.bands
     );
     assert!(
         frame.bands[peak] > -15.0,
         "tap must capture PCM even with player volume zero"
     );
+}
+
+fn tone_started(frame: &Spectrum) -> bool {
+    // Live frames may legitimately contain silence during decoder preroll.
+    // Wait for audible fixture energy, then independently assert its frequency.
+    frame.state == SpectrumState::Live && frame.bands.iter().any(|level| *level > -15.0)
 }
 
 fn media(path: &Path, id: u64) -> Media {
@@ -114,7 +122,12 @@ fn wave(path: &Path, frequencies: [f32; 2]) {
     wav.extend(bytes.to_le_bytes());
     for i in 0..frames {
         let hz = frequencies[usize::from(i >= 48_000 * 4)];
-        let sample = 0.5 * (std::f32::consts::TAU * hz * i as f32 / 48_000.0).sin();
+        // A valid stream may begin with silence, just like AVPlayer preroll.
+        let sample = if i < 12_000 {
+            0.0
+        } else {
+            0.5 * (std::f32::consts::TAU * hz * i as f32 / 48_000.0).sin()
+        };
         wav.extend(sample.to_le_bytes());
         wav.extend((-sample).to_le_bytes());
     }
@@ -143,14 +156,14 @@ fn main() {
     player::configure(&Source).unwrap();
     player::submit(Action::Volume(0.0), None);
     player::submit(Action::Play(media(&first, 1)), None);
-    let live = wait_for(|frame| frame.state == SpectrumState::Live);
+    let live = wait_for(tone_started);
     assert_tone(&live, 1_000.0);
     player::submit(Action::Pause, None);
     let paused = wait_for(|frame| frame.state == SpectrumState::Idle);
     assert_eq!(paused.bands, [SPECTRUM_FLOOR_DB; 32]);
     // Re-load to resume without asking the fake source for a new URL.
     player::submit(Action::Play(media(&first, 1)), None);
-    wait_for(|frame| frame.state == SpectrumState::Live);
+    wait_for(tone_started);
     player::submit(
         Action::Seek {
             seconds: 5.0,
@@ -161,8 +174,7 @@ fn main() {
     let sought = wait_for(|frame| frame.state == SpectrumState::Live && frame.bands[27] > -15.0);
     assert_tone(&sought, 8_000.0);
     player::submit(Action::Play(media(&second, 2)), None);
-    let switched =
-        wait_for(|frame| frame.state == SpectrumState::Live && frame.track_key == "netease:2");
+    let switched = wait_for(|frame| tone_started(frame) && frame.track_key == "netease:2");
     assert_tone(&switched, 100.0);
     player::shutdown();
     assert!(spectrum::snapshot().state == SpectrumState::Idle);
