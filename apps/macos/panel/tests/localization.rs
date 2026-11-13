@@ -23,6 +23,7 @@ mod source_browser;
 mod sources_ui;
 #[path = "../src/ui.rs"]
 mod ui;
+use ui::spectrum_ui;
 #[path = "../src/updates.rs"]
 mod updates;
 use musicx_protocol as protocol;
@@ -111,6 +112,111 @@ fn player_layout() {
     }
 }
 
+#[component]
+fn SpectrumScreen() -> impl IntoElement {
+    use nsh_base::button;
+    use protocol::spectrum::{Spectrum, SpectrumState};
+    let model = model::Model::new();
+    model.status.update(|s| {
+        s.state = protocol::State::Playing;
+        s.track = Some(
+            serde_json::from_value(serde_json::json!({
+                "id": 1, "title": "Spectrum fixture", "artist": "MusicX", "duration": 8.0
+            }))
+            .unwrap(),
+        );
+    });
+    let frame = signal(Spectrum {
+        state: SpectrumState::Live,
+        track_key: "netease:1".into(),
+        sample_rate: 48_000.0,
+        bands: [-12.0; 32],
+    });
+    let disconnected = signal(false);
+    view()
+        .flex_1()
+        .px(px(20.0))
+        .child(
+            button()
+                .on_press(move || model.status.update(|s| s.state = protocol::State::Paused))
+                .child(text("Pause fixture")),
+        )
+        .child(
+            button()
+                .on_press(move || {
+                    model.status.update(|s| {
+                        s.state = protocol::State::Playing;
+                        s.track.as_mut().unwrap().id = 2;
+                    })
+                })
+                .child(text("Switch fixture")),
+        )
+        .child(
+            button()
+                .on_press(move || {
+                    frame.update(|s| {
+                        s.track_key = "netease:2".into();
+                        s.state = SpectrumState::Unavailable;
+                    });
+                })
+                .child(text("Unsupported fixture")),
+        )
+        .child(
+            button()
+                .on_press(move || disconnected.set(true))
+                .child(text("Disconnect fixture")),
+        )
+        .child(spectrum_ui::content(model, frame, disconnected))
+}
+
+fn spectrum_layout() {
+    let mut config = EngineConfig::new(Root::of::<SpectrumScreen>());
+    config.viewport = Size::new(px(296.0), px(512.0));
+    config.environment.window = config.viewport;
+    let mut app = Headless::start(config).unwrap();
+    let rectangles = Arc::new(Mutex::new(0));
+    let observed = rectangles.clone();
+    app.observe(move |_, batch| {
+        for item in &batch.items {
+            if let nsh_core::MountItem::Canvas { drawing, .. } = item {
+                *observed.lock().unwrap() = drawing
+                    .ops
+                    .iter()
+                    .filter(|op| matches!(op, nsh_core::canvas::CanvasOp::FillRect(_)))
+                    .count();
+            }
+        }
+    });
+    app.first_render().unwrap();
+    assert!(app.shows("Live audio · before volume adjustment"));
+    assert_eq!(
+        *rectangles.lock().unwrap(),
+        37,
+        "five grid lines plus 32 actual spectrum bars"
+    );
+    app.press("Pause fixture").unwrap();
+    assert!(app.shows("Paused"));
+    assert_eq!(
+        *rectangles.lock().unwrap(),
+        5,
+        "pause must clear all bars immediately"
+    );
+    app.press("Switch fixture").unwrap();
+    assert!(app.shows("Waiting for audio…"));
+    assert_eq!(
+        *rectangles.lock().unwrap(),
+        5,
+        "an old track's frame must never leak into another track"
+    );
+    app.press("Unsupported fixture").unwrap();
+    assert!(app.shows("Spectrum is unavailable for this stream"));
+    app.press("Disconnect fixture").unwrap();
+    assert!(app.shows("Spectrum connection lost"));
+    println!(
+        "spectrum UI: native canvas, live bars, pause, track identity, unsupported stream and disconnection passed"
+    );
+}
+
 fn exercise() {
     let directory = protocol::data_dir().unwrap();
     assert_eq!(
@@ -159,6 +265,7 @@ fn exercise() {
     println!(
         "localization: real App layout, resizing, language refresh, system default, manual switching, Model preservation and reopen passed"
     );
+    spectrum_layout();
 }
 
 fn main() {

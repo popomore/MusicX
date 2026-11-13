@@ -32,6 +32,9 @@ use desktop_ui::song_info as info;
 #[cfg(target_os = "macos")]
 #[path = "quality_ui.rs"]
 mod quality_ui;
+#[cfg(target_os = "macos")]
+#[path = "spectrum_ui.rs"]
+pub(crate) mod spectrum_ui;
 
 const PLACEHOLDER: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512"><rect width="512" height="512" fill="#e9e7e1"/><circle cx="256" cy="256" r="118" fill="#dedbd3"/><circle cx="256" cy="256" r="72" fill="#e9e7e1"/><path d="M282 190v117a30 30 0 1 1-16-27v-78l59-14v22z" fill="#939087"/></svg>"##;
 

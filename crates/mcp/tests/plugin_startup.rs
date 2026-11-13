@@ -58,6 +58,7 @@ fn startup_child() {
     }
     musicx_mcp::start(musicx_mcp::Services {
         submit,
+        spectrum: protocol::spectrum::Spectrum::default,
         quit: || {},
         sources: &musicx_plugins::MYGO,
     })

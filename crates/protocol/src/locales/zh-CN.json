@@ -659,5 +659,14 @@
   "Automatic plugin updates are disabled": "已关闭插件自动更新",
   "Automatic plugin updates are unavailable: {error}": "插件自动更新暂不可用：{error}",
   "Automatic update for plugin {id} failed; keeping the installed version: {error}": "插件 {id} 自动更新未完成，保留已安装版本：{error}",
-  "Could not start automatic plugin updates: {error}": "无法启动插件自动更新：{error}"
+  "Could not start automatic plugin updates: {error}": "无法启动插件自动更新：{error}",
+  "View spectrum": "查看频谱",
+  "Spectrum": "频谱",
+  "Audio frequency spectrum, 20 Hz to 20 kHz, -80 to 0 dBFS": "音频频谱，20 赫兹至 20 千赫，负 80 至 0 dBFS",
+  "Spectrum connection lost": "频谱连接已断开",
+  "Play a track to see its spectrum": "播放歌曲以查看频谱",
+  "Live audio · before volume adjustment": "实时音频 · 音量调节前",
+  "Spectrum is unavailable for this stream": "此音源暂不支持频谱显示",
+  "Waiting for audio…": "等待音频…",
+  "Low frequencies on the left, high frequencies on the right. Taller bars mean stronger sound.": "左侧为低频，右侧为高频。柱形越高，该频段的声音越强。"
 }

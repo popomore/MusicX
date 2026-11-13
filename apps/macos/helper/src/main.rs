@@ -52,6 +52,7 @@ fn run() -> Result<ExitCode> {
             player::configure(&MYGO)?;
             mcp::start(mcp::Services {
                 submit: player::submit,
+                spectrum: musicx_platform_apple::spectrum::snapshot,
                 quit: desktop::quit,
                 sources: &MYGO,
             })?;

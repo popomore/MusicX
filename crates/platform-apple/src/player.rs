@@ -17,7 +17,7 @@ use objc2_core_media::CMTime;
 use objc2_foundation::{NSDictionary, NSString, NSURL};
 use std::{
     cell::{Cell, RefCell},
-    sync::OnceLock,
+    sync::{Arc, OnceLock},
 };
 
 pub use musicx_core::player::{Action, State, Status};
@@ -54,6 +54,7 @@ pub fn tick() -> Status {
 
 pub fn shutdown() {
     PLAYER.with_borrow_mut(Player::shutdown);
+    crate::spectrum::clear();
 }
 
 struct AppleAudio {
@@ -61,6 +62,7 @@ struct AppleAudio {
     volume: Cell<f32>,
     gain: Cell<f32>,
     scale: Cell<f32>,
+    capture: Arc<crate::spectrum::Capture>,
 }
 
 fn activate_audio_session() -> Result<()> {
@@ -75,16 +77,20 @@ impl AudioOutput for AppleAudio {
         let url = NSURL::URLWithString(&NSString::from_str(media.url.as_str()))
             .ok_or_else(|| anyhow!(tr!("Invalid audio URL")))?;
         let main = MainThreadMarker::new().expect("AVPlayer main thread");
+        let capture = crate::spectrum::begin(musicx_core::protocol::track_key(&media.track));
         let output = output.get_or_insert_with(|| {
             let audio = Self {
                 player: unsafe { AVPlayer::new(main) },
                 volume: Cell::new(volume),
                 gain: Cell::new(1.0),
                 scale: Cell::new(1.0),
+                capture: capture.clone(),
             };
             audio.set_volume(volume);
             audio
         });
+        output.capture.set_running(false);
+        output.capture = capture.clone();
         output.gain.set(musicx_core::audio::normalization_scale(
             media.gain_db,
             media.peak,
@@ -102,6 +108,7 @@ impl AudioOutput for AppleAudio {
                 AVPlayerItem::playerItemWithURL(&url, main)
             };
             output.player.replaceCurrentItemWithPlayerItem(Some(&item));
+            crate::spectrum::attach(&item, capture);
         }
         if play {
             output.play();
@@ -119,6 +126,7 @@ impl AudioOutput for AppleAudio {
                 AVPlayerTimeControlStatus::WaitingToPlayAtSpecifiedRate => AudioState::Waiting,
                 _ => AudioState::Paused,
             };
+            self.capture.set_running(state == AudioState::Playing);
             AudioSnapshot {
                 position: self.player.currentTime().seconds(),
                 duration: item.as_ref().map(|item| item.duration().seconds()),
@@ -136,10 +144,12 @@ impl AudioOutput for AppleAudio {
     }
 
     fn play(&self) {
+        self.capture.set_running(true);
         unsafe { self.player.play() };
     }
 
     fn pause(&self) {
+        self.capture.set_running(false);
         unsafe { self.player.pause() };
     }
 
@@ -153,7 +163,10 @@ impl AudioOutput for AppleAudio {
     }
 
     fn seek(&self, seconds: f64, complete: impl Fn(bool) + Send + 'static) {
+        let serial = self.capture.begin_seek();
+        let capture = self.capture.clone();
         let completion = block2::RcBlock::new(move |finished: objc2::runtime::Bool| {
+            capture.complete_seek(serial);
             complete(finished.as_bool());
         });
         unsafe {

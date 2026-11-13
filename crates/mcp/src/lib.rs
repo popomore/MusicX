@@ -37,6 +37,7 @@ use musicx_protocol::{self as protocol, address};
 #[derive(Clone, Copy)]
 pub struct Services {
     pub submit: fn(Action, Reply),
+    pub spectrum: fn() -> protocol::spectrum::Spectrum,
     pub quit: fn(),
     pub sources: &'static dyn DataSource,
 }
@@ -105,6 +106,7 @@ pub fn start(services: Services) -> Result<()> {
             let app = Router::new()
                 .nest_service("/mcp", service)
                 .route("/ui/state", get(ui_state))
+                .route("/ui/spectrum", get(ui_spectrum))
                 .route("/ui/info", get(ui_info))
                 .route("/ui/album", get(ui_album))
                 .route("/ui/history", get(ui_history))
@@ -162,6 +164,10 @@ async fn ui_status(services: Services, action: Action, include_queue: bool) -> U
 }
 async fn ui_state(State(services): State<Services>) -> UiResult {
     ui_player(services, Action::DisplayStatus).await
+}
+
+async fn ui_spectrum(State(services): State<Services>) -> Json<protocol::spectrum::Spectrum> {
+    Json((services.spectrum)())
 }
 async fn current_track(
     services: Services,
@@ -891,6 +897,7 @@ mod tests {
             PlayerTools {
                 services: Services {
                     submit,
+                    spectrum: protocol::spectrum::Spectrum::default,
                     quit: || {},
                     sources: source,
                 },

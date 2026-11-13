@@ -24,6 +24,7 @@ enum Icon {
     Refresh,
     Minimize,
     Close,
+    Spectrum,
 }
 
 impl Icon {
@@ -68,6 +69,9 @@ impl Icon {
             }
             Self::Close => {
                 r#"<svg viewBox="0 0 24 24"><path d="m7 7 10 10M17 7 7 17" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>"#
+            }
+            Self::Spectrum => {
+                r#"<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M4 10v4m4-8v12m4-15v18m4-14v10m4-6v2"/></svg>"#
             }
         }
     }
@@ -125,6 +129,19 @@ fn header(model: Model) -> impl IntoElement {
         .h(px(26.0))
         .gap(px(2.0))
         .child(view().flex_1().min_w(px(12.0)).h_full().window_drag(true))
+        .child(small_button(
+            tr!("View spectrum"),
+            Icon::Spectrum,
+            move || {
+                model.open(
+                    if model.page.get() == Page::Spectrum && model.drawer_open.get() {
+                        Page::Player
+                    } else {
+                        Page::Spectrum
+                    },
+                );
+            },
+        ))
         .child(now_playing_button(model))
         .child(
             view()
@@ -365,6 +382,7 @@ pub(super) fn shell(model: Model) -> impl IntoElement {
                                             Page::Info => tr!("Track information"),
                                             Page::Lyrics => tr!("Lyrics"),
                                             Page::Settings => tr!("Settings"),
+                                            Page::Spectrum => tr!("Spectrum"),
                                             Page::Sources => tr!("Music sources"),
                                             Page::History => tr!("History"),
                                             Page::Library => tr!("My playlists"),
@@ -399,6 +417,10 @@ pub(super) fn shell(model: Model) -> impl IntoElement {
                                     move || model.open(Page::Player),
                                 )),
                         )
+                        .child(when(
+                            move || model.page.get() == Page::Spectrum,
+                            move || super::spectrum_ui::spectrum(model),
+                        ))
                         .child(when(
                             move || model.page.get() == Page::Lyrics,
                             move || super::lyrics_ui::lyrics(model),

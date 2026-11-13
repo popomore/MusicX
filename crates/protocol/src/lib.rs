@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 pub mod i18n;
+pub mod spectrum;
 mod update_channel;
 pub use update_channel::UpdateChannel;
 
