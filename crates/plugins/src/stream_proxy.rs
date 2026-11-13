@@ -17,6 +17,8 @@ use std::{
 struct Stream {
     url: Url,
     headers: BTreeMap<String, String>,
+    grants: Option<Vec<String>>,
+    content_type: Option<&'static str>,
     used: Instant,
     lease: Weak<()>,
 }
@@ -69,7 +71,37 @@ fn start() -> Result<Proxy> {
     Ok(Proxy { port, streams })
 }
 
-pub(crate) fn register(url: Url, headers: BTreeMap<String, String>) -> Result<(Url, Arc<()>)> {
+#[cfg(test)]
+fn register(url: Url, headers: BTreeMap<String, String>) -> Result<(Url, Arc<()>)> {
+    register_audio(url, headers, None)
+}
+
+pub(crate) fn register_audio(
+    url: Url,
+    headers: BTreeMap<String, String>,
+    content_type: Option<&'static str>,
+) -> Result<(Url, Arc<()>)> {
+    register_stream(url, headers, None, content_type)
+}
+
+pub(crate) fn register_restricted(
+    url: Url,
+    headers: BTreeMap<String, String>,
+    grants: Vec<String>,
+) -> Result<(Url, Arc<()>)> {
+    ensure!(
+        crate::mygo::permitted(&url, &grants),
+        tr!("Unsupported audio redirect URL")
+    );
+    register_stream(url, headers, Some(grants), None)
+}
+
+fn register_stream(
+    url: Url,
+    headers: BTreeMap<String, String>,
+    grants: Option<Vec<String>>,
+    content_type: Option<&'static str>,
+) -> Result<(Url, Arc<()>)> {
     let proxy = PROXY
         .get_or_init(|| start().map_err(|_| tr!("Could not start audio transfer").into()))
         .as_ref()
@@ -97,6 +129,8 @@ pub(crate) fn register(url: Url, headers: BTreeMap<String, String>) -> Result<(U
         Stream {
             url,
             headers,
+            grants,
+            content_type,
             used: Instant::now(),
             lease: Arc::downgrade(&lease),
         },
@@ -148,10 +182,12 @@ fn serve(mut socket: TcpStream, streams: &Mutex<BTreeMap<String, Stream>>) -> Re
         let mut map = streams
             .lock()
             .map_err(|_| anyhow::anyhow!(tr!("Audio transfer unavailable")))?;
-        map.get_mut(&key).map(|s| {
-            s.used = Instant::now();
-            s.clone()
-        })
+        map.get_mut(&key)
+            .filter(|s| s.grants.is_none() || s.lease.strong_count() > 0)
+            .map(|s| {
+                s.used = Instant::now();
+                s.clone()
+            })
     }) else {
         socket.write_all(
             b"HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
@@ -181,7 +217,11 @@ fn serve(mut socket: TcpStream, streams: &Mutex<BTreeMap<String, Stream>>) -> Re
                     .to_str()?,
             )?;
             ensure!(
-                valid_audio_redirect(&stream.url, &next),
+                valid_audio_redirect(&stream.url, &next)
+                    && stream.grants.as_ref().is_none_or(|grants| {
+                        crate::mygo::permitted(&next, grants)
+                            && stream.url.host_str() == next.host_str()
+                    }),
                 tr!("Unsupported audio redirect URL")
             );
             if next.host_str() != stream.url.host_str() {
@@ -197,12 +237,22 @@ fn serve(mut socket: TcpStream, streams: &Mutex<BTreeMap<String, Stream>>) -> Re
             "HTTP/1.1 {}\r\nConnection: close\r\n",
             response.status()
         )?;
-        for name in [
-            "content-type",
-            "content-length",
-            "content-range",
-            "accept-ranges",
-        ] {
+        let upstream_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok());
+        let content_type = if response.status().is_success()
+            && upstream_type
+                .is_none_or(|value| value.eq_ignore_ascii_case("application/octet-stream"))
+        {
+            stream.content_type.or(upstream_type)
+        } else {
+            upstream_type
+        };
+        if let Some(value) = content_type {
+            write!(socket, "content-type: {value}\r\n")?;
+        }
+        for name in ["content-length", "content-range", "accept-ranges"] {
             if let Some(value) = response.headers().get(name).and_then(|v| v.to_str().ok()) {
                 write!(socket, "{name}: {value}\r\n")?;
             }
@@ -322,9 +372,9 @@ mod tests {
             assert!(request.contains("authorization: fixture"));
             assert!(request.contains("referer: https://example.com/"));
             assert!(request.contains("range: bytes=2-4"));
-            socket.write_all(b"HTTP/1.1 206 Partial Content\r\nContent-Length: 3\r\nContent-Range: bytes 2-4/6\r\n\r\ncde").unwrap();
+            socket.write_all(b"HTTP/1.1 206 Partial Content\r\nContent-Type: application/octet-stream\r\nContent-Length: 3\r\nContent-Range: bytes 2-4/6\r\n\r\ncde").unwrap();
         });
-        let (url, _lease) = register(
+        let (url, _lease) = register_audio(
             format!("http://{address}/audio?signature=a%2Bb&key=fixture")
                 .parse()
                 .unwrap(),
@@ -332,6 +382,7 @@ mod tests {
                 ("authorization".into(), "fixture".into()),
                 ("referer".into(), "https://example.com/".into()),
             ]),
+            Some("audio/mp4"),
         )
         .unwrap();
         let response = Client::new()
@@ -340,6 +391,7 @@ mod tests {
             .send()
             .unwrap();
         assert_eq!(response.status().as_u16(), 206);
+        assert_eq!(response.headers()["content-type"], "audio/mp4");
         assert_eq!(response.headers()["content-range"], "bytes 2-4/6");
         assert_eq!(response.text().unwrap(), "cde");
         server.join().unwrap();

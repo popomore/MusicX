@@ -8,6 +8,18 @@ globalThis.host = Object.freeze({
     language: () => __language,
     t: text => Object.hasOwn(translations, text) ? translations[text] : text,
     setting: key => Object.hasOwn(settings, key) ? settings[key] : "",
+    ...(typeof __spawn === "function" ? { spawn: (program, args) => {
+        const result = JSON.parse(__spawn(JSON.stringify({ program, args })));
+        if (result.error) throw new Error(result.error);
+        // The bounded host operation has completed before the handle is returned.
+        return Object.freeze({
+            closeStdin() {},
+            readLine: async () => null,
+            wait: async () => result.status ?? 0,
+            errorOutput: () => result.stderr || "",
+            kill() {},
+        });
+    }} : {}),
     openURL: url => {
         const result=JSON.parse(__openURL(String(url)));
         if(result.error) throw new Error(result.error);

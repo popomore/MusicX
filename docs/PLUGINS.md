@@ -88,6 +88,7 @@ The host implements `platform`, `arch`, JSON `storage`, `setting`, `crypto.md5`,
 - **Loudness:** macOS Playback settings offer optional normalization, disabled by default. Source `gain` in dB and linear `peak` are used for attenuation and peak protection, with a 4 dB ReplayGain preamp. AVPlayer's volume scalar is capped at unity; MusicX does not amplify above unity. The listener's volume preference is preserved.
 - **Translations:** installed names, setting labels/help, and `host.t` use installed language files. `host.language()` defaults to `zh-CN`; `MUSICX_LANGUAGE=en` selects English plugin text when starting the helper. This does not translate the complete MusicX UI.
 - **Manifest:** omitted `name`, `version`, `main`, and `playback` use ID, empty version, `index.js`, and `stream` respectively. `minAppVersion` is validated against the MyGo 0.1.22 protocol baseline, not MusicX's own version. A higher minimum is rejected with an explanation.
+- **FFmpeg on macOS:** the Bilibili MyGo plugin's version probe and MP4-to-WAV fallback run during playback resolution. The host looks for FFmpeg in the two standard Homebrew locations. It fetches audio through its proxy using the plugin's HTTPS host grants and decodes to a private temporary WAV. Decoding shares the playback resolution deadline, is limited to 256 MiB of output, and must finish before playback starts. The WAV is removed when the playback lease ends. The host recognizes the loopback URL returned by the plugin as a reference to that WAV.
 - **Errors:** MyGo's `signIn`, `setup`, `unavailable`, and `unsupported` error codes retain their meaning in user messages. MCP source calls include a `plugin_code` in error data when available.
 
 Normal calls use a fresh 24 MiB QuickJS runtime with an 18-second deadline; sign-in can run for up to five minutes. Persist cross-call state through `host.storage`, rather than module globals, background timers, or long-lived processes. Plugin fetch responses remain bounded to 2 MiB.
@@ -105,7 +106,7 @@ Normal calls use a fresh 24 MiB QuickJS runtime with an 18-second deadline; sign
 | `stations`, `stationNext` | No radio/FM session. |
 | `comments`, `likeComment`, `postComment` | No comments UI/API. |
 | `playback:"remote"`, `remote*` | Only local stream playback. |
-| `host.spawn`, `host.dir`, `host.dataDir`, `host.removeDataDir` | No external programs or general plugin filesystem API. Process permissions are rejected. |
+| `host.spawn`, `host.dir`, `host.dataDir`, `host.removeDataDir` | macOS supports the FFmpeg playback operations described above. Other process permissions and general plugin filesystem APIs are unsupported. |
 | `network:["*"]`, HTTP plugin fetch, IP hosts, `.local`, custom ports | Plugin fetch retains explicit public HTTPS host grants on port 443; remote audio also accepts public HTTP on port 80. Arbitrary-network/self-hosted/LAN plugins may be incompatible. |
 | Local ZIP picker, install URL scheme, arbitrary bundled assets | GitHub packages and local-directory CLI only; only entry, manifest, settings and supported locale files are installed. |
 
