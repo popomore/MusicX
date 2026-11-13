@@ -626,6 +626,7 @@
   "This audio source uses an unencrypted HTTP connection": "This audio source uses an unencrypted HTTP connection",
   "View playback warnings": "View playback warnings",
   "View playback errors": "View playback errors",
+  "Loading audio": "Loading audio",
   "The plugin returned an unsupported audio URL": "The plugin returned an unsupported audio URL",
   "Unsupported audio request headers": "Unsupported audio request headers",
   "Audio request header values must be strings": "Audio request header values must be strings",

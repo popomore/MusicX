@@ -857,7 +857,16 @@ fn active_player(model: Model) -> impl IntoElement {
                     .child(
                         button()
                             .accessibility_label(move || {
-                                Some(if playing() { tr!("Pause") } else { tr!("Play") }.into())
+                                Some(
+                                    if super::playback_busy(model) {
+                                        tr!("Loading audio")
+                                    } else if playing() {
+                                        tr!("Pause")
+                                    } else {
+                                        tr!("Play")
+                                    }
+                                    .into(),
+                                )
                             })
                             .disabled(move || {
                                 model.status.with(|s| {
@@ -888,24 +897,22 @@ fn active_player(model: Model) -> impl IntoElement {
                             .hover(|s| s.opacity(0.88))
                             .active(|s| s.opacity(0.6))
                             .disabled_style(|s| s.opacity(0.22))
-                            .child(icon(
-                                move || if playing() { Icon::Pause } else { Icon::Play },
-                                22.0,
-                                true,
-                            )),
+                            .child(
+                                when(
+                                    move || super::playback_busy(model),
+                                    crate::controls::loading_indicator,
+                                )
+                                .otherwise(move || {
+                                    icon(
+                                        move || if playing() { Icon::Pause } else { Icon::Play },
+                                        22.0,
+                                        true,
+                                    )
+                                }),
+                            ),
                     )
                     .child(transport(model, false)),
-            )
-            .child(when(
-                move || model.status.with(|s| s.switching),
-                move || {
-                    text(tr!("Changing track…"))
-                        .text_size(px(11.0))
-                        .number_of_lines(2)
-                        .mt(px(8.0))
-                        .text_color(move || theme().muted_foreground)
-                },
-            )),
+            ),
     )
 }
 

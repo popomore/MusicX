@@ -626,6 +626,7 @@
   "This audio source uses an unencrypted HTTP connection": "此音源使用未加密的 HTTP 连接",
   "View playback warnings": "查看播放警告",
   "View playback errors": "查看播放错误",
+  "Loading audio": "正在加载音频",
   "The plugin returned an unsupported audio URL": "插件返回了不支持的音频地址",
   "Unsupported audio request headers": "音频请求头不受支持",
   "Audio request header values must be strings": "音频请求头值必须是字符串",

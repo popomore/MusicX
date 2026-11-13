@@ -3,6 +3,18 @@ use crate::protocol::tr;
 use nsh_base::{button, popover, theme};
 use nsh_core::prelude::*;
 
+pub fn loading_indicator() -> impl IntoElement {
+    use nsh_core::element::ImageSrc;
+    const GLYPH: &str = r#"<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="8" opacity=".25"/><path d="M12 4a8 8 0 0 1 8 8"/></svg>"#;
+    let glyph = || {
+        svg(|| ImageSrc::svg_markup(GLYPH))
+            .w(px(22.0))
+            .h(px(22.0))
+            .text_color(move || theme().primary_foreground)
+    };
+    when(reduce_motion, glyph).otherwise(move || glyph().animate_spin())
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum NoticeKind {
     Warning,

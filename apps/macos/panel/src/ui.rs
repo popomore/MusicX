@@ -40,6 +40,13 @@ fn time(seconds: f64) -> String {
     format!("{}:{:02}", whole / 60, whole % 60)
 }
 
+fn playback_busy(model: Model) -> bool {
+    model.starting.get()
+        || model
+            .status
+            .with(|s| s.switching || s.state == crate::protocol::State::Loading)
+}
+
 fn playback_notices(model: Model) -> impl IntoElement {
     crate::controls::notice_badge(
         move || model.status.with(|s| crate::model::key(s.track.as_ref())),
@@ -431,7 +438,9 @@ fn player(model: Model) -> impl IntoElement {
                     .child(
                         button()
                             .accessibility_label(move || {
-                                Some(if playing() {
+                                Some(if playback_busy(model) {
+                                    tr!("Loading audio").into()
+                                } else if playing() {
                                     tr!("Pause").into()
                                 } else {
                                     tr!("Play").into()
@@ -460,9 +469,15 @@ fn player(model: Model) -> impl IntoElement {
                             .disabled_style(|s| s.opacity(0.25))
                             .active(|s| s.opacity(0.65))
                             .child(
-                                text(move || if playing() { "Ⅱ" } else { "▶" })
-                                    .text_size(px(21.0))
-                                    .text_color(move || theme().primary_foreground),
+                                when(
+                                    move || playback_busy(model),
+                                    crate::controls::loading_indicator,
+                                )
+                                .otherwise(move || {
+                                    text(move || if playing() { "Ⅱ" } else { "▶" })
+                                        .text_size(px(21.0))
+                                        .text_color(move || theme().primary_foreground)
+                                }),
                             ),
                     )
                     .child(transport(model, false)),
@@ -500,22 +515,7 @@ fn player(model: Model) -> impl IntoElement {
                     .child(action(tr!("Music sources"), move || {
                         model.open(Page::Sources)
                     }))
-            }))
-            .child(
-                text(move || {
-                    model.status.with(|s| {
-                        if s.switching {
-                            tr!("Changing track…").into()
-                        } else {
-                            String::new()
-                        }
-                    })
-                })
-                .text_size(px(10.0))
-                .number_of_lines(1)
-                .mt(px(4.0))
-                .text_color(move || theme().muted_foreground),
-            ),
+            })),
     )
 }
 
