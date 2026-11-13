@@ -41,6 +41,7 @@ struct Panel {
     window: Retained<NSWindow>,
     view: Rc<AppView>,
     details_left: std::cell::Cell<bool>,
+    closed: std::cell::Cell<bool>,
 }
 struct SettingsPanel {
     window: Retained<NSWindow>,
@@ -238,10 +239,15 @@ define_class!(
                         .is_some_and(|window| window.windowNumber() == panel.window.windowNumber())
                 })
             });
+            if !settings_closed {
+                PANEL.with_borrow(|panel| {
+                    if let Some(panel) = panel { panel.closed.set(true); }
+                });
+            }
             dispatch2::DispatchQueue::main().exec_async(move || {
                 if settings_closed {
                     stop_settings();
-                    if !PANEL.with_borrow(|panel| panel.as_ref().is_some_and(|panel| panel.window.isVisible())) {
+                    if PANEL.with_borrow(|panel| panel.as_ref().is_none_or(|panel| panel.closed.get())) {
                         stop_panel();
                     }
                 } else if SETTINGS.with_borrow(Option::is_none) {
@@ -257,6 +263,7 @@ fn show_panel() {
     app.activate();
     PANEL.with_borrow(|panel| {
         if let Some(panel) = panel {
+            panel.closed.set(false);
             if panel.window.isMiniaturized() {
                 panel.window.deminiaturize(None);
             }
@@ -415,6 +422,7 @@ pub fn run_panel() -> ExitCode {
             window,
             view,
             details_left: std::cell::Cell::new(false),
+            closed: std::cell::Cell::new(false),
         })
     });
     update_details_side();
@@ -441,7 +449,7 @@ pub fn run_panel() -> ExitCode {
 }
 
 pub fn stop_panel() {
-    crate::source_browser::cancel_active_login();
+    crate::source_browser::cancel_active_logins();
     stop_settings();
     let panel = PANEL.with_borrow_mut(Option::take);
     if let Some(panel) = panel {

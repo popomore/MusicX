@@ -415,7 +415,7 @@ pub(super) fn shell(model: Model) -> impl IntoElement {
                             move || model.page.get() == Page::Sources,
                             move || {
                                 crate::source_browser::sources_view(
-                                    model,
+                                    move |action| model.open_source(action),
                                     move || model.open(Page::Player),
                                     move || model.open(Page::Library),
                                     None,

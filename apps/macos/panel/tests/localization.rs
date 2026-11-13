@@ -122,6 +122,56 @@ fn player_layout() {
     }
 }
 
+#[component]
+fn PlayerNavigationScreen() -> impl IntoElement {
+    let model = model::Model::new();
+    desktop::menus::connect(model);
+    view().child(text(move || {
+        match (model.page.get(), model.discovery.get()) {
+            (model::Page::Discovery, Some(protocol::MusicSourceAction::Shows { source }))
+                if model.drawer_open.get() =>
+            {
+                format!("Podcast source: {source}")
+            }
+            _ => "Player ready".into(),
+        }
+    }))
+}
+
+#[component]
+fn SettingsNavigationScreen() -> impl IntoElement {
+    let model = model::Model::new();
+    view()
+        .child(
+            nsh_base::button()
+                .on_press(|| {
+                    desktop::menus::request_source(protocol::MusicSourceAction::Shows {
+                        source: "qa-podcasts".into(),
+                    })
+                })
+                .child(text("Browse podcasts")),
+        )
+        .child(text(move || {
+            if model.page.get() == model::Page::Player && !model.drawer_open.get() {
+                "Settings remains independent"
+            } else {
+                "Settings opened a player page"
+            }
+        }))
+}
+
+fn source_navigation() {
+    let mut player =
+        Headless::start(EngineConfig::new(Root::of::<PlayerNavigationScreen>())).unwrap();
+    player.first_render().unwrap();
+    let mut settings =
+        Headless::start(EngineConfig::new(Root::of::<SettingsNavigationScreen>())).unwrap();
+    settings.first_render().unwrap();
+    settings.press("Browse podcasts").unwrap();
+    player.wait_for("text:Podcast source: qa-podcasts").unwrap();
+    assert!(settings.shows("Settings remains independent"));
+}
+
 fn exercise() {
     let directory = protocol::data_dir().unwrap();
     assert_eq!(
@@ -191,6 +241,8 @@ fn exercise() {
         app.shows("Language"),
         "reopening settings must use the saved language"
     );
+    drop(app);
+    source_navigation();
     println!(
         "localization: real App layout, settings sidebar, resizing, language refresh, system default, manual switching, Model preservation and reopen passed"
     );

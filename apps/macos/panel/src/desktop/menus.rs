@@ -116,7 +116,12 @@ impl MenuState {
     }
 }
 
-static COMMANDS: Mutex<Option<UnboundedSender<Command>>> = Mutex::new(None);
+enum Intent {
+    Command(Command),
+    Source(crate::protocol::MusicSourceAction),
+}
+
+static COMMANDS: Mutex<Option<UnboundedSender<Intent>>> = Mutex::new(None);
 thread_local! {
     static MENUS: RefCell<Menus> = RefCell::new(Menus::default());
 }
@@ -144,7 +149,14 @@ pub fn connect(model: Model) {
         });
     });
     spawn(async move {
-        while let Some(command) = receive.recv().await {
+        while let Some(intent) = receive.recv().await {
+            let command = match intent {
+                Intent::Source(action) => {
+                    model.open_source(action);
+                    continue;
+                }
+                Intent::Command(command) => command,
+            };
             let state = MenuState::read(model);
             if !state.allows(command) {
                 continue;
@@ -208,7 +220,7 @@ pub fn perform(tag: isize) {
             super::show_panel();
         }
         if let Some(sender) = &*COMMANDS.lock().unwrap() {
-            let _ = sender.send(command);
+            let _ = sender.send(Intent::Command(command));
         }
     }
 }
@@ -216,6 +228,14 @@ pub fn perform(tag: isize) {
 /// Navigation from another NSH surface still belongs to the player's model.
 pub fn request(command: Command) {
     dispatch2::DispatchQueue::main().exec_async(move || perform(command as isize));
+}
+
+/// A settings source browser navigates the player's model with its full action.
+pub fn request_source(action: crate::protocol::MusicSourceAction) {
+    if let Some(sender) = &*COMMANDS.lock().unwrap() {
+        let _ = sender.send(Intent::Source(action));
+    }
+    dispatch2::DispatchQueue::main().exec_async(super::show_panel);
 }
 
 pub fn refresh_language() {

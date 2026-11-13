@@ -646,7 +646,14 @@ fn flow(
             move || this.mode.get() == Mode::Plugins,
             move || {
                 crate::source_browser::sources_view(
-                    model,
+                    move |action| {
+                        #[cfg(target_os = "macos")]
+                        if only_sources {
+                            crate::desktop::menus::request_source(action);
+                            return;
+                        }
+                        model.open_source(action);
+                    },
                     move || this.home(),
                     move || {
                         if importing {

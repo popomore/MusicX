@@ -250,6 +250,26 @@ fn menu_checks() -> anyhow::Result<Vec<&'static str>> {
         on_main(move || settings_window().unwrap().windowNumber() == settings_id),
         "settings opened a duplicate window"
     );
+    on_main(|| app_window().1.miniaturize(None));
+    anyhow::ensure!(
+        wait_for(|_, window| window.isMiniaturized()),
+        "player did not minimize"
+    );
+    on_main(|| settings_window().unwrap().performClose(None));
+    anyhow::ensure!(
+        wait_for(|_, window| window.isMiniaturized() && settings_window().is_none()),
+        "closing settings destroyed the minimized player"
+    );
+    on_main(|| desktop::menus::perform(Command::Settings as isize));
+    anyhow::ensure!(
+        wait_for(|_, window| window.isMiniaturized() && settings_window().is_some()),
+        "settings did not reopen beside the minimized player"
+    );
+    on_main(reopen);
+    anyhow::ensure!(
+        wait_for(|_, window| !window.isMiniaturized() && window.isVisible()),
+        "minimized player failed to reopen"
+    );
     on_main(|| app_window().1.performClose(None));
     anyhow::ensure!(
         wait_for(|_, window| !window.isVisible() && settings_window().is_some()),
@@ -316,6 +336,7 @@ fn menu_checks() -> anyhow::Result<Vec<&'static str>> {
         "settings did not finish closing"
     );
     Ok(vec![
+        "closing settings preserves the minimized player",
         "hint direction follows native player moves",
         "standard menus",
         "empty playback actions disabled",
@@ -403,7 +424,7 @@ fn main() {
     });
     assert_eq!(desktop::run_panel(), std::process::ExitCode::SUCCESS);
     let passed = worker.join().unwrap().unwrap();
-    assert_eq!(passed.len(), if menus_only { 8 } else { 18 });
+    assert_eq!(passed.len(), if menus_only { 9 } else { 19 });
     for phase in passed {
         println!("{phase}: passed");
     }
