@@ -72,8 +72,15 @@ fn public_exports_child() {
     fs::write(fixture.join("index.js"), r#"
 export function search({kind='tracks',query}={}) {
   if(kind!=='tracks') return {[kind]:[{id:kind+':one',name:'Fixture '+kind}],more:false};
-  return {tracks:[{id:'track:123',name:'公开接口曲名',artists:[{id:'artist:one',name:'歌手'}],duration:60000,
-    album:{id:'album',name:'专辑',imageUrl:query==='private-cover'?'https://private.example.com/cover.jpg':'https://example.com/cover.jpg'}}],total:1,hasMore:false};
+  const track = {id:'track:123',name:'公开接口曲名',artists:[{id:'artist:one',name:'歌手'}],duration:60000,
+    album:{id:'album',name:'专辑',imageUrl:query==='private-cover'?'https://private.example.com/cover.jpg':'https://example.com/cover.jpg'}};
+  if(query==='playback-availability') return {tracks:[
+    {...track,id:'track:blocked',unavailable:true,providerPrivilege:10},
+    {...track,id:'track:allowed',unavailable:false},
+    {...track,id:'track:invalid',unavailable:'true'},
+    track
+  ],total:4,hasMore:false};
+  return {tracks:[track],total:1,hasMore:false};
 }
 export function stream({id,quality}) {
   host.storage.set('stream',{id,quality});
@@ -132,6 +139,17 @@ export function account() {
     );
     assert_eq!(track.source.as_ref().unwrap().id, "track:123");
     assert_eq!(track.artists[0].id, "artist:one");
+
+    let availability = mygo::search("fixture-source", "playback-availability", 0).unwrap();
+    let rows = availability["tracks"].as_array().unwrap();
+    assert_eq!(rows.len(), 4);
+    assert_eq!(rows[0]["unavailable"], true);
+    assert_eq!(rows[1]["unavailable"], false);
+    assert!(rows[2].get("unavailable").is_none());
+    assert!(rows[3].get("unavailable").is_none());
+    assert!(rows[0].get("providerPrivilege").is_none());
+    let blocked: musicx_core::protocol::Track = serde_json::from_value(rows[0].clone()).unwrap();
+    assert_eq!(blocked.source.as_ref().unwrap().id, "track:blocked");
     let media = MYGO
         .resolve_selection(track.clone(), Default::default())
         .unwrap();

@@ -78,12 +78,19 @@ pub fn search_kind(plugin: &str, query: &str, kind: &str, offset: u64) -> Result
     let rows = result["tracks"]
         .as_array()
         .context(tr!("The source returned no song list"))?;
-    let tracks: Vec<_> = rows
-        .iter()
-        .filter_map(|row| catalog_track(plugin, row))
-        .collect();
+    let mut tracks = Vec::with_capacity(rows.len());
+    for row in rows {
+        let Some(track) = catalog_track(plugin, row) else {
+            continue;
+        };
+        let mut track = serde_json::to_value(track)?;
+        if let Some(unavailable) = row["unavailable"].as_bool() {
+            track["unavailable"] = Value::Bool(unavailable);
+        }
+        tracks.push(track);
+    }
     remember_artwork(plugin, &result);
-    result["tracks"] = serde_json::to_value(tracks)?;
+    result["tracks"] = Value::Array(tracks);
     Ok(result)
 }
 
