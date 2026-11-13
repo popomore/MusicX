@@ -4,6 +4,8 @@ MusicX is a compact native player for people who choose music with an agent and 
 
 ## Playback on macOS
 
+The native menu bar provides application settings, standard editing, playback and volume commands, view navigation, window controls, and help. Settings uses Command-comma; Show Player uses Command-0; Now Playing, History, My Playlists, and Music Sources use Command-1 through Command-4. Playback actions are disabled when unavailable, and menu labels follow the selected interface language.
+
 The menu bar icon shows playback state and opens the compact player. Closing the window releases its resources while MusicX Helper keeps playing and recording history. The system's Now Playing controls and media keys remain available. To end the session and stop the helper, use Quit MusicX.
 
 The player shows the cover, track title, artist, album, audio quality badge, progress, and basic controls. The quality popover separates the reported stream quality from the listener's preference. The optional one-line lyric preview opens full lyrics, which follow playback and support seeking when the source provides timestamps. Track information links back to its source and album. Queue, history, playlists, and settings open beside the player so playback controls remain available.

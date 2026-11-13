@@ -13,6 +13,8 @@ pub enum Action {
     Resume,
     Previous,
     Next,
+    #[cfg(target_os = "macos")]
+    Volume(f32),
     Seek(f64),
     #[cfg(target_os = "macos")]
     SeekLyric {
@@ -210,6 +212,8 @@ pub fn submit(action: Action, reply: Reply) {
         Action::Resume => Some(UiAction::Resume),
         Action::Previous => Some(UiAction::Previous),
         Action::Next => Some(UiAction::Next),
+        #[cfg(target_os = "macos")]
+        Action::Volume(value) => Some(UiAction::Volume { value }),
         Action::Seek(seconds) => Some(UiAction::Seek {
             seconds,
             track_key: None,
