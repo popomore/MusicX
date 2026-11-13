@@ -1,5 +1,6 @@
 pub use crate::drawer::{DETAILS_GAP, DETAILS_WIDTH, EXPANDED_WIDTH, PLAYER_WIDTH};
-use crate::protocol::tr;
+#[path = "desktop/menus.rs"]
+pub mod menus;
 use nsh_platform_macos::objc2_app_kit::*;
 use nsh_platform_macos::{AppOptions, AppView, Root, set_ui_sets};
 use objc2::{
@@ -15,17 +16,10 @@ use objc2_foundation::{
 use std::{cell::RefCell, process::ExitCode, rc::Rc};
 thread_local! {
     static PANEL: RefCell<Option<Panel>> = const { RefCell::new(None) };
-    static MENU_TITLES: RefCell<Vec<(Retained<NSMenuItem>, &'static str)>> = const { RefCell::new(Vec::new()) };
 }
 
 pub fn refresh_language() {
-    dispatch2::DispatchQueue::main().exec_async(|| {
-        MENU_TITLES.with_borrow(|items| {
-            for (item, source) in items {
-                item.setTitle(&NSString::from_str(crate::protocol::i18n::text(source)));
-            }
-        });
-    });
+    dispatch2::DispatchQueue::main().exec_async(menus::refresh_language);
 }
 struct Panel {
     window: Retained<NSWindow>,
@@ -116,31 +110,6 @@ define_class!(
     }
 );
 
-fn item(
-    menu: &NSMenu,
-    delegate: &AnyObject,
-    title: &'static str,
-    selector: Option<objc2::runtime::Sel>,
-    key: &str,
-) -> Retained<NSMenuItem> {
-    let mtm = MainThreadMarker::new().expect("main thread");
-    // Every target is held for the lifetime of the menus and uses a matching selector.
-    let item = unsafe {
-        NSMenuItem::initWithTitle_action_keyEquivalent(
-            NSMenuItem::alloc(mtm),
-            &NSString::from_str(crate::protocol::i18n::text(title)),
-            selector,
-            &NSString::from_str(key),
-        )
-    };
-    unsafe {
-        item.setTarget(Some(delegate));
-    }
-    menu.addItem(&item);
-    MENU_TITLES.with_borrow_mut(|items| items.push((item.clone(), title)));
-    item
-}
-
 fn stop_application() {
     let mtm = MainThreadMarker::new().expect("main thread");
     let app = NSApplication::sharedApplication(mtm);
@@ -162,14 +131,41 @@ define_class!(
         fn reveal(&self, _notification: &NSNotification) {
             show_panel();
         }
-        #[unsafe(method(closePanel:))]
-        fn close(&self, _sender: Option<&AnyObject>) {
-            PANEL.with_borrow(|panel| { if let Some(panel) = panel { panel.window.performClose(None); } });
+        #[unsafe(method(showPlayer:))]
+        fn show_player(&self, _sender: Option<&AnyObject>) { show_panel(); }
+        #[unsafe(method(closeWindow:))]
+        fn close_window(&self, _sender: Option<&AnyObject>) {
+            let app = NSApplication::sharedApplication(MainThreadMarker::from(self));
+            if let Some(window) = app.keyWindow().or_else(|| app.mainWindow()) {
+                window.performClose(None);
+            } else {
+                PANEL.with_borrow(|panel| {
+                    if let Some(panel) = panel { panel.window.performClose(None); }
+                });
+            }
         }
+        #[unsafe(method(menuAction:))]
+        fn menu_action(&self, sender: &NSMenuItem) { menus::perform(sender.tag()); }
+        #[unsafe(method(showAbout:))]
+        fn show_about(&self, _sender: Option<&AnyObject>) { menus::show_about(); }
+        #[unsafe(method(showHelp:))]
+        fn show_help(&self, _sender: Option<&AnyObject>) { menus::open_help(false); }
+        #[unsafe(method(reportIssue:))]
+        fn report_issue(&self, _sender: Option<&AnyObject>) { menus::open_help(true); }
         #[unsafe(method(quit:))]
         fn quit(&self, _sender: Option<&AnyObject>) { crate::remote::quit_background(); }
         #[unsafe(method(checkForUpdates:))]
         fn check_updates(&self, _sender: Option<&AnyObject>) { crate::updates::check(); }
+    }
+    unsafe impl NSMenuItemValidation for PanelDelegate {
+        #[unsafe(method(validateMenuItem:))]
+        fn validate_menu_item(&self, item: &NSMenuItem) -> bool {
+            if item.action() == Some(sel!(checkForUpdates:)) {
+                std::env::var("MUSICX_UPDATER_PID").is_ok()
+            } else {
+                menus::enabled(item.tag())
+            }
+        }
     }
     unsafe impl NSApplicationDelegate for PanelDelegate {
         #[unsafe(method(applicationDidFinishLaunching:))]
@@ -250,48 +246,7 @@ pub fn run_panel() -> ExitCode {
     }
     let delegate: Retained<PanelDelegate> = unsafe { msg_send![PanelDelegate::alloc(mtm), init] };
     app.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
-    let bar = NSMenu::new(mtm);
-    let holder = NSMenuItem::new(mtm);
-    bar.addItem(&holder);
-    let menu = NSMenu::new(mtm);
-    menu.setAutoenablesItems(false);
-    item(
-        &menu,
-        &delegate,
-        "Check for Updates…",
-        Some(sel!(checkForUpdates:)),
-        "",
-    );
-    menu.addItem(&NSMenuItem::separatorItem(mtm));
-    item(
-        &menu,
-        &delegate,
-        "Close Panel",
-        Some(sel!(closePanel:)),
-        "w",
-    );
-    item(&menu, &delegate, "Quit MusicX", Some(sel!(quit:)), "q");
-    holder.setSubmenu(Some(&menu));
-    let edit_holder = NSMenuItem::new(mtm);
-    edit_holder.setTitle(&NSString::from_str(tr!("Edit")));
-    MENU_TITLES.with_borrow_mut(|items| items.push((edit_holder.clone(), "Edit")));
-    let edit = NSMenu::new(mtm);
-    for (title, selector, key) in [
-        ("Undo", sel!(undo:), "z"),
-        ("Redo", sel!(redo:), "Z"),
-        ("Cut", sel!(cut:), "x"),
-        ("Copy", sel!(copy:), "c"),
-        ("Paste", sel!(paste:), "v"),
-        ("Select All", sel!(selectAll:), "a"),
-    ] {
-        // Standard AppKit text actions follow the responder chain.
-        unsafe {
-            item(&edit, &delegate, title, Some(selector), key).setTarget(None);
-        }
-    }
-    edit_holder.setSubmenu(Some(&edit));
-    bar.addItem(&edit_holder);
-    app.setMainMenu(Some(&bar));
+    menus::install(&app, &delegate);
     set_ui_sets(vec![nsh_base::registry_of([
         (|registry: &mut nsh_core::element::Registry| {
             registry

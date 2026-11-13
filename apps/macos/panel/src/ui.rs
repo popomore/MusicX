@@ -803,6 +803,8 @@ fn info(model: Model) -> impl IntoElement {
 /// Native playback screen with on-demand album, lyrics and local history.
 pub fn App() -> impl IntoElement {
     let model = Model::new();
+    #[cfg(target_os = "macos")]
+    crate::desktop::menus::connect(model);
     #[cfg(target_os = "ios")]
     if let Err(error) = crate::initialize() {
         model

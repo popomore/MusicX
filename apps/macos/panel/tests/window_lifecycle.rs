@@ -28,6 +28,7 @@ mod updates;
 use musicx_protocol as protocol;
 use nsh_platform_macos::objc2_app_kit::*;
 use objc2::{MainThreadMarker, rc::Retained};
+use objc2_foundation::{NSPoint, NSString};
 use std::{sync::mpsc, time::Duration};
 
 fn on_disconnected() {
@@ -89,7 +90,21 @@ fn reopen_from_helper() {
 fn lifecycle_checks() -> anyhow::Result<Vec<&'static str>> {
     let mut passed = Vec::new();
     let mut check = |phase, predicate: fn(&NSApplication, &NSWindow) -> bool| {
-        anyhow::ensure!(wait_for(predicate), "{phase} timed out");
+        anyhow::ensure!(
+            wait_for(predicate),
+            "{phase} timed out: {}",
+            on_main(|| {
+                let (app, window) = app_window();
+                format!(
+                    "active={} visible={} key={} minimized={} frame={:?}",
+                    app.isActive(),
+                    window.isVisible(),
+                    window.isKeyWindow(),
+                    window.isMiniaturized(),
+                    window.frame()
+                )
+            })
+        );
         passed.push(phase);
         Ok::<_, anyhow::Error>(())
     };
@@ -138,7 +153,127 @@ fn lifecycle_checks() -> anyhow::Result<Vec<&'static str>> {
     );
     on_main(reopen_from_helper);
     check("helper hidden reopen", front)?;
+    passed.extend(menu_checks()?);
     Ok(passed)
+}
+
+fn menu_command(command: desktop::menus::Command) -> Retained<NSMenuItem> {
+    app_window()
+        .0
+        .mainMenu()
+        .unwrap()
+        .itemArray()
+        .iter()
+        .filter_map(|item| item.submenu())
+        .find_map(|menu| menu.itemWithTag(command as isize))
+        .expect("native menu command")
+}
+
+fn shortcut(key: &str, key_code: u16) -> bool {
+    let (app, window) = app_window();
+    let key = NSString::from_str(key);
+    let event = NSEvent::keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode(
+        NSEventType::KeyDown, NSPoint::new(0.0, 0.0), NSEventModifierFlags::Command,
+        0.0, window.windowNumber(), None, &key, &key, false, key_code,
+    ).unwrap();
+    app.mainMenu().unwrap().performKeyEquivalent(&event)
+}
+
+fn menu_checks() -> anyhow::Result<Vec<&'static str>> {
+    use desktop::menus::Command;
+    anyhow::ensure!(
+        wait_for(|_, _| menu_command(Command::Settings).isEnabled()),
+        "menu bridge not ready"
+    );
+    anyhow::ensure!(
+        on_main(|| {
+            let app = app_window().0;
+            let bar = app.mainMenu().unwrap();
+            ["MusicX", "Edit", "Playback", "View", "Window", "Help"]
+                .iter()
+                .enumerate()
+                .all(|(index, title)| {
+                    bar.itemAtIndex(index as isize).unwrap().title().to_string()
+                        == protocol::i18n::text(title)
+                })
+                && app.servicesMenu().is_some()
+                && app.windowsMenu().is_some()
+                && app.helpMenu().is_some()
+        }),
+        "standard menu registration"
+    );
+    anyhow::ensure!(
+        on_main(|| {
+            [
+                Command::TogglePlayback,
+                Command::Previous,
+                Command::Next,
+                Command::Lyrics,
+            ]
+            .iter()
+            .all(|command| !menu_command(*command).isEnabled())
+        }),
+        "empty player enabled unavailable actions"
+    );
+    anyhow::ensure!(
+        on_main(|| shortcut(",", 43)),
+        "settings shortcut not handled"
+    );
+    anyhow::ensure!(
+        wait_for(|_, window| {
+            window.frame().size.width == f64::from(desktop::EXPANDED_WIDTH)
+                && menu_command(Command::Settings).state() == NSControlStateValueOn
+        }),
+        "settings shortcut did not open details"
+    );
+    on_main(|| {
+        let item = menu_command(Command::History);
+        // The item and its owning menu remain alive on AppKit's main thread.
+        let menu = unsafe { item.menu() }.unwrap();
+        menu.performActionForItemAtIndex(menu.indexOfItem(&item));
+    });
+    anyhow::ensure!(
+        wait_for(|_, _| menu_command(Command::History).state() == NSControlStateValueOn),
+        "history menu did not navigate"
+    );
+    let original = protocol::i18n::Language::load();
+    protocol::i18n::Language::English.save()?;
+    anyhow::ensure!(
+        wait_for(|app, _| {
+            app.mainMenu()
+                .unwrap()
+                .itemAtIndex(2)
+                .unwrap()
+                .title()
+                .to_string()
+                == "Playback"
+                && menu_command(Command::Settings).title().to_string() == "Settings…"
+        }),
+        "English menu refresh"
+    );
+    protocol::i18n::Language::SimplifiedChinese.save()?;
+    anyhow::ensure!(
+        wait_for(|app, _| {
+            app.mainMenu()
+                .unwrap()
+                .itemAtIndex(2)
+                .unwrap()
+                .title()
+                .to_string()
+                == "播放"
+                && menu_command(Command::Settings).title().to_string() == "设置…"
+        }),
+        "Chinese menu refresh"
+    );
+    original.save()?;
+    Ok(vec![
+        "standard menus",
+        "empty playback actions disabled",
+        "settings shortcut opens details",
+        "view menu navigates details",
+        "English menu refresh",
+        "Chinese menu refresh",
+    ])
 }
 
 fn main() {
@@ -151,14 +286,32 @@ fn main() {
         println!("Skipped: set MUSICX_NATIVE_UI_TEST=1 in an interactive macOS session.");
         return;
     }
-    let worker = std::thread::spawn(|| {
-        let result = lifecycle_checks();
-        on_main(desktop::stop_panel);
+    let menus_only = std::env::args().any(|argument| argument == "--menus-only");
+    let worker = std::thread::spawn(move || {
+        let result = if menus_only {
+            menu_checks()
+        } else {
+            lifecycle_checks()
+        };
+        let result = result.and_then(|mut passed| {
+            anyhow::ensure!(
+                on_main(|| {
+                    let window = app_window().1;
+                    shortcut("w", 13) && !window.isVisible()
+                }),
+                "close window shortcut did not close the player"
+            );
+            passed.push("close window shortcut");
+            Ok(passed)
+        });
+        if result.is_err() {
+            on_main(desktop::stop_panel);
+        }
         result
     });
     assert_eq!(desktop::run_panel(), std::process::ExitCode::SUCCESS);
     let passed = worker.join().unwrap().unwrap();
-    assert_eq!(passed.len(), 10);
+    assert_eq!(passed.len(), if menus_only { 7 } else { 17 });
     for phase in passed {
         println!("{phase}: passed");
     }
