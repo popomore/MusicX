@@ -9,8 +9,10 @@ use crate::{
     protocol::{State, Track},
 };
 #[cfg(target_os = "ios")]
+use nsh_base::button;
+use nsh_base::theme;
+#[cfg(target_os = "ios")]
 use nsh_base::{SliderValue, slider};
-use nsh_base::{button, popover, theme};
 #[cfg(target_os = "ios")]
 use nsh_core::element::ImageSrc;
 use nsh_core::prelude::*;
@@ -38,55 +40,28 @@ fn time(seconds: f64) -> String {
     format!("{}:{:02}", whole / 60, whole % 60)
 }
 
-fn http_badge(model: Model) -> impl IntoElement {
-    when(
-        move || model.status.with(|s| s.audio_uses_http),
-        move || {
-            let open = signal(false);
-            popover()
-                .open(move || Some(open.get()))
-                .on_open_change(move |event: &nsh_base::PopoverEvent| {
-                    if let nsh_base::PopoverEvent::OpenChange(value, _) = event {
-                        open.set(*value);
-                    }
-                })
-                .placement(Placement::Bottom)
-                .align(Align::End)
-                .offset(px(4.0))
-                .margin(px(12.0))
-                .popup_style(|s| {
-                    s.w(px(220.0))
-                        .p(px(10.0))
-                        .bg(theme().background)
-                        .border_1()
-                        .border_color(theme().muted)
-                        .rounded(px(6.0))
-                })
-                .trigger(
-                    button()
-                        .accessibility_label(Some(
-                            tr!("This audio source uses an unencrypted HTTP connection").into(),
-                        ))
-                        .px(px(4.0))
-                        .py(px(3.0))
-                        .rounded(px(4.0))
-                        .hover(|s| s.bg(theme().muted))
-                        .active(|s| s.opacity(0.65))
-                        .child(
-                            text("HTTP")
-                                .text_size(px(10.0))
-                                .number_of_lines(1)
-                                .text_color(move || theme().muted_foreground),
-                        ),
-                )
-                .child(
-                    text(tr!("This audio source uses an unencrypted HTTP connection"))
-                        .text_size(px(11.0))
-                        .number_of_lines(3)
-                        .text_color(move || theme().foreground),
-                )
-        },
-    )
+fn playback_notices(model: Model) -> impl IntoElement {
+    crate::controls::notice_badge(move || {
+        use crate::controls::Notice;
+        let status = model.status.get();
+        let mut notices = Vec::new();
+        if let Some(error) = status.error.filter(|error| !error.trim().is_empty()) {
+            notices.push(Notice::error(error));
+        }
+        let error = model.error.get();
+        if !error.trim().is_empty() && !notices.iter().any(|notice| notice.message == error) {
+            notices.push(Notice::error(error));
+        }
+        if status.audio_uses_http {
+            notices.push(Notice::warning(tr!(
+                "This audio source uses an unencrypted HTTP connection"
+            )));
+        }
+        if model.cover_failed.get() {
+            notices.push(Notice::warning(tr!("Artwork unavailable")));
+        }
+        notices
+    })
 }
 #[cfg(target_os = "ios")]
 fn mobile() -> bool {
@@ -360,7 +335,7 @@ fn player(model: Model) -> impl IntoElement {
                                     .number_of_lines(1)
                                     .text_color(move || theme().foreground),
                             )
-                            .child(http_badge(model)),
+                            .child(playback_notices(model)),
                     )
                     .child(
                         text(move || artist.get())
@@ -526,15 +501,11 @@ fn player(model: Model) -> impl IntoElement {
             .child(
                 text(move || {
                     model.status.with(|s| {
-                        s.error.clone().unwrap_or_else(|| {
-                            if s.switching {
-                                tr!("Changing track…").into()
-                            } else if model.cover_failed.get() {
-                                tr!("Artwork unavailable").into()
-                            } else {
-                                String::new()
-                            }
-                        })
+                        if s.switching {
+                            tr!("Changing track…").into()
+                        } else {
+                            String::new()
+                        }
                     })
                 })
                 .text_size(px(10.0))
@@ -923,10 +894,18 @@ fn mobile_shell(model: Model) -> impl IntoElement {
                     },
                 ))
                 .child(
-                    text(move || model.error.get())
-                        .text_size(px(11.0))
-                        .number_of_lines(2)
-                        .text_color(move || theme().muted_foreground),
+                    text(move || {
+                        if model.page.get() != Page::Player
+                            || model.status.with(|s| s.track.is_none())
+                        {
+                            model.error.get()
+                        } else {
+                            String::new()
+                        }
+                    })
+                    .text_size(px(11.0))
+                    .number_of_lines(2)
+                    .text_color(move || theme().muted_foreground),
                 ),
         )
 }

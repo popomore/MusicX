@@ -669,7 +669,7 @@ fn active_player(model: Model) -> impl IntoElement {
                                             .text_color(move || theme().foreground),
                                     ),
                             )
-                            .child(super::http_badge(model))
+                            .child(super::playback_notices(model))
                             .child(
                                 button()
                                     .accessibility_label(move || {
@@ -897,30 +897,13 @@ fn active_player(model: Model) -> impl IntoElement {
                     .child(transport(model, false)),
             )
             .child(when(
+                move || model.status.with(|s| s.switching),
                 move || {
-                    model.status.with(|s| s.error.is_some() || s.switching)
-                        || model.cover_failed.get()
-                        || model.error.with(|e| !e.is_empty())
-                },
-                move || {
-                    text(move || {
-                        model.status.with(|s| {
-                            s.error.clone().unwrap_or_else(|| {
-                                if model.error.with(|e| !e.is_empty()) {
-                                    return model.error.get();
-                                }
-                                if s.switching {
-                                    tr!("Changing track…").into()
-                                } else {
-                                    tr!("Artwork unavailable").into()
-                                }
-                            })
-                        })
-                    })
-                    .text_size(px(11.0))
-                    .number_of_lines(2)
-                    .mt(px(8.0))
-                    .text_color(move || theme().muted_foreground)
+                    text(tr!("Changing track…"))
+                        .text_size(px(11.0))
+                        .number_of_lines(2)
+                        .mt(px(8.0))
+                        .text_color(move || theme().muted_foreground)
                 },
             )),
     )

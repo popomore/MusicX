@@ -1,6 +1,155 @@
 //! Shared controls for compact detail flows.
-use nsh_base::{button, theme};
+use crate::protocol::tr;
+use nsh_base::{button, popover, theme};
 use nsh_core::prelude::*;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum NoticeKind {
+    Warning,
+    Error,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct Notice {
+    pub kind: NoticeKind,
+    pub message: String,
+}
+
+impl Notice {
+    pub fn warning(message: impl Into<String>) -> Self {
+        Self {
+            kind: NoticeKind::Warning,
+            message: message.into(),
+        }
+    }
+    pub fn error(message: impl Into<String>) -> Self {
+        Self {
+            kind: NoticeKind::Error,
+            message: message.into(),
+        }
+    }
+}
+
+fn notice_icon(kind: impl Fn() -> NoticeKind + 'static) -> impl IntoElement {
+    use nsh_core::element::ImageSrc;
+    const WARNING: &str = r#"<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 4.2 2.6 17.5a2 2 0 0 0 1.7 3h15.4a2 2 0 0 0 1.7-3L13.7 4.2a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4"/><circle cx="12" cy="17" r=".8" fill="currentColor" stroke="none"/></svg>"#;
+    const ERROR: &str = r#"<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="m9 9 6 6m0-6-6 6"/></svg>"#;
+    let kind = computed(kind);
+    svg(move || {
+        ImageSrc::svg_markup(if kind.get() == NoticeKind::Error {
+            ERROR
+        } else {
+            WARNING
+        })
+    })
+    .w(px(14.0))
+    .min_w(px(14.0))
+    .h(px(14.0))
+    .text_color(move || {
+        if kind.get() == NoticeKind::Error {
+            theme().destructive
+        } else {
+            theme().muted_foreground
+        }
+    })
+}
+
+/// Reuse the same entry for independent warnings and errors, with errors taking priority.
+pub fn notice_badge(notices: impl Fn() -> Vec<Notice> + 'static) -> impl IntoElement {
+    let notices = computed(notices);
+    when(
+        move || !notices.get().is_empty(),
+        move || {
+            let open = signal(false);
+            let previous_errors = signal(Vec::<String>::new());
+            effect(move || {
+                let errors: Vec<_> = notices
+                    .get()
+                    .into_iter()
+                    .filter(|notice| notice.kind == NoticeKind::Error)
+                    .map(|notice| notice.message)
+                    .collect();
+                if errors != previous_errors.get_untracked() {
+                    let show = !errors.is_empty();
+                    previous_errors.set(errors);
+                    open.set(show);
+                }
+            });
+            let kind = move || {
+                if notices
+                    .get()
+                    .iter()
+                    .any(|notice| notice.kind == NoticeKind::Error)
+                {
+                    NoticeKind::Error
+                } else {
+                    NoticeKind::Warning
+                }
+            };
+            popover()
+                .open(move || Some(open.get()))
+                .on_open_change(move |event: &nsh_base::PopoverEvent| {
+                    if let nsh_base::PopoverEvent::OpenChange(value, _) = event {
+                        open.set(*value);
+                    }
+                })
+                .placement(Placement::Bottom)
+                .align(Align::End)
+                .offset(px(4.0))
+                .margin(px(12.0))
+                .popup_style(|s| {
+                    s.w(px(240.0))
+                        .p(px(10.0))
+                        .bg(theme().background)
+                        .border_1()
+                        .border_color(theme().muted)
+                        .rounded(px(6.0))
+                })
+                .trigger(
+                    button()
+                        .accessibility_label(move || {
+                            Some(SharedString::from(if kind() == NoticeKind::Error {
+                                tr!("View playback errors")
+                            } else {
+                                tr!("View playback warnings")
+                            }))
+                        })
+                        .w(px(if cfg!(target_os = "ios") { 44.0 } else { 26.0 }))
+                        .min_w(px(if cfg!(target_os = "ios") { 44.0 } else { 26.0 }))
+                        .h(px(if cfg!(target_os = "ios") { 44.0 } else { 26.0 }))
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(4.0))
+                        .hover(|s| s.bg(theme().muted))
+                        .active(|s| s.opacity(0.65))
+                        .child(notice_icon(kind)),
+                )
+                .child(view().gap(px(8.0)).child(each(
+                    move || notices.get(),
+                    |notice| notice.message.clone(),
+                    move |notice, _| {
+                        view()
+                            .flex_row()
+                            .items_start()
+                            .gap(px(8.0))
+                            .child(
+                                view()
+                                    .pt(px(1.0))
+                                    .child(notice_icon(move || notice.get().kind)),
+                            )
+                            .child(
+                                text(move || notice.get().message)
+                                    .flex_1()
+                                    .min_w(px(0.0))
+                                    .text_size(px(11.0))
+                                    .number_of_lines(8)
+                                    .text_color(move || theme().foreground),
+                            )
+                    },
+                )))
+        },
+    )
+}
 
 /// Small, virtualized row images share the existing bounded NSH image cache.
 pub fn artwork(

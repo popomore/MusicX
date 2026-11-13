@@ -26,7 +26,7 @@ Both the NSWindow and its NSH host container must be transparent so the desktop 
 - **Lyrics.** Keep one line in the player and use a separate details view for the full lyrics. Parse LRC timestamps, align translations by time, and allow seeking by line while preserving play or pause state. Scrolling pauses follow mode. Provide a return-to-current control and present untimed lyrics as plain text.
 - **Track information.** Show the song, artist, album, source link, and an action to add the track to a local playlist. Use album details for the album's track list.
 - **Audio quality.** Anchor the popover to the badge. Separate the reported stream format and bitrate from the user's preference. Treat missing fields as unknown. During a quality switch, show its state and hold the requested seek position until the audio engine completes the seek. An older seek callback must never overwrite a newer position.
-- **HTTP audio.** Show a small muted HTTP indicator beside the current track title only when the resolved remote audio uses HTTP. Its popover explains that the connection is unencrypted. Keep this transport state out of stable track metadata, and clear it while selecting another track.
+- **Playback notices.** Use one compact entry beside the current track title. Warnings such as unencrypted HTTP audio or missing artwork use a muted triangle; errors use a red circular error icon and take priority. List each reason with its own severity icon in the popover. Open a new error once, allow dismissal and reopening, and clear resolved notices. Keep error text out of the transport footer; retain loading feedback and errors in the empty-session view. Transport state stays out of stable track metadata.
 
 ## Playlists and sources
 
