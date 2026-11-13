@@ -6,15 +6,23 @@ license = "MIT"
 rust-version.workspace = true
 publish = false
 
+[[test]]
+name = "spectrum"
+harness = false
+
 [dependencies]
 musicx-core = { path = "../core" }
 musicx-plugin-api = { path = "../plugin-api" }
 anyhow = "1"
 base64 = "0.22"
 objc2 = "0.6"
-objc2-av-foundation = { version = "0.3", default-features = false, features = ["std", "AVPlayer", "AVPlayerItem", "AVAsset", "objc2-core-media", "block2"] }
+objc2-av-foundation = { version = "0.3", default-features = false, features = ["std", "AVPlayer", "AVPlayerItem", "AVAsset", "AVAssetTrack", "AVMediaFormat", "AVAudioMix", "objc2-core-media", "objc2-media-toolbox", "block2"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSData", "NSDictionary", "NSError", "NSGeometry", "NSObject", "NSObjCRuntime", "NSRunLoop", "NSString", "NSTimer", "NSURL", "NSValue", "objc2-core-foundation"] }
-objc2-core-media = { version = "0.3", default-features = false, features = ["std", "CMTime"] }
+objc2-core-media = { version = "0.3", default-features = false, features = ["std", "CMTime", "CMTimeRange", "CMBase"] }
+objc2-core-audio-types = { version = "0.3", default-features = false, features = ["std", "CoreAudioBaseTypes"] }
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["std"] }
+objc2-media-toolbox = { version = "0.3", default-features = false, features = ["std", "MTAudioProcessingTap", "objc2-core-audio-types", "objc2-core-media"] }
+rustfft = "6"
 objc2-media-player = { version = "0.3", default-features = false, features = ["std", "MPMediaItem", "MPMediaEntity", "MPNowPlayingInfoCenter", "MPRemoteCommandCenter", "MPRemoteCommand", "MPRemoteCommandEvent"] }
 block2 = "=0.6.2"
 dispatch2 = "0.3"
@@ -30,3 +38,6 @@ reqwest = { version = "0.13", features = ["blocking", "form", "json", "query"] }
 
 [target.'cfg(target_os = "ios")'.dependencies]
 objc2-avf-audio = { version = "0.3", default-features = false, features = ["std", "AVAudioSession", "AVAudioSessionTypes"] }
+
+[dev-dependencies]
+objc2-foundation = { version = "0.3", default-features = false, features = ["NSDate"] }

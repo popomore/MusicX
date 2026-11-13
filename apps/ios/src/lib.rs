@@ -43,6 +43,7 @@ fn initialize() -> anyhow::Result<()> {
                 player::configure(&musicx_plugins::MYGO)?;
                 musicx_mcp::start(musicx_mcp::Services {
                     submit: player::submit,
+                    spectrum: musicx_platform_apple::spectrum::snapshot,
                     quit: || player::submit(player::Action::Pause, None),
                     sources: &musicx_plugins::MYGO,
                 })?;

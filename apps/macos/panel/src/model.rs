@@ -25,6 +25,8 @@ pub enum Page {
     Lyrics,
     #[cfg(target_os = "macos")]
     Settings,
+    #[cfg(target_os = "macos")]
+    Spectrum,
 }
 
 #[derive(Clone, Copy)]
@@ -226,7 +228,7 @@ impl Model {
                 #[cfg(target_os = "macos")]
                 Page::Queue => remote::read_json("/ui/queue").map(|q| Loaded::Queue(Box::new(q))),
                 #[cfg(target_os = "macos")]
-                Page::Lyrics | Page::Settings => unreachable!(),
+                Page::Lyrics | Page::Settings | Page::Spectrum => unreachable!(),
                 Page::Player | Page::Sources | Page::Library | Page::Discovery => unreachable!(),
             };
             let _ = send.send(result);
@@ -273,7 +275,7 @@ impl Model {
             #[cfg(target_os = "macos")]
             Page::Lyrics => Some(0),
             #[cfg(target_os = "macos")]
-            Page::Settings => None,
+            Page::Settings | Page::Spectrum => None,
             Page::History => Some(1),
             Page::Album => Some(2),
             #[cfg(target_os = "macos")]

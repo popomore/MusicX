@@ -26,6 +26,21 @@ Use the same build settings and data directory when connecting to the test sessi
 
 Runtime overrides are `MUSICX_DATA_DIR`, `MUSICX_PORT`, and `MUSICX_WEB_AUTH`. Only these current names are supported; previous names are ignored, and previous data directories are not migrated. Production builds leave `MUSICX_BUILD_*` unset and use the MusicX name, `local.musicx` IDs, and the default listener.
 
+## Audio spectrum checks
+
+`cargo test --locked -p musicx-platform-apple` includes both the FFT/PCM unit
+tests and an isolated real AVPlayer integration test. The integration test pumps
+the main run loop, plays generated stereo WAV fixtures with a silent lead-in and
+volume zero, and checks pause, seek, track replacement, and shutdown. It requires an operational
+macOS audio service. `cargo test --locked -p musicx-panel --test localization`
+also checks the production spectrum canvas, state changes, and stale-track
+filtering without an audio device.
+
+For native visual QA, use the separate build identity described above, play a
+supported stream, and open the title bar's spectrum button. Check changing bars,
+pause clearing, both UI languages, and closing the view. Some streams cannot
+provide a PCM tap; those display an unavailable state instead of synthetic bars.
+
 ## UI languages
 
 MusicX supports English and Simplified Chinese on macOS and iPhone. Language in

@@ -10,6 +10,13 @@ The menu bar icon shows playback state and opens the compact player. Closing the
 
 The player shows the cover, track title, artist, album, audio quality badge, progress, and basic controls. The quality popover separates the reported stream quality from the listener's preference. The optional one-line lyric preview opens full lyrics, which follow playback and support seeking when the source provides timestamps. Track information links back to its source and album. Queue, history, playlists, and settings open beside the player so playback controls remain available.
 
+The spectrum button in the macOS title bar opens a live frequency display beside
+the player. Its 32 bands run from 20 Hz to 20 kHz on a logarithmic scale, with
+levels from -80 to 0 dBFS before player volume adjustment. It analyzes the actual
+playing audio without changing its sound. Pausing clears the bars; streams that
+cannot provide samples show an unavailable state. Analysis stops when the view
+is closed.
+
 Search and discovery are exposed through MCP. Use MCP Connection in settings to copy the endpoint configuration and connect a client. The player panel focuses on the current session and music already available in albums, playlists, and history.
 
 ## Queue, library, and history

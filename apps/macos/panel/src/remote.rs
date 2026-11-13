@@ -305,6 +305,40 @@ pub fn read_json<T: serde::de::DeserializeOwned>(path: &str) -> Result<T> {
     Ok(response.json()?)
 }
 
+/// One bounded feed per mounted spectrum. Separate requests keep transport
+/// actions independent; dropping the receiver ends polling on the next reply.
+#[cfg(target_os = "macos")]
+pub fn spectrum_feed() -> Result<mpsc::Receiver<Result<crate::protocol::spectrum::Spectrum>>> {
+    let (_, token) = CONNECTION
+        .get()
+        .context(tr!("Panel connection not started"))?;
+    let token = token.clone();
+    let client = Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_millis(400))
+        .build()?;
+    let (send, receive) = mpsc::sync_channel(1);
+    std::thread::Builder::new()
+        .name("musicx-spectrum-feed".into())
+        .spawn(move || {
+            loop {
+                let result = client
+                    .get(format!("http://{}/ui/spectrum", address()))
+                    .bearer_auth(token.trim())
+                    .send()
+                    .and_then(|response| response.error_for_status())
+                    .and_then(|response| response.json())
+                    .map_err(anyhow::Error::from);
+                match send.try_send(result) {
+                    Err(mpsc::TrySendError::Disconnected(_)) => break,
+                    Ok(()) | Err(mpsc::TrySendError::Full(_)) => {}
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        })?;
+    Ok(receive)
+}
+
 pub fn post_json<B: serde::Serialize, T: serde::de::DeserializeOwned>(
     path: &str,
     body: &B,
