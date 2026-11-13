@@ -694,22 +694,31 @@ pub(crate) fn compatible(manifest: &Manifest) -> bool {
 }
 
 pub(crate) fn permitted(url: &Url, hosts: &[String]) -> bool {
-    url.scheme() == "https"
-        && url.username().is_empty()
+    url.scheme() == "https" && permitted_audio(url, hosts)
+}
+
+pub(crate) fn valid_audio_url(url: &Url) -> bool {
+    matches!(
+        (url.scheme(), url.port_or_known_default()),
+        ("https", Some(443)) | ("http", Some(80))
+    ) && url.username().is_empty()
         && url.password().is_none()
-        && url.port_or_known_default() == Some(443)
         && url.domain().is_some_and(|host| {
-            host.contains('.')
-                && !host.ends_with(".local")
-                && !host.ends_with(".localhost")
-                && hosts.iter().any(|grant| {
-                    if let Some(suffix) = grant.strip_prefix("*.") {
-                        host.strip_suffix(suffix)
-                            .is_some_and(|prefix| prefix.ends_with('.'))
-                    } else {
-                        host == grant
-                    }
-                })
+            host.contains('.') && !host.ends_with(".local") && !host.ends_with(".localhost")
+        })
+}
+
+pub(crate) fn permitted_audio(url: &Url, hosts: &[String]) -> bool {
+    valid_audio_url(url)
+        && url.domain().is_some_and(|host| {
+            hosts.iter().any(|grant| {
+                if let Some(suffix) = grant.strip_prefix("*.") {
+                    host.strip_suffix(suffix)
+                        .is_some_and(|prefix| prefix.ends_with('.'))
+                } else {
+                    host == grant
+                }
+            })
         })
 }
 
@@ -1046,19 +1055,10 @@ pub fn resolve_with_quality(mut track: Track, quality: crate::protocol::Quality)
             .context(tr!("The plugin returned no audio URL"))?,
     )?;
     ensure!(
-        url.scheme() != "http",
-        tr!("This source returned an HTTP audio URL; MusicX requires HTTPS")
-    );
-    ensure!(
-        url.scheme() == "https"
-            && url.username().is_empty()
-            && url.password().is_none()
-            && url.port_or_known_default() == Some(443)
-            && url.domain().is_some_and(|host| host.contains('.')
-                && !host.ends_with(".local")
-                && !host.ends_with(".localhost")),
+        valid_audio_url(&url),
         tr!("The plugin returned an unsupported audio URL")
     );
+    let uses_http = url.scheme() == "http";
     let mut request_headers = crate::assets::headers(&source.plugin, &url, "audio")?;
     if let Some(headers) = stream["headers"].as_object() {
         for (key, value) in headers {
@@ -1085,7 +1085,7 @@ pub fn resolve_with_quality(mut track: Track, quality: crate::protocol::Quality)
     }
     let mut user_agent = request_headers.get("user-agent").cloned();
     let mut lease = None;
-    if request_headers.keys().any(|k| k != "user-agent") {
+    if uses_http || request_headers.keys().any(|k| k != "user-agent") {
         let registration = crate::stream_proxy::register(url, request_headers)?;
         url = registration.0;
         lease = Some(registration.1 as std::sync::Arc<dyn Send + Sync>);
@@ -1096,6 +1096,7 @@ pub fn resolve_with_quality(mut track: Track, quality: crate::protocol::Quality)
         lease,
         track,
         url,
+        uses_http,
         user_agent,
         quality: crate::quality::metadata(quality.for_plugin(), &stream, true),
         gain_db: stream["gain"]

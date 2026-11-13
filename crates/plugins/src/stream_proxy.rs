@@ -1,4 +1,4 @@
-//! Range-capable loopback transport for AVPlayer's unsupported request headers.
+//! Range-capable loopback transport for HTTP audio and private request headers.
 use anyhow::{Context, Result, ensure};
 use musicx_core::protocol::tr;
 use reqwest::{Url, blocking::Client, redirect::Policy};
@@ -25,6 +25,10 @@ struct Proxy {
     streams: Arc<Mutex<BTreeMap<String, Stream>>>,
 }
 static PROXY: OnceLock<std::result::Result<Proxy, String>> = OnceLock::new();
+
+fn valid_audio_redirect(from: &Url, to: &Url) -> bool {
+    crate::mygo::valid_audio_url(to) && (from.scheme() == "http" || to.scheme() == "https")
+}
 
 fn upstream_client(idle_timeout: Duration) -> Result<Client> {
     // reqwest::blocking::Response applies this timeout separately to each
@@ -177,7 +181,7 @@ fn serve(mut socket: TcpStream, streams: &Mutex<BTreeMap<String, Stream>>) -> Re
                     .to_str()?,
             )?;
             ensure!(
-                crate::assets::valid_redirect_target(&next),
+                valid_audio_redirect(&stream.url, &next),
                 tr!("Unsupported audio redirect URL")
             );
             if next.host_str() != stream.url.host_str() {
@@ -215,6 +219,24 @@ fn serve(mut socket: TcpStream, streams: &Mutex<BTreeMap<String, Stream>>) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn http_redirects_preserve_protocol_boundaries() {
+        let http = "http://example.com/audio".parse().unwrap();
+        let https = "https://example.com/audio".parse().unwrap();
+        assert!(valid_audio_redirect(&http, &http));
+        assert!(valid_audio_redirect(&http, &https));
+        assert!(valid_audio_redirect(&https, &https));
+        assert!(!valid_audio_redirect(&https, &http));
+        for url in [
+            "http://127.0.0.1/audio",
+            "http://audio.local/audio",
+            "http://example.com:443/audio",
+            "http://user:pass@example.com/audio",
+        ] {
+            assert!(!valid_audio_redirect(&http, &url.parse().unwrap()));
+        }
+    }
     #[test]
     fn loaded_registration_survives_unused_resolutions() {
         let (url, lease) = register(
@@ -296,13 +318,16 @@ mod tests {
                 request.push_str(&line);
             }
             let request = request.to_ascii_lowercase();
+            assert!(request.starts_with("get /audio?signature=a%2bb&key=fixture http/1.1"));
             assert!(request.contains("authorization: fixture"));
             assert!(request.contains("referer: https://example.com/"));
             assert!(request.contains("range: bytes=2-4"));
             socket.write_all(b"HTTP/1.1 206 Partial Content\r\nContent-Length: 3\r\nContent-Range: bytes 2-4/6\r\n\r\ncde").unwrap();
         });
         let (url, _lease) = register(
-            format!("http://{address}/audio").parse().unwrap(),
+            format!("http://{address}/audio?signature=a%2Bb&key=fixture")
+                .parse()
+                .unwrap(),
             BTreeMap::from([
                 ("authorization".into(), "fixture".into()),
                 ("referer".into(), "https://example.com/".into()),

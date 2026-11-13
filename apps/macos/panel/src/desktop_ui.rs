@@ -669,6 +669,7 @@ fn active_player(model: Model) -> impl IntoElement {
                                             .text_color(move || theme().foreground),
                                     ),
                             )
+                            .child(super::http_badge(model))
                             .child(
                                 button()
                                     .accessibility_label(move || {

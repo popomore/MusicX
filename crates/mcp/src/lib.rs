@@ -806,6 +806,7 @@ mod tests {
                 peak: None,
                 track,
                 url: "https://example.com/resolved.mp3".parse().unwrap(),
+                uses_http: false,
                 user_agent: Some("Independent source fixture".into()),
                 quality: protocol::AudioQuality {
                     requested: quality,

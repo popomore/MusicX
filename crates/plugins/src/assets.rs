@@ -76,9 +76,12 @@ pub fn headers(plugin: &str, url: &Url, kind: &str) -> Result<BTreeMap<String, S
                     .ok()
                     .and_then(|u| u.host_str().map(str::to_owned))
                     .unwrap_or(host);
-                host != "*"
-                    && mygo::permitted(url, &[host])
-                    && mygo::permitted(url, &m.permissions.network)
+                let permitted = if kind == "audio" {
+                    mygo::permitted_audio
+                } else {
+                    mygo::permitted
+                };
+                host != "*" && permitted(url, &[host]) && permitted(url, &m.permissions.network)
             });
         if !matching {
             continue;

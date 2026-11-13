@@ -623,7 +623,7 @@
   "Source request failed": "Source request failed",
   "Plugin track identifier missing": "Plugin track identifier missing",
   "The plugin returned no audio URL": "The plugin returned no audio URL",
-  "This source returned an HTTP audio URL; MusicX requires HTTPS": "This source returned an HTTP audio URL; MusicX requires HTTPS",
+  "This audio source uses an unencrypted HTTP connection": "This audio source uses an unencrypted HTTP connection",
   "The plugin returned an unsupported audio URL": "The plugin returned an unsupported audio URL",
   "Unsupported audio request headers": "Unsupported audio request headers",
   "Audio request header values must be strings": "Audio request header values must be strings",

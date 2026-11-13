@@ -8,6 +8,8 @@ use url::Url;
 pub struct Media {
     pub track: Track,
     pub url: Url,
+    /// The remote source uses HTTP, even when `url` is a local transport URL.
+    pub uses_http: bool,
     pub user_agent: Option<String>,
     pub quality: AudioQuality,
     pub gain_db: Option<f32>,
