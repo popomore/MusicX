@@ -165,6 +165,7 @@ export function account() {
     for id in [
         "audio-url:http://fs.youthandroid2.kugou.com/fixture.mp3?key=fixture",
         "audio-url:HTTP://example.com:80/fixture.mp3",
+        "audio-url:http://example.com./fixture.mp3",
         "http-audio-with-headers",
     ] {
         let mut http_track = track.clone();
@@ -180,12 +181,20 @@ export function account() {
         "http://127.0.0.1/fixture.mp3",
         "http://music.local/fixture.mp3",
         "http://music.localhost/fixture.mp3",
+        "http://localhost./fixture.mp3",
+        "http://music.local./fixture.mp3",
+        "http://music.localhost./fixture.mp3",
+        "http://music.local../fixture.mp3",
+        "http://LOCALHOST%2E/fixture.mp3",
+        "https://localhost./fixture.mp3",
+        "https://music.local./fixture.mp3",
+        "https://music.localhost./fixture.mp3",
         "https://example.com:80/fixture.mp3",
         "ftp://example.com/fixture.mp3",
     ] {
         let mut invalid = track.clone();
         invalid.source.as_mut().unwrap().id = format!("audio-url:{url}");
-        assert!(MYGO.resolve(invalid, Default::default()).is_err());
+        assert!(MYGO.resolve(invalid, Default::default()).is_err(), "{url}");
     }
     let https_url = "https://example.com/fixture.mp3?key=fixture&signature=a%2Bb";
     let mut https_track = track.clone();

@@ -712,6 +712,7 @@ pub(crate) fn valid_audio_url(url: &Url) -> bool {
     ) && url.username().is_empty()
         && url.password().is_none()
         && url.domain().is_some_and(|host| {
+            let host = host.trim_end_matches('.');
             host.contains('.') && !host.ends_with(".local") && !host.ends_with(".localhost")
         })
 }

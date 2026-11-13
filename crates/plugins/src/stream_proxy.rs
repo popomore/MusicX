@@ -277,14 +277,30 @@ mod tests {
         assert!(valid_audio_redirect(&http, &http));
         assert!(valid_audio_redirect(&http, &https));
         assert!(valid_audio_redirect(&https, &https));
+        assert!(valid_audio_redirect(
+            &http,
+            &"http://example.com./audio".parse().unwrap()
+        ));
+        assert!(valid_audio_redirect(
+            &https,
+            &"https://example.com./audio".parse().unwrap()
+        ));
         assert!(!valid_audio_redirect(&https, &http));
         for url in [
             "http://127.0.0.1/audio",
             "http://audio.local/audio",
+            "http://localhost./audio",
+            "http://audio.local./audio",
+            "http://audio.localhost./audio",
+            "http://audio.local../audio",
+            "http://LOCALHOST%2E/audio",
+            "https://localhost./audio",
+            "https://audio.local./audio",
+            "https://audio.localhost./audio",
             "http://example.com:443/audio",
             "http://user:pass@example.com/audio",
         ] {
-            assert!(!valid_audio_redirect(&http, &url.parse().unwrap()));
+            assert!(!valid_audio_redirect(&http, &url.parse().unwrap()), "{url}");
         }
     }
     #[test]
