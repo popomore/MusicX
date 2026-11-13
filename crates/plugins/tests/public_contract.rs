@@ -56,7 +56,7 @@ fn public_exports_child() {
         "repository":"https://github.com/example/fixture-source"
         ,"permissions":{"network":["*.example.com"]}
         ,"settings":[{"key":"oauthPort","label":"OAuth port"},{"key":"defaultHost","label":"Default host","value":"https://private.example.com"},{"key":"headerValue","label":"Header value","value":"default-fixture"}]
-        ,"requestHeaders":[{"hosts":["{setting:defaultHost}"],"kinds":["image","audio"],"headers":{"authorization":"Bearer {storage:apiToken}","x-default":"{setting:headerValue}"}}]
+        ,"requestHeaders":[{"hosts":["{setting:defaultHost}","bare.example.com"],"kinds":["image","audio"],"headers":{"authorization":"Bearer {storage:apiToken}","x-default":"{setting:headerValue}"}}]
     })).unwrap()).unwrap();
     fs::create_dir(fixture.join("locales")).unwrap();
     fs::write(
@@ -295,6 +295,38 @@ export function account() {
     assert_eq!(headers["x-default"], "default-fixture");
     let http_url = "http://private.example.com/audio".parse().unwrap();
     let headers = musicx_plugins::assets::headers("fixture-source", &http_url, "audio").unwrap();
+    assert!(
+        headers.is_empty(),
+        "an HTTPS rule must not send stored credentials over HTTP"
+    );
+    assert!(
+        musicx_plugins::assets::headers(
+            "fixture-source",
+            &"http://bare.example.com/audio".parse().unwrap(),
+            "audio"
+        )
+        .unwrap()
+        .is_empty(),
+        "scheme-less rules must retain their HTTPS-only behavior"
+    );
+    assert_eq!(
+        musicx_plugins::assets::headers(
+            "fixture-source",
+            &"https://bare.example.com/audio".parse().unwrap(),
+            "audio"
+        )
+        .unwrap()["authorization"],
+        "Bearer fixture-private"
+    );
+    music_sources::configure(
+        "mygo:fixture-source",
+        std::collections::BTreeMap::from([(
+            "defaultHost".into(),
+            "http://private.example.com".into(),
+        )]),
+    )
+    .unwrap();
+    let headers = musicx_plugins::assets::headers("fixture-source", &http_url, "audio").unwrap();
     assert_eq!(headers["authorization"], "Bearer fixture-private");
     assert_eq!(headers["x-default"], "default-fixture");
     assert!(
@@ -302,6 +334,14 @@ export function account() {
             .unwrap()
             .is_empty()
     );
+    music_sources::configure(
+        "mygo:fixture-source",
+        std::collections::BTreeMap::from([(
+            "defaultHost".into(),
+            "https://private.example.com".into(),
+        )]),
+    )
+    .unwrap();
     let private_cover = mygo::search("fixture-source", "private-cover", 0).unwrap();
     assert_eq!(
         private_cover["tracks"][0]["cover_url"],
