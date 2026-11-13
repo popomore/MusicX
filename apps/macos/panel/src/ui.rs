@@ -39,6 +39,40 @@ fn time(seconds: f64) -> String {
     let whole = seconds.max(0.0) as u64;
     format!("{}:{:02}", whole / 60, whole % 60)
 }
+
+fn playback_busy(model: Model) -> bool {
+    model.starting.get()
+        || model
+            .status
+            .with(|s| s.switching || s.state == crate::protocol::State::Loading)
+}
+
+fn playback_notices(model: Model) -> impl IntoElement {
+    crate::controls::notice_badge(
+        move || model.status.with(|s| crate::model::key(s.track.as_ref())),
+        move || {
+            use crate::controls::Notice;
+            let status = model.status.get();
+            let mut notices = Vec::new();
+            if let Some(error) = status.error.filter(|error| !error.trim().is_empty()) {
+                notices.push(Notice::error(error));
+            }
+            let error = model.error.get();
+            if !error.trim().is_empty() && !notices.iter().any(|notice| notice.message == error) {
+                notices.push(Notice::error(error));
+            }
+            if status.audio_uses_http {
+                notices.push(Notice::warning(tr!(
+                    "This audio source uses an unencrypted HTTP connection"
+                )));
+            }
+            if model.cover_failed.get() {
+                notices.push(Notice::warning(tr!("Artwork unavailable")));
+            }
+            notices
+        },
+    )
+}
 #[cfg(target_os = "ios")]
 fn mobile() -> bool {
     cfg!(target_os = "ios")
@@ -298,11 +332,20 @@ fn player(model: Model) -> impl IntoElement {
                     .mt(px(16.0))
                     .window_drag(!mobile())
                     .child(
-                        text(move || title.get())
-                            .text_size(px(if mobile() { 25.0 } else { 21.0 }))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .number_of_lines(1)
-                            .text_color(move || theme().foreground),
+                        view()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(6.0))
+                            .child(
+                                text(move || title.get())
+                                    .flex_1()
+                                    .min_w(px(0.0))
+                                    .text_size(px(if mobile() { 25.0 } else { 21.0 }))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .number_of_lines(1)
+                                    .text_color(move || theme().foreground),
+                            )
+                            .child(playback_notices(model)),
                     )
                     .child(
                         text(move || artist.get())
@@ -395,7 +438,9 @@ fn player(model: Model) -> impl IntoElement {
                     .child(
                         button()
                             .accessibility_label(move || {
-                                Some(if playing() {
+                                Some(if playback_busy(model) {
+                                    tr!("Loading audio").into()
+                                } else if playing() {
                                     tr!("Pause").into()
                                 } else {
                                     tr!("Play").into()
@@ -424,9 +469,15 @@ fn player(model: Model) -> impl IntoElement {
                             .disabled_style(|s| s.opacity(0.25))
                             .active(|s| s.opacity(0.65))
                             .child(
-                                text(move || if playing() { "Ⅱ" } else { "▶" })
-                                    .text_size(px(21.0))
-                                    .text_color(move || theme().primary_foreground),
+                                when(
+                                    move || playback_busy(model),
+                                    crate::controls::loading_indicator,
+                                )
+                                .otherwise(move || {
+                                    text(move || if playing() { "Ⅱ" } else { "▶" })
+                                        .text_size(px(21.0))
+                                        .text_color(move || theme().primary_foreground)
+                                }),
                             ),
                     )
                     .child(transport(model, false)),
@@ -464,26 +515,7 @@ fn player(model: Model) -> impl IntoElement {
                     .child(action(tr!("Music sources"), move || {
                         model.open(Page::Sources)
                     }))
-            }))
-            .child(
-                text(move || {
-                    model.status.with(|s| {
-                        s.error.clone().unwrap_or_else(|| {
-                            if s.switching {
-                                tr!("Changing track…").into()
-                            } else if model.cover_failed.get() {
-                                tr!("Artwork unavailable").into()
-                            } else {
-                                String::new()
-                            }
-                        })
-                    })
-                })
-                .text_size(px(10.0))
-                .number_of_lines(1)
-                .mt(px(4.0))
-                .text_color(move || theme().muted_foreground),
-            ),
+            })),
     )
 }
 
@@ -865,10 +897,18 @@ fn mobile_shell(model: Model) -> impl IntoElement {
                     },
                 ))
                 .child(
-                    text(move || model.error.get())
-                        .text_size(px(11.0))
-                        .number_of_lines(2)
-                        .text_color(move || theme().muted_foreground),
+                    text(move || {
+                        if model.page.get() != Page::Player
+                            || model.status.with(|s| s.track.is_none())
+                        {
+                            model.error.get()
+                        } else {
+                            String::new()
+                        }
+                    })
+                    .text_size(px(11.0))
+                    .number_of_lines(2)
+                    .text_color(move || theme().muted_foreground),
                 ),
         )
 }

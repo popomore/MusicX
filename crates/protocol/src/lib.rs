@@ -290,6 +290,8 @@ pub struct Status {
     pub normalization_enabled: bool,
     #[serde(default)]
     pub audio_quality: Option<AudioQuality>,
+    #[serde(default)]
+    pub audio_uses_http: bool,
     pub error: Option<String>,
     pub switching: bool,
 }

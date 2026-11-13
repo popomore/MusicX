@@ -13,7 +13,7 @@ use std::{
     fs,
     io::Read,
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -78,12 +78,19 @@ pub fn search_kind(plugin: &str, query: &str, kind: &str, offset: u64) -> Result
     let rows = result["tracks"]
         .as_array()
         .context(tr!("The source returned no song list"))?;
-    let tracks: Vec<_> = rows
-        .iter()
-        .filter_map(|row| catalog_track(plugin, row))
-        .collect();
+    let mut tracks = Vec::with_capacity(rows.len());
+    for row in rows {
+        let Some(track) = catalog_track(plugin, row) else {
+            continue;
+        };
+        let mut track = serde_json::to_value(track)?;
+        if let Some(unavailable) = row["unavailable"].as_bool() {
+            track["unavailable"] = Value::Bool(unavailable);
+        }
+        tracks.push(track);
+    }
     remember_artwork(plugin, &result);
-    result["tracks"] = serde_json::to_value(tracks)?;
+    result["tracks"] = Value::Array(tracks);
     Ok(result)
 }
 
@@ -224,6 +231,7 @@ pub(crate) fn fill_artwork(track: &mut Track) {
         &source.plugin,
         "search",
         json!({"query":query,"kind":"tracks","offset":0}),
+        None,
         None,
         METADATA_TIMEOUT,
     ) else {
@@ -713,28 +721,38 @@ pub(crate) fn compatible(manifest: &Manifest) -> bool {
     manifest.playback == "stream"
         && match &manifest.permissions.process {
             Value::Null | Value::Bool(false) => true,
-            Value::Array(commands) => commands.is_empty(),
+            Value::Array(commands) => commands.is_empty() || crate::ffmpeg::supported(commands),
             _ => false,
         }
 }
 
 pub(crate) fn permitted(url: &Url, hosts: &[String]) -> bool {
-    url.scheme() == "https"
-        && url.username().is_empty()
+    url.scheme() == "https" && permitted_audio(url, hosts)
+}
+
+pub(crate) fn valid_audio_url(url: &Url) -> bool {
+    matches!(
+        (url.scheme(), url.port_or_known_default()),
+        ("https", Some(443)) | ("http", Some(80))
+    ) && url.username().is_empty()
         && url.password().is_none()
-        && url.port_or_known_default() == Some(443)
         && url.domain().is_some_and(|host| {
-            host.contains('.')
-                && !host.ends_with(".local")
-                && !host.ends_with(".localhost")
-                && hosts.iter().any(|grant| {
-                    if let Some(suffix) = grant.strip_prefix("*.") {
-                        host.strip_suffix(suffix)
-                            .is_some_and(|prefix| prefix.ends_with('.'))
-                    } else {
-                        host == grant
-                    }
-                })
+            let host = host.trim_end_matches('.');
+            host.contains('.') && !host.ends_with(".local") && !host.ends_with(".localhost")
+        })
+}
+
+pub(crate) fn permitted_audio(url: &Url, hosts: &[String]) -> bool {
+    valid_audio_url(url)
+        && url.domain().is_some_and(|host| {
+            hosts.iter().any(|grant| {
+                if let Some(suffix) = grant.strip_prefix("*.") {
+                    host.strip_suffix(suffix)
+                        .is_some_and(|prefix| prefix.ends_with('.'))
+                } else {
+                    host == grant
+                }
+            })
         })
 }
 
@@ -801,6 +819,15 @@ fn optional_json(path: &Path) -> Result<String> {
 }
 
 pub fn invoke(id: &str, export: &str, args: Value) -> Result<Value> {
+    invoke_with_playback(id, export, args, None)
+}
+
+fn invoke_with_playback(
+    id: &str,
+    export: &str,
+    args: Value,
+    playback: Option<Arc<Mutex<crate::ffmpeg::Playback>>>,
+) -> Result<Value> {
     let _guard = PLUGIN_CALL
         .lock()
         .map_err(|_| anyhow!(tr!("Plugin runtime lock unavailable")))?;
@@ -808,7 +835,7 @@ pub fn invoke(id: &str, export: &str, args: Value) -> Result<Value> {
         !crate::music_sources::auth_active(id),
         tr!("This source is connecting an account; complete or cancel first")
     );
-    invoke_inner(id, export, args, None, Duration::from_secs(18))
+    invoke_inner(id, export, args, None, playback, Duration::from_secs(18))
 }
 
 pub(crate) fn invoke_sign_in(
@@ -828,6 +855,7 @@ pub(crate) fn invoke_sign_in(
         "signIn",
         json!({"method":method}),
         Some(job),
+        None,
         Duration::from_secs(300),
     )
 }
@@ -837,6 +865,7 @@ fn invoke_inner(
     export: &str,
     args: Value,
     login: Option<std::sync::Arc<crate::music_sources::LoginJob>>,
+    playback: Option<Arc<Mutex<crate::ffmpeg::Playback>>>,
     timeout: Duration,
 ) -> Result<Value> {
     ensure!(valid_id(id), tr!("Invalid plugin ID"));
@@ -871,6 +900,7 @@ fn invoke_inner(
     }
     let settings = settings.to_string();
     let grants = manifest.permissions.network;
+    let process = manifest.permissions.process;
     let redirect_grants = grants.clone();
     let client = Client::builder()
         .redirect(Policy::custom(move |attempt| {
@@ -912,10 +942,20 @@ fn invoke_inner(
         })?)?;
         global.set("__url", Function::new(ctx.clone(), |value: String| {
             match Url::parse(&value) {
-                Ok(url) => json!({"href":url.as_str(),"protocol":format!("{}:",url.scheme()),"hostname":url.host_str().unwrap_or_default()}),
+                Ok(url) => json!({"href":url.as_str(),"protocol":format!("{}:",url.scheme()),"hostname":url.host_str().unwrap_or_default(),"host":&url[url::Position::BeforeHost..url::Position::AfterPort],"port":url.port().map(|port| port.to_string()).unwrap_or_default()}),
                 Err(_) => json!({"error":"Invalid URL"}),
             }.to_string()
         })?)?;
+        if let Some(playback) = playback.filter(|_| process.as_array().is_some_and(|commands| !commands.is_empty() && crate::ffmpeg::supported(commands))) {
+            let decode_grants = grants.clone();
+            global.set("__spawn", Function::new(ctx.clone(), move |text: String| {
+                let result = (|| {
+                playback.lock().map_err(|_| anyhow!(tr!("Could not start FFmpeg")))?
+                    .spawn(&text, &process, &decode_grants, deadline)
+                })();
+                result.unwrap_or_else(|error: anyhow::Error| json!({"error":error.to_string()})).to_string()
+            })?)?;
+        }
         global.set("__storage", storage)?;
         global.set("__settings", settings)?;
         global.set("__language", crate::localization::language())?;
@@ -1060,32 +1100,35 @@ pub fn resolve_with_quality(mut track: Track, quality: crate::protocol::Quality)
         .source
         .as_ref()
         .context(tr!("Plugin track identifier missing"))?;
-    let stream = invoke(
+    let playback = Arc::new(Mutex::new(crate::ffmpeg::Playback::default()));
+    let stream = invoke_with_playback(
         &source.plugin,
         "stream",
         json!({"id":source.id,"quality":quality.plugin_quality()}),
+        Some(playback.clone()),
     )?;
+    let decoded = playback
+        .lock()
+        .map_err(|_| anyhow!(tr!("Could not start FFmpeg")))?
+        .take(&stream);
     let mut url = Url::parse(
         stream["url"]
             .as_str()
             .context(tr!("The plugin returned no audio URL"))?,
     )?;
-    if url.scheme() == "http" {
-        url.set_scheme("https")
-            .map_err(|_| anyhow!(tr!("Invalid audio URL")))?;
-    }
     ensure!(
-        url.scheme() == "https"
-            && url.username().is_empty()
-            && url.password().is_none()
-            && url.port_or_known_default() == Some(443)
-            && url.domain().is_some_and(|host| host.contains('.')
-                && !host.ends_with(".local")
-                && !host.ends_with(".localhost")),
+        decoded.is_some() || valid_audio_url(&url),
         tr!("The plugin returned an unsupported audio URL")
     );
-    let mut request_headers = crate::assets::headers(&source.plugin, &url, "audio")?;
-    if let Some(headers) = stream["headers"].as_object() {
+    let uses_http = decoded.is_none() && url.scheme() == "http";
+    let mut request_headers = if decoded.is_some() {
+        Default::default()
+    } else {
+        crate::assets::headers(&source.plugin, &url, "audio")?
+    };
+    if decoded.is_none()
+        && let Some(headers) = stream["headers"].as_object()
+    {
         for (key, value) in headers {
             ensure!(
                 !matches!(
@@ -1110,8 +1153,12 @@ pub fn resolve_with_quality(mut track: Track, quality: crate::protocol::Quality)
     }
     let mut user_agent = request_headers.get("user-agent").cloned();
     let mut lease = None;
-    if request_headers.keys().any(|k| k != "user-agent") {
-        let registration = crate::stream_proxy::register(url, request_headers)?;
+    if let Some(decoded) = decoded {
+        url = crate::ffmpeg::file_url(&decoded)?;
+        lease = Some(decoded as std::sync::Arc<dyn Send + Sync>);
+    } else if uses_http || request_headers.keys().any(|k| k != "user-agent") {
+        let content_type = (stream["type"] == "m4a").then_some("audio/mp4");
+        let registration = crate::stream_proxy::register_audio(url, request_headers, content_type)?;
         url = registration.0;
         lease = Some(registration.1 as std::sync::Arc<dyn Send + Sync>);
         user_agent = None;
@@ -1121,6 +1168,7 @@ pub fn resolve_with_quality(mut track: Track, quality: crate::protocol::Quality)
         lease,
         track,
         url,
+        uses_http,
         user_agent,
         quality: crate::quality::metadata(quality.for_plugin(), &stream, true),
         gain_db: stream["gain"]

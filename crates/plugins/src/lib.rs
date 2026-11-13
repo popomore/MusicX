@@ -2,6 +2,7 @@
 pub mod assets;
 mod catalog;
 mod discovery;
+mod ffmpeg;
 mod http;
 mod installation;
 mod localization;

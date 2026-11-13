@@ -669,6 +669,7 @@ fn active_player(model: Model) -> impl IntoElement {
                                             .text_color(move || theme().foreground),
                                     ),
                             )
+                            .child(super::playback_notices(model))
                             .child(
                                 button()
                                     .accessibility_label(move || {
@@ -856,7 +857,16 @@ fn active_player(model: Model) -> impl IntoElement {
                     .child(
                         button()
                             .accessibility_label(move || {
-                                Some(if playing() { tr!("Pause") } else { tr!("Play") }.into())
+                                Some(
+                                    if super::playback_busy(model) {
+                                        tr!("Loading audio")
+                                    } else if playing() {
+                                        tr!("Pause")
+                                    } else {
+                                        tr!("Play")
+                                    }
+                                    .into(),
+                                )
                             })
                             .disabled(move || {
                                 model.status.with(|s| {
@@ -887,41 +897,22 @@ fn active_player(model: Model) -> impl IntoElement {
                             .hover(|s| s.opacity(0.88))
                             .active(|s| s.opacity(0.6))
                             .disabled_style(|s| s.opacity(0.22))
-                            .child(icon(
-                                move || if playing() { Icon::Pause } else { Icon::Play },
-                                22.0,
-                                true,
-                            )),
+                            .child(
+                                when(
+                                    move || super::playback_busy(model),
+                                    crate::controls::loading_indicator,
+                                )
+                                .otherwise(move || {
+                                    icon(
+                                        move || if playing() { Icon::Pause } else { Icon::Play },
+                                        22.0,
+                                        true,
+                                    )
+                                }),
+                            ),
                     )
                     .child(transport(model, false)),
-            )
-            .child(when(
-                move || {
-                    model.status.with(|s| s.error.is_some() || s.switching)
-                        || model.cover_failed.get()
-                        || model.error.with(|e| !e.is_empty())
-                },
-                move || {
-                    text(move || {
-                        model.status.with(|s| {
-                            s.error.clone().unwrap_or_else(|| {
-                                if model.error.with(|e| !e.is_empty()) {
-                                    return model.error.get();
-                                }
-                                if s.switching {
-                                    tr!("Changing track…").into()
-                                } else {
-                                    tr!("Artwork unavailable").into()
-                                }
-                            })
-                        })
-                    })
-                    .text_size(px(11.0))
-                    .number_of_lines(2)
-                    .mt(px(8.0))
-                    .text_color(move || theme().muted_foreground)
-                },
-            )),
+            ),
     )
 }
 

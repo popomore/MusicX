@@ -99,6 +99,7 @@ pub struct Player<A: AudioOutput> {
     queue_revision: u64,
     queue_context: Option<crate::protocol::QueueContext>,
     audio_quality: Option<crate::protocol::AudioQuality>,
+    audio_uses_http: bool,
     seek_serial: u64,
     pending_seek: Option<(u64, f64)>,
     deferred_position: Option<f64>,
@@ -127,6 +128,7 @@ impl<A: AudioOutput> Player<A> {
             queue_revision: 0,
             queue_context: None,
             audio_quality: None,
+            audio_uses_http: false,
             seek_serial: 0,
             pending_seek: None,
             deferred_position: None,
@@ -270,6 +272,7 @@ impl<A: AudioOutput> Player<A> {
             preferred_quality: crate::audio_quality::preferred(),
             normalization_enabled: crate::audio_quality::normalization_enabled(),
             audio_quality: self.audio_quality.clone(),
+            audio_uses_http: self.audio_uses_http,
             error: error.or_else(|| self.error.clone()),
             switching: self.switching,
         }
@@ -285,6 +288,7 @@ impl<A: AudioOutput> Player<A> {
         self.seek_serial += 1;
         self.pending_seek = None;
         self.audio_quality = Some(media.quality.clone());
+        self.audio_uses_http = media.uses_http;
         self.deferred_position = None;
         self.end_handled = false;
         self.history_recorded = false;
@@ -301,6 +305,7 @@ impl<A: AudioOutput> Player<A> {
         }
         self.audio_lease = None;
         self.audio_quality = None;
+        self.audio_uses_http = false;
         self.seek_serial += 1;
         self.pending_seek = None;
         self.deferred_position = Some(0.0);

@@ -72,13 +72,30 @@ pub fn headers(plugin: &str, url: &Url, kind: &str) -> Result<BTreeMap<String, S
                 let Some(host) = replacement(host, &settings, &stored) else {
                     return false;
                 };
-                let host = Url::parse(&host)
-                    .ok()
-                    .and_then(|u| u.host_str().map(str::to_owned))
-                    .unwrap_or(host);
-                host != "*"
-                    && mygo::permitted(url, &[host])
-                    && mygo::permitted(url, &m.permissions.network)
+                let host = match Url::parse(&host) {
+                    Ok(rule_url) => {
+                        if rule_url.scheme() != url.scheme() {
+                            return false;
+                        }
+                        let Some(host) = rule_url.host_str() else {
+                            return false;
+                        };
+                        host.to_owned()
+                    }
+                    Err(_) => {
+                        // Existing host-only rules were HTTPS-only before HTTP audio support.
+                        if url.scheme() != "https" {
+                            return false;
+                        }
+                        host
+                    }
+                };
+                let permitted = if kind == "audio" {
+                    mygo::permitted_audio
+                } else {
+                    mygo::permitted
+                };
+                host != "*" && permitted(url, &[host]) && permitted(url, &m.permissions.network)
             });
         if !matching {
             continue;

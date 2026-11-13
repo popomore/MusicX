@@ -56,7 +56,7 @@ fn public_exports_child() {
         "repository":"https://github.com/example/fixture-source"
         ,"permissions":{"network":["*.example.com"]}
         ,"settings":[{"key":"oauthPort","label":"OAuth port"},{"key":"defaultHost","label":"Default host","value":"https://private.example.com"},{"key":"headerValue","label":"Header value","value":"default-fixture"}]
-        ,"requestHeaders":[{"hosts":["{setting:defaultHost}"],"kinds":["image","audio"],"headers":{"authorization":"Bearer {storage:apiToken}","x-default":"{setting:headerValue}"}}]
+        ,"requestHeaders":[{"hosts":["{setting:defaultHost}","bare.example.com"],"kinds":["image","audio"],"headers":{"authorization":"Bearer {storage:apiToken}","x-default":"{setting:headerValue}"}}]
     })).unwrap()).unwrap();
     fs::create_dir(fixture.join("locales")).unwrap();
     fs::write(
@@ -72,11 +72,20 @@ fn public_exports_child() {
     fs::write(fixture.join("index.js"), r#"
 export function search({kind='tracks',query}={}) {
   if(kind!=='tracks') return {[kind]:[{id:kind+':one',name:'Fixture '+kind}],more:false};
-  return {tracks:[{id:'track:123',name:'公开接口曲名',artists:[{id:'artist:one',name:'歌手'}],duration:60000,
-    album:{id:'album',name:'专辑',imageUrl:query==='private-cover'?'https://private.example.com/cover.jpg':'https://example.com/cover.jpg'}}],total:1,hasMore:false};
+  const track = {id:'track:123',name:'公开接口曲名',artists:[{id:'artist:one',name:'歌手'}],duration:60000,
+    album:{id:'album',name:'专辑',imageUrl:query==='private-cover'?'https://private.example.com/cover.jpg':'https://example.com/cover.jpg'}};
+  if(query==='playback-availability') return {tracks:[
+    {...track,id:'track:blocked',unavailable:true,providerPrivilege:10},
+    {...track,id:'track:allowed',unavailable:false},
+    {...track,id:'track:invalid',unavailable:'true'},
+    track
+  ],total:4,hasMore:false};
+  return {tracks:[track],total:1,hasMore:false};
 }
 export function stream({id,quality}) {
   host.storage.set('stream',{id,quality});
+  if(id.startsWith('audio-url:')) return {url:id.slice('audio-url:'.length)};
+  if(id==='http-audio-with-headers') return {url:'http://fs.youthandroid2.kugou.com/fixture.mp3',headers:{Authorization:'fixture'}};
   if(id==='unsupported-headers') return {url:'https://example.com/track.mp3',headers:{Authorization:'fixture'}};
   return {url:'https://example.com/'+id+'.mp3',type:'mp3',headers:{'User-Agent':'Fixture Player'}};
 }
@@ -130,6 +139,17 @@ export function account() {
     );
     assert_eq!(track.source.as_ref().unwrap().id, "track:123");
     assert_eq!(track.artists[0].id, "artist:one");
+
+    let availability = mygo::search("fixture-source", "playback-availability", 0).unwrap();
+    let rows = availability["tracks"].as_array().unwrap();
+    assert_eq!(rows.len(), 4);
+    assert_eq!(rows[0]["unavailable"], true);
+    assert_eq!(rows[1]["unavailable"], false);
+    assert!(rows[2].get("unavailable").is_none());
+    assert!(rows[3].get("unavailable").is_none());
+    assert!(rows[0].get("providerPrivilege").is_none());
+    let blocked: musicx_core::protocol::Track = serde_json::from_value(rows[0].clone()).unwrap();
+    assert_eq!(blocked.source.as_ref().unwrap().id, "track:blocked");
     let media = MYGO
         .resolve_selection(track.clone(), Default::default())
         .unwrap();
@@ -141,6 +161,47 @@ export function account() {
     );
     assert_eq!(media.url.as_str(), "https://example.com/track:123.mp3");
     assert_eq!(media.user_agent.as_deref(), Some("Fixture Player"));
+    assert!(!media.uses_http);
+    for id in [
+        "audio-url:http://fs.youthandroid2.kugou.com/fixture.mp3?key=fixture",
+        "audio-url:HTTP://example.com:80/fixture.mp3",
+        "audio-url:http://example.com./fixture.mp3",
+        "http-audio-with-headers",
+    ] {
+        let mut http_track = track.clone();
+        http_track.source.as_mut().unwrap().id = id.into();
+        let http_media = MYGO.resolve(http_track, Default::default()).unwrap();
+        assert_eq!(http_media.url.host_str(), Some("127.0.0.1"));
+        assert!(http_media.lease.is_some());
+        assert!(http_media.uses_http);
+    }
+    for url in [
+        "http://example.com:443/fixture.mp3",
+        "http://user:pass@example.com/fixture.mp3",
+        "http://127.0.0.1/fixture.mp3",
+        "http://music.local/fixture.mp3",
+        "http://music.localhost/fixture.mp3",
+        "http://localhost./fixture.mp3",
+        "http://music.local./fixture.mp3",
+        "http://music.localhost./fixture.mp3",
+        "http://music.local../fixture.mp3",
+        "http://LOCALHOST%2E/fixture.mp3",
+        "https://localhost./fixture.mp3",
+        "https://music.local./fixture.mp3",
+        "https://music.localhost./fixture.mp3",
+        "https://example.com:80/fixture.mp3",
+        "ftp://example.com/fixture.mp3",
+    ] {
+        let mut invalid = track.clone();
+        invalid.source.as_mut().unwrap().id = format!("audio-url:{url}");
+        assert!(MYGO.resolve(invalid, Default::default()).is_err(), "{url}");
+    }
+    let https_url = "https://example.com/fixture.mp3?key=fixture&signature=a%2Bb";
+    let mut https_track = track.clone();
+    https_track.source.as_mut().unwrap().id = format!("audio-url:{https_url}");
+    let https_media = MYGO.resolve(https_track, Default::default()).unwrap();
+    assert_eq!(https_media.url.as_str(), https_url);
+    assert!(!https_media.uses_http);
     let info = MYGO.info(media.track.clone());
     assert_eq!(info.lyrics.lines[0].start, 1000);
     assert_eq!(info.lyrics.lines[0].words[1].start, 1500);
@@ -191,6 +252,10 @@ export function account() {
     let resolved = MYGO.resolve(protected, Default::default()).unwrap();
     assert_eq!(resolved.url.host_str(), Some("127.0.0.1"));
     assert!(resolved.user_agent.is_none());
+    assert!(
+        !resolved.uses_http,
+        "a local proxy does not make HTTPS audio insecure"
+    );
     let execute =
         |action: serde_json::Value| music_sources::execute(serde_json::from_value(action).unwrap());
     assert_eq!(
@@ -255,6 +320,55 @@ export function account() {
     .unwrap();
     assert_eq!(headers["authorization"], "Bearer fixture-private");
     assert_eq!(headers["x-default"], "default-fixture");
+    let http_url = "http://private.example.com/audio".parse().unwrap();
+    let headers = musicx_plugins::assets::headers("fixture-source", &http_url, "audio").unwrap();
+    assert!(
+        headers.is_empty(),
+        "an HTTPS rule must not send stored credentials over HTTP"
+    );
+    assert!(
+        musicx_plugins::assets::headers(
+            "fixture-source",
+            &"http://bare.example.com/audio".parse().unwrap(),
+            "audio"
+        )
+        .unwrap()
+        .is_empty(),
+        "scheme-less rules must retain their HTTPS-only behavior"
+    );
+    assert_eq!(
+        musicx_plugins::assets::headers(
+            "fixture-source",
+            &"https://bare.example.com/audio".parse().unwrap(),
+            "audio"
+        )
+        .unwrap()["authorization"],
+        "Bearer fixture-private"
+    );
+    music_sources::configure(
+        "mygo:fixture-source",
+        std::collections::BTreeMap::from([(
+            "defaultHost".into(),
+            "http://private.example.com".into(),
+        )]),
+    )
+    .unwrap();
+    let headers = musicx_plugins::assets::headers("fixture-source", &http_url, "audio").unwrap();
+    assert_eq!(headers["authorization"], "Bearer fixture-private");
+    assert_eq!(headers["x-default"], "default-fixture");
+    assert!(
+        musicx_plugins::assets::headers("fixture-source", &http_url, "image")
+            .unwrap()
+            .is_empty()
+    );
+    music_sources::configure(
+        "mygo:fixture-source",
+        std::collections::BTreeMap::from([(
+            "defaultHost".into(),
+            "https://private.example.com".into(),
+        )]),
+    )
+    .unwrap();
     let private_cover = mygo::search("fixture-source", "private-cover", 0).unwrap();
     assert_eq!(
         private_cover["tracks"][0]["cover_url"],

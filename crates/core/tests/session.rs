@@ -127,6 +127,7 @@ fn media(track: Track) -> Media {
             .parse()
             .unwrap(),
         user_agent: Some("private-agent".into()),
+        uses_http: false,
         quality: AudioQuality::default(),
         gain_db: None,
         peak: None,
@@ -200,6 +201,11 @@ fn run_scenario(phases: &[&str]) {
         run_worker(&directory, phase);
     }
     std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn http_audio_indicator_follows_the_loaded_source() {
+    run_scenario(&["http_transport"]);
 }
 
 #[test]
@@ -595,6 +601,42 @@ fn session_worker() {
             assert_eq!(resumed.track.as_ref().map(|t| t.id), Some(2));
             assert!(resumed.state == State::Playing && resumed.error.is_none());
             player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+        }
+        "http_transport" => {
+            let mut http = media(track(1));
+            http.uses_http = true;
+            http.url = "http://127.0.0.1/audio".parse().unwrap();
+            assert!(
+                command(&mut player, Action::Play(http.clone()))
+                    .unwrap()
+                    .audio_uses_http
+            );
+            command(&mut player, Action::Enqueue(media(track(2)))).unwrap();
+            assert!(player.status().audio_uses_http);
+
+            let mut https_proxy = media(track(2));
+            https_proxy.url = "http://127.0.0.1/private-https-audio".parse().unwrap();
+            FAIL_LOAD.store(true, Ordering::Relaxed);
+            assert!(command(&mut player, Action::Play(https_proxy.clone())).is_err());
+            assert!(player.status().audio_uses_http);
+            FAIL_LOAD.store(false, Ordering::Relaxed);
+            assert!(
+                !command(&mut player, Action::Play(https_proxy))
+                    .unwrap()
+                    .audio_uses_http
+            );
+
+            command(&mut player, Action::Play(http)).unwrap();
+            FAIL_RESOLVE.store(true, Ordering::Relaxed);
+            let (send, reply) = tokio::sync::oneshot::channel();
+            player.handle(Message::Action(Action::PlayTrack(track(3)), Some(send)));
+            assert!(
+                !player.status().audio_uses_http,
+                "a pending selection must clear the old indicator"
+            );
+            player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+            assert!(reply.blocking_recv().unwrap().is_err());
+            assert!(!player.status().audio_uses_http);
         }
         "media_lease" => {
             let lease = Arc::new(());

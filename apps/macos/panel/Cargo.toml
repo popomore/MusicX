@@ -14,6 +14,10 @@ harness = false
 name = "localization"
 harness = false
 
+[[test]]
+name = "notices"
+harness = false
+
 [dependencies]
 musicx-protocol = { path = "../../../crates/protocol" }
 nsh-core = "=0.4.0"

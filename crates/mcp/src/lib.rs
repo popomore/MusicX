@@ -617,7 +617,7 @@ impl PlayerTools {
     }
 
     #[tool(
-        description = "通过指定 MyGo 插件搜索。kind=tracks(默认)/albums/artists/playlists/shows，offset 分页。歌曲 tracks 返回统一 Track，duration 单位为秒，可直接传给 play_song/enqueue_song。歌手/专辑/播客 ID 可用于 manage_music_sources 的 artist/album/show。"
+        description = "通过指定 MyGo 插件搜索。kind=tracks(默认)/albums/artists/playlists/shows，offset 分页。歌曲 tracks 返回统一 Track，duration 单位为秒，可直接传给 play_song/enqueue_song。插件提供的布尔 unavailable 会随搜索结果返回，true 表示来源报告曲目当前不可播。歌手/专辑/播客 ID 可用于 manage_music_sources 的 artist/album/show。"
     )]
     async fn plugin_search(
         &self,
@@ -814,6 +814,7 @@ mod tests {
                 peak: None,
                 track,
                 url: "https://example.com/resolved.mp3".parse().unwrap(),
+                uses_http: false,
                 user_agent: Some("Independent source fixture".into()),
                 quality: protocol::AudioQuality {
                     requested: quality,
