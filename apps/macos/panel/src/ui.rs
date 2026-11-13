@@ -41,27 +41,30 @@ fn time(seconds: f64) -> String {
 }
 
 fn playback_notices(model: Model) -> impl IntoElement {
-    crate::controls::notice_badge(move || {
-        use crate::controls::Notice;
-        let status = model.status.get();
-        let mut notices = Vec::new();
-        if let Some(error) = status.error.filter(|error| !error.trim().is_empty()) {
-            notices.push(Notice::error(error));
-        }
-        let error = model.error.get();
-        if !error.trim().is_empty() && !notices.iter().any(|notice| notice.message == error) {
-            notices.push(Notice::error(error));
-        }
-        if status.audio_uses_http {
-            notices.push(Notice::warning(tr!(
-                "This audio source uses an unencrypted HTTP connection"
-            )));
-        }
-        if model.cover_failed.get() {
-            notices.push(Notice::warning(tr!("Artwork unavailable")));
-        }
-        notices
-    })
+    crate::controls::notice_badge(
+        move || model.status.with(|s| crate::model::key(s.track.as_ref())),
+        move || {
+            use crate::controls::Notice;
+            let status = model.status.get();
+            let mut notices = Vec::new();
+            if let Some(error) = status.error.filter(|error| !error.trim().is_empty()) {
+                notices.push(Notice::error(error));
+            }
+            let error = model.error.get();
+            if !error.trim().is_empty() && !notices.iter().any(|notice| notice.message == error) {
+                notices.push(Notice::error(error));
+            }
+            if status.audio_uses_http {
+                notices.push(Notice::warning(tr!(
+                    "This audio source uses an unencrypted HTTP connection"
+                )));
+            }
+            if model.cover_failed.get() {
+                notices.push(Notice::warning(tr!("Artwork unavailable")));
+            }
+            notices
+        },
+    )
 }
 #[cfg(target_os = "ios")]
 fn mobile() -> bool {

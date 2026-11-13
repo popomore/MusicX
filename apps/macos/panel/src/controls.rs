@@ -55,25 +55,39 @@ fn notice_icon(kind: impl Fn() -> NoticeKind + 'static) -> impl IntoElement {
 }
 
 /// Reuse the same entry for independent warnings and errors, with errors taking priority.
-pub fn notice_badge(notices: impl Fn() -> Vec<Notice> + 'static) -> impl IntoElement {
+pub fn notice_badge(
+    context: impl Fn() -> String + 'static,
+    notices: impl Fn() -> Vec<Notice> + 'static,
+) -> impl IntoElement {
+    let context = computed(context);
     let notices = computed(notices);
     when(
         move || !notices.get().is_empty(),
         move || {
             let open = signal(false);
+            let previous_context = signal(untracked(|| context.get()));
             let previous_errors = signal(Vec::<String>::new());
             effect(move || {
+                let current_context = context.get();
+                let changed_context = current_context != previous_context.get_untracked();
                 let errors: Vec<_> = notices
                     .get()
                     .into_iter()
                     .filter(|notice| notice.kind == NoticeKind::Error)
                     .map(|notice| notice.message)
                     .collect();
-                if errors != previous_errors.get_untracked() {
-                    let show = !errors.is_empty();
-                    previous_errors.set(errors);
-                    open.set(show);
+                let previous = previous_errors.get_untracked();
+                let added_error = errors
+                    .iter()
+                    .any(|error| changed_context || !previous.contains(error));
+                if changed_context || (errors.is_empty() && !previous.is_empty()) {
+                    open.set(false);
                 }
+                if added_error {
+                    open.set(true);
+                }
+                previous_context.set(current_context);
+                previous_errors.set(errors);
             });
             let kind = move || {
                 if notices
