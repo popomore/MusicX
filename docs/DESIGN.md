@@ -12,6 +12,8 @@ MusicX keeps the current track in focus. The macOS panel is a transient view of 
 
 ## Details and navigation
 
+Use native AppKit menus in the order MusicX, Edit, Playback, View, Window, Help. Keep system actions and text editing on the responder chain. Group related commands with separators, show standard keyboard equivalents, check the current View destination and Mini Lyrics preference, and disable commands without an available playback session. Menu navigation uses the same details pane as the toolbar; settings uses Command-comma. Labels refresh when the interface language changes.
+
 The compact title bar uses the current track's thumbnail to open Now Playing. Use a queue icon as the fallback. The details toolbar switches between Now Playing, History, My Playlists, and Settings. Keep the drag area available in the title bar.
 
 The 296-point details pane opens beside the 320-point player with a 12-point transparent gap. Both panes share one native window. Choose the side with more room on the current display, preferring the right on a tie. Keep the selected side while switching views and keep the main controls available throughout.

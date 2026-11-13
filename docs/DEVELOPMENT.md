@@ -222,4 +222,6 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 
 For UI changes, include the macOS version and describe the window, playback, or source flow you tested. The vendored NSH patch notes describe platform changes. [macOS patches](../vendor/nsh-platform-macos/PATCH.md) · [iOS patches](../vendor/nsh-platform-ios/PATCH.md)
 
-In an interactive macOS session, run the native window lifecycle regression with `MUSICX_NATIVE_UI_TEST=1 cargo test --locked -p musicx-panel --test window_lifecycle`. It checks first-launch activation and reopening a minimized or hidden window; ordinary workspace tests skip this UI run.
+In an interactive macOS session, run the native window lifecycle regression with `MUSICX_DATA_DIR="$(mktemp -d)" MUSICX_NATIVE_UI_TEST=1 cargo test --locked -p musicx-panel --test window_lifecycle`. It checks first-launch activation, reopening minimized or hidden windows, standard menu registration, disabled empty-session actions, the settings shortcut, view navigation, closing the player, and live English/Chinese menu refresh. It changes the isolated instance's language preference; ordinary workspace tests skip this UI run.
+
+Append `-- --menus-only` to verify menu behavior separately when the host session cannot grant focus to a test process. This mode retains the menu assertions and does not validate window activation or reopening.
