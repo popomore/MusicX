@@ -23,8 +23,6 @@ pub enum Page {
     Queue,
     #[cfg(target_os = "macos")]
     Lyrics,
-    #[cfg(target_os = "macos")]
-    Settings,
 }
 
 #[derive(Clone, Copy)]
@@ -79,6 +77,19 @@ enum Loaded {
     Queue(Box<Status>),
 }
 
+#[cfg(target_os = "macos")]
+fn mini_lyrics_preference() -> &'static std::sync::atomic::AtomicBool {
+    static VALUE: std::sync::OnceLock<std::sync::atomic::AtomicBool> = std::sync::OnceLock::new();
+    VALUE.get_or_init(|| {
+        std::sync::atomic::AtomicBool::new(
+            crate::protocol::data_dir()
+                .and_then(|d| std::fs::read_to_string(d.join("panel-preferences.json")).ok())
+                .and_then(|s| serde_json::from_str::<bool>(&s).ok())
+                .unwrap_or(true),
+        )
+    })
+}
+
 pub fn key(track: Option<&Track>) -> String {
     track.map_or_else(String::new, crate::protocol::track_key)
 }
@@ -106,10 +117,7 @@ impl Model {
             lyric_clock: signal(0),
             #[cfg(target_os = "macos")]
             show_mini_lyrics: signal(
-                crate::protocol::data_dir()
-                    .and_then(|d| std::fs::read_to_string(d.join("panel-preferences.json")).ok())
-                    .and_then(|s| serde_json::from_str::<bool>(&s).ok())
-                    .unwrap_or(true),
+                mini_lyrics_preference().load(std::sync::atomic::Ordering::SeqCst),
             ),
             jobs: signal([false; 4]),
             starting: signal(false),
@@ -226,7 +234,7 @@ impl Model {
                 #[cfg(target_os = "macos")]
                 Page::Queue => remote::read_json("/ui/queue").map(|q| Loaded::Queue(Box::new(q))),
                 #[cfg(target_os = "macos")]
-                Page::Lyrics | Page::Settings => unreachable!(),
+                Page::Lyrics => unreachable!(),
                 Page::Player | Page::Sources | Page::Library | Page::Discovery => unreachable!(),
             };
             let _ = send.send(result);
@@ -272,8 +280,6 @@ impl Model {
             Page::Info => Some(0),
             #[cfg(target_os = "macos")]
             Page::Lyrics => Some(0),
-            #[cfg(target_os = "macos")]
-            Page::Settings => None,
             Page::History => Some(1),
             Page::Album => Some(2),
             #[cfg(target_os = "macos")]
@@ -426,9 +432,19 @@ impl Model {
         });
     }
     #[cfg(target_os = "macos")]
+    pub fn refresh_mini_lyrics(self) {
+        let value = mini_lyrics_preference().load(std::sync::atomic::Ordering::SeqCst);
+        if self.show_mini_lyrics.get() != value {
+            self.show_mini_lyrics.set(value);
+        }
+    }
+    #[cfg(target_os = "macos")]
     pub fn toggle_mini_lyrics(self) {
-        self.show_mini_lyrics.update(|value| *value = !*value);
-        let value = self.show_mini_lyrics.get();
+        use std::sync::atomic::Ordering;
+        static TOGGLE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _toggle = TOGGLE.lock().unwrap();
+        let value = !mini_lyrics_preference().fetch_xor(true, Ordering::SeqCst);
+        self.show_mini_lyrics.set(value);
         static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         static WRITER: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let generation = GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;

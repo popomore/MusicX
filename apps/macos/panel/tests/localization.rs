@@ -39,6 +39,10 @@ fn on_disconnected() {}
 #[component]
 fn LanguageScreen() -> impl IntoElement {
     let model = model::Model::new();
+    let mirror = model::Model::new();
+    set_interval(Duration::from_millis(50), move || {
+        mirror.refresh_mini_lyrics()
+    });
     model.status.update(|status| status.volume = 0.42);
     view()
         .flex_1()
@@ -46,6 +50,13 @@ fn LanguageScreen() -> impl IntoElement {
             model
                 .status
                 .with(|status| format!("volume:{}", status.volume))
+        }))
+        .child(text(move || {
+            format!(
+                "mini:{} mirror:{}",
+                model.show_mini_lyrics.get(),
+                mirror.show_mini_lyrics.get()
+            )
         }))
         .child(dynamic(move || {
             model.language.get();
@@ -55,7 +66,7 @@ fn LanguageScreen() -> impl IntoElement {
 
 fn start() -> Headless {
     let mut config = EngineConfig::new(Root::of::<LanguageScreen>());
-    config.viewport = Size::new(px(296.0), px(512.0));
+    config.viewport = Size::new(px(704.0), px(520.0));
     config.environment.window = config.viewport;
     let mut app = Headless::start(config).unwrap();
     app.first_render().unwrap();
@@ -135,6 +146,30 @@ fn exercise() {
         std::fs::read_to_string(directory.join("language")).unwrap(),
         "en\n"
     );
+    app.press("Playback").unwrap();
+    assert!(app.shows("Volume normalization"));
+    assert!(app.shows("Lyric preview"));
+    assert!(
+        !app.shows("English"),
+        "only the selected settings group is shown"
+    );
+    app.press("Lyric preview").unwrap();
+    app.wait_for("text:mini:false mirror:false").unwrap();
+    app.press("Music sources").unwrap();
+    assert!(app.shows("Automatically update plugins"));
+    app.press("MCP connection").unwrap();
+    assert!(app.shows("Copy MCP config"));
+    assert!(!app.shows("Lyric preview"));
+    app.press("Version & updates").unwrap();
+    assert!(app.shows("Check for updates"));
+    assert!(!app.shows("Copy MCP config"));
+    sources_ui::select_settings_group(sources_ui::SettingsGroup::Mcp);
+    app.wait(Duration::from_millis(150)).unwrap();
+    assert!(
+        app.shows("Copy MCP config"),
+        "contextual setup opens the MCP group"
+    );
+    app.press("Language").unwrap();
     app.press("简体中文").unwrap();
     app.wait(Duration::from_millis(100)).unwrap();
     assert!(app.shows("版本与更新"));
@@ -157,7 +192,7 @@ fn exercise() {
         "reopening settings must use the saved language"
     );
     println!(
-        "localization: real App layout, resizing, language refresh, system default, manual switching, Model preservation and reopen passed"
+        "localization: real App layout, settings sidebar, resizing, language refresh, system default, manual switching, Model preservation and reopen passed"
     );
 }
 

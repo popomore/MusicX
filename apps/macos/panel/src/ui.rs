@@ -811,24 +811,7 @@ pub fn App() -> impl IntoElement {
             .error
             .set(tr!("Player failed to start: {error}"; error = error));
     }
-    let refreshing = signal(false);
-    set_interval(Duration::from_millis(500), move || {
-        model.refresh_language();
-        if refreshing.get() {
-            return;
-        }
-        refreshing.set(true);
-        let (send, receive) = oneshot::channel();
-        submit(Action::DisplayStatus, Some(send));
-        spawn(async move {
-            match receive.await {
-                Ok(Ok(status)) => model.update(status),
-                Ok(Err(error)) => model.error.set(error.to_string()),
-                Err(_) => {}
-            }
-            refreshing.set(false);
-        });
-    });
+    poll_status(model, true);
     // Keep the application root at window height while its localized children
     // are replaced. A bare root region otherwise gets an intrinsic-size host.
     view().flex_1().child(dynamic(move || {
@@ -846,6 +829,46 @@ pub fn App() -> impl IntoElement {
             }
         })
     }))
+}
+
+#[cfg(target_os = "macos")]
+#[component]
+/// A separate settings surface with the same helper-owned playback session.
+pub fn Settings() -> impl IntoElement {
+    let model = Model::new();
+    poll_status(model, false);
+    crate::sources_ui::settings_view(model)
+}
+
+fn poll_status(model: Model, player: bool) {
+    let refreshing = signal(false);
+    set_interval(Duration::from_millis(500), move || {
+        model.refresh_language();
+        #[cfg(target_os = "macos")]
+        model.refresh_mini_lyrics();
+        if refreshing.get() {
+            return;
+        }
+        refreshing.set(true);
+        let (send, receive) = oneshot::channel();
+        submit(Action::DisplayStatus, Some(send));
+        spawn(async move {
+            match receive.await {
+                Ok(Ok(status)) => {
+                    if player {
+                        model.update(status);
+                    } else {
+                        model.status.set(status);
+                        #[cfg(target_os = "macos")]
+                        model.status_ready.set(true);
+                    }
+                }
+                Ok(Err(error)) => model.error.set(error.to_string()),
+                Err(_) => {}
+            }
+            refreshing.set(false);
+        });
+    });
 }
 
 #[cfg(target_os = "ios")]

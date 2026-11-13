@@ -1,8 +1,10 @@
 //! Every music source uses the same MyGo configuration, account and import flow.
 use crate::protocol::tr;
+#[cfg(target_os = "ios")]
+use crate::{controls::section, model::Page};
 use crate::{
-    controls::{action, caption, heading, section},
-    model::{Model, Page},
+    controls::{action, caption, heading},
+    model::Model,
     protocol::{MusicSource, MusicSourceAction, PluginUpdateSettings},
     remote,
 };
@@ -97,8 +99,157 @@ impl Sources {
         self.mode.set(Mode::Plugins);
     }
 }
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(usize)]
+pub enum SettingsGroup {
+    Language,
+    Playback,
+    Sources,
+    Mcp,
+    Updates,
+}
+
+#[cfg(target_os = "macos")]
+impl SettingsGroup {
+    const ALL: [Self; 5] = [
+        Self::Language,
+        Self::Playback,
+        Self::Sources,
+        Self::Mcp,
+        Self::Updates,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Language => tr!("Language"),
+            Self::Playback => tr!("Playback"),
+            Self::Sources => tr!("Music sources"),
+            Self::Mcp => tr!("MCP connection"),
+            Self::Updates => tr!("Version & updates"),
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+static SETTINGS_GROUP: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(target_os = "macos")]
+pub fn select_settings_group(group: SettingsGroup) {
+    SETTINGS_GROUP.store(group as usize, std::sync::atomic::Ordering::SeqCst);
+}
+
+#[cfg(target_os = "macos")]
 pub fn settings_view(model: Model) -> impl IntoElement {
-    flow(model, false, || {})
+    let read_group =
+        || SettingsGroup::ALL[SETTINGS_GROUP.load(std::sync::atomic::Ordering::SeqCst)];
+    let group = signal(read_group());
+    set_interval(std::time::Duration::from_millis(100), move || {
+        let next = read_group();
+        if group.get() != next {
+            group.set(next);
+        }
+    });
+    view().flex_1().child(dynamic(move || {
+        model.language.get();
+        untracked(move || {
+            view()
+                .flex_1()
+                .flex_row()
+                .bg(move || theme().background)
+                .child(
+                    SettingsGroup::ALL.into_iter().fold(
+                        view()
+                            .w(px(184.0))
+                            .min_w(px(184.0))
+                            .h_full()
+                            .p(px(12.0))
+                            .pt(px(24.0))
+                            .gap(px(4.0))
+                            .bg(move || theme().muted.opacity(0.38)),
+                        |sidebar, item| {
+                            sidebar.child(
+                                button()
+                                    .accessibility_label(Some(item.label().into()))
+                                    .selected(move || group.get() == item)
+                                    .on_press(move || {
+                                        select_settings_group(item);
+                                        group.set(item);
+                                    })
+                                    .h(px(36.0))
+                                    .w_full()
+                                    .px(px(10.0))
+                                    .justify_center()
+                                    .rounded(px(7.0))
+                                    .bg(move || {
+                                        if group.get() == item {
+                                            theme().muted
+                                        } else {
+                                            theme().muted.opacity(0.0)
+                                        }
+                                    })
+                                    .hover(|s| s.bg(theme().muted.opacity(0.7)).cursor_pointer())
+                                    .active(|s| s.opacity(0.65))
+                                    .child(
+                                        text(item.label())
+                                            .number_of_lines(1)
+                                            .text_size(px(12.0))
+                                            .text_color(move || theme().foreground),
+                                    ),
+                            )
+                        },
+                    ),
+                )
+                .child(view().w(px(1.0)).h_full().bg(move || theme().muted))
+                .child(
+                    view()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .h_full()
+                        .p(px(28.0))
+                        .child(when(
+                            move || group.get() == SettingsGroup::Language,
+                            move || scroll().flex_1().child(language_settings(model)),
+                        ))
+                        .child(when(
+                            move || group.get() == SettingsGroup::Playback,
+                            move || scroll().flex_1().child(playback_settings(model)),
+                        ))
+                        .child(when(
+                            move || group.get() == SettingsGroup::Sources,
+                            move || flow(model, false, || {}, true),
+                        ))
+                        .child(when(
+                            move || group.get() == SettingsGroup::Mcp,
+                            || scroll().flex_1().child(mcp_settings()),
+                        ))
+                        .child(when(
+                            move || group.get() == SettingsGroup::Updates,
+                            || scroll().flex_1().child(update_settings()),
+                        )),
+                )
+        })
+    }))
+}
+
+#[cfg(target_os = "ios")]
+pub fn settings_view(model: Model) -> impl IntoElement {
+    flow(model, false, || {}, false)
+}
+
+fn settings_heading(label: &'static str) -> impl IntoElement {
+    #[cfg(target_os = "macos")]
+    {
+        text(label)
+            .text_size(px(20.0))
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(move || theme().foreground)
+            .mb(px(16.0))
+    }
+    #[cfg(target_os = "ios")]
+    {
+        section(label)
+    }
 }
 
 fn language_settings(model: Model) -> impl IntoElement {
@@ -107,7 +258,7 @@ fn language_settings(model: Model) -> impl IntoElement {
     let message = signal(String::new());
     view()
         .gap(px(8.0))
-        .child(section(tr!("Language")))
+        .child(settings_heading(tr!("Language")))
         .child(Language::ALL.into_iter().fold(
             view().flex_row().flex_wrap().gap(px(4.0)),
             |row, language| {
@@ -199,7 +350,7 @@ fn update_settings() -> impl IntoElement {
         });
     view()
         .gap(px(8.0))
-        .child(section(tr!("Version & updates")))
+        .child(settings_heading(tr!("Version & updates")))
         .child(
             view()
                 .flex_row()
@@ -257,11 +408,11 @@ fn playback_settings(_model: Model) -> impl IntoElement {
 fn playback_settings(model: Model) -> impl IntoElement {
     view()
         .gap(px(4.0))
-        .child(section(tr!("Play")))
+        .child(settings_heading(tr!("Playback")))
         .child(setting_toggle(
             tr!("Volume normalization"),
             move || model.status.with(|s| s.normalization_enabled),
-            || false,
+            move || !model.status_ready.get(),
             move |enabled| remote::submit(remote::Action::Normalization(enabled), None),
         ))
         .child(setting_toggle(
@@ -351,7 +502,7 @@ fn mcp_settings() -> impl IntoElement {
     let message = signal("");
     view()
         .gap(px(8.0))
-        .child(section(tr!("MCP connection")))
+        .child(settings_heading(tr!("MCP connection")))
         .child(
             view()
                 .px(px(8.0))
@@ -409,9 +560,14 @@ fn settings_separator() -> impl IntoElement {
 }
 
 pub fn import_view(model: Model, back: impl Fn() + Copy + 'static) -> impl IntoElement {
-    flow(model, true, back)
+    flow(model, true, back, false)
 }
-fn flow(model: Model, importing: bool, back: impl Fn() + Copy + 'static) -> impl IntoElement {
+fn flow(
+    model: Model,
+    importing: bool,
+    back: impl Fn() + Copy + 'static,
+    only_sources: bool,
+) -> impl IntoElement {
     let this = Sources {
         owner: Owner::current(),
         mode: signal(if importing {
@@ -431,7 +587,7 @@ fn flow(model: Model, importing: bool, back: impl Fn() + Copy + 'static) -> impl
     view()
         .flex_1()
         .min_h(px(0.0))
-        .pt(px(8.0))
+        .pt(px(if only_sources { 0.0 } else { 8.0 }))
         .gap(px(10.0))
         .child(when(
             move || this.mode.get() == Mode::ChooseImport,
@@ -456,21 +612,33 @@ fn flow(model: Model, importing: bool, back: impl Fn() + Copy + 'static) -> impl
                     view()
                         .gap(px(8.0))
                         .pb(px(12.0))
-                        .child(when(move || !importing, move || language_settings(model)))
-                        .child(when(move || !importing, settings_separator))
-                        .child(when(move || !importing, move || playback_settings(model)))
                         .child(when(
-                            move || !importing && cfg!(target_os = "macos"),
+                            move || !importing && !only_sources,
+                            move || language_settings(model),
+                        ))
+                        .child(when(
+                            move || !importing && !only_sources,
+                            settings_separator,
+                        ))
+                        .child(when(
+                            move || !importing && !only_sources,
+                            move || playback_settings(model),
+                        ))
+                        .child(when(
+                            move || !importing && !only_sources && cfg!(target_os = "macos"),
                             settings_separator,
                         ))
                         .child(source_settings(this, importing))
-                        .child(when(move || !importing, settings_separator))
-                        .child(when(move || !importing, mcp_settings))
                         .child(when(
-                            move || !importing && cfg!(target_os = "macos"),
+                            move || !importing && !only_sources,
                             settings_separator,
                         ))
-                        .child(when(move || !importing, update_settings)),
+                        .child(when(move || !importing && !only_sources, mcp_settings))
+                        .child(when(
+                            move || !importing && !only_sources && cfg!(target_os = "macos"),
+                            settings_separator,
+                        ))
+                        .child(when(move || !importing && !only_sources, update_settings)),
                 )
             },
         ))
@@ -484,6 +652,9 @@ fn flow(model: Model, importing: bool, back: impl Fn() + Copy + 'static) -> impl
                         if importing {
                             back()
                         } else {
+                            #[cfg(target_os = "macos")]
+                            crate::desktop::menus::request(crate::desktop::menus::Command::Library);
+                            #[cfg(target_os = "ios")]
                             model.open(Page::Library)
                         }
                     },
@@ -516,9 +687,9 @@ fn source_settings(this: Sources, importing: bool) -> impl IntoElement {
             move || {
                 view()
                     .flex_row()
-                    .items_center()
+                    .items_start()
                     .justify_between()
-                    .child(section(tr!("Music sources")))
+                    .child(settings_heading(tr!("Music sources")))
                     .child(
                         button()
                             .accessibility_label(Some(tr!("Add music source").into()))

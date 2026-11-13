@@ -54,11 +54,9 @@ impl Command {
 
     fn page(self) -> Option<Page> {
         match self {
-            Self::Settings => Some(Page::Settings),
             Self::Queue => Some(Page::Queue),
             Self::History => Some(Page::History),
             Self::Library => Some(Page::Library),
-            Self::Sources => Some(Page::Sources),
             Self::Lyrics => Some(Page::Lyrics),
             Self::TrackInfo => Some(Page::Info),
             _ => None,
@@ -198,6 +196,14 @@ pub fn perform(tag: isize) {
     if let Some(command) = Command::from_tag(tag)
         && enabled(tag)
     {
+        if command == Command::Settings {
+            super::show_settings();
+            return;
+        }
+        if command == Command::Sources {
+            super::open_settings(crate::sources_ui::SettingsGroup::Sources);
+            return;
+        }
         if command.page().is_some() {
             super::show_panel();
         }
@@ -205,6 +211,11 @@ pub fn perform(tag: isize) {
             let _ = sender.send(command);
         }
     }
+}
+
+/// Navigation from another NSH surface still belongs to the player's model.
+pub fn request(command: Command) {
+    dispatch2::DispatchQueue::main().exec_async(move || perform(command as isize));
 }
 
 pub fn refresh_language() {

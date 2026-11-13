@@ -47,11 +47,15 @@ fn on_main<T: Send + 'static>(action: impl FnOnce() -> T + Send + 'static) -> T 
 
 fn app_window() -> (Retained<NSApplication>, Retained<NSWindow>) {
     let app = NSApplication::sharedApplication(MainThreadMarker::new().unwrap());
-    let window = app.windows().firstObject().expect("player window");
+    let window = app
+        .windows()
+        .iter()
+        .find(|window| window.title().to_string() == protocol::APP_NAME)
+        .expect("player window");
     (app, window)
 }
 
-fn wait_for(predicate: fn(&NSApplication, &NSWindow) -> bool) -> bool {
+fn wait_for(predicate: impl Fn(&NSApplication, &NSWindow) -> bool + Copy + Send + 'static) -> bool {
     for _ in 0..100 {
         if on_main(move || {
             let (app, window) = app_window();
@@ -181,6 +185,7 @@ fn shortcut(key: &str, key_code: u16) -> bool {
 
 fn menu_checks() -> anyhow::Result<Vec<&'static str>> {
     use desktop::menus::Command;
+    direction_checks()?;
     anyhow::ensure!(
         wait_for(|_, _| menu_command(Command::Settings).isEnabled()),
         "menu bridge not ready"
@@ -221,10 +226,49 @@ fn menu_checks() -> anyhow::Result<Vec<&'static str>> {
     );
     anyhow::ensure!(
         wait_for(|_, window| {
-            window.frame().size.width == f64::from(desktop::EXPANDED_WIDTH)
-                && menu_command(Command::Settings).state() == NSControlStateValueOn
+            window.frame().size.width == f64::from(desktop::PLAYER_WIDTH)
+                && settings_window().is_some_and(|settings| settings.isVisible())
         }),
-        "settings shortcut did not open details"
+        "settings shortcut did not open an independent panel: {}",
+        on_main(|| app_window()
+            .0
+            .windows()
+            .iter()
+            .map(|window| format!(
+                "title={:?} visible={} key={} frame={:?}",
+                window.title().to_string(),
+                window.isVisible(),
+                window.isKeyWindow(),
+                window.frame()
+            ))
+            .collect::<Vec<_>>()
+            .join("; "))
+    );
+    let settings_id = on_main(|| settings_window().unwrap().windowNumber());
+    on_main(|| desktop::menus::perform(Command::Settings as isize));
+    anyhow::ensure!(
+        on_main(move || settings_window().unwrap().windowNumber() == settings_id),
+        "settings opened a duplicate window"
+    );
+    on_main(|| app_window().1.performClose(None));
+    anyhow::ensure!(
+        wait_for(|_, window| !window.isVisible() && settings_window().is_some()),
+        "closing the player closed settings"
+    );
+    on_main(reopen);
+    anyhow::ensure!(
+        wait_for(|_, window| window.isVisible() && !window.isMiniaturized()),
+        "player could not reopen while settings remained open"
+    );
+    on_main(|| settings_window().unwrap().performClose(None));
+    anyhow::ensure!(
+        wait_for(|_, window| settings_window().is_none() && window.isVisible()),
+        "closing settings affected the player"
+    );
+    on_main(|| desktop::menus::perform(Command::Settings as isize));
+    anyhow::ensure!(
+        wait_for(|_, _| settings_window().is_some_and(|window| window.isVisible())),
+        "settings failed to reopen"
     );
     on_main(|| {
         let item = menu_command(Command::History);
@@ -266,14 +310,58 @@ fn menu_checks() -> anyhow::Result<Vec<&'static str>> {
         "Chinese menu refresh"
     );
     original.save()?;
+    on_main(|| settings_window().unwrap().performClose(None));
+    anyhow::ensure!(
+        wait_for(|_, window| settings_window().is_none() && window.isVisible()),
+        "settings did not finish closing"
+    );
     Ok(vec![
+        "hint direction follows native player moves",
         "standard menus",
         "empty playback actions disabled",
-        "settings shortcut opens details",
+        "settings shortcut opens an independent reusable panel",
         "view menu navigates details",
         "English menu refresh",
         "Chinese menu refresh",
     ])
+}
+
+fn direction_checks() -> anyhow::Result<()> {
+    let original = on_main(|| app_window().1.frame());
+    for left in [false, true] {
+        on_main(move || {
+            let window = app_window().1;
+            let visible = window.screen().unwrap().visibleFrame();
+            let x = if left {
+                visible.origin.x + visible.size.width - window.frame().size.width - 24.0
+            } else {
+                visible.origin.x + 24.0
+            };
+            window.setFrameOrigin(NSPoint::new(x, window.frame().origin.y));
+        });
+        anyhow::ensure!(
+            wait_for(move |_, _| desktop::preferred_details_left() == left),
+            "hint did not follow the native window move"
+        );
+        let chosen = desktop::request_details_left().blocking_recv()?;
+        anyhow::ensure!(
+            chosen == left,
+            "hint disagreed with the native opening direction"
+        );
+    }
+    on_main(move || app_window().1.setFrame_display(original, true));
+    Ok(())
+}
+
+fn settings_window() -> Option<Retained<NSWindow>> {
+    use protocol::i18n::{Locale, text_for};
+    app_window().0.windows().iter().find(|window| {
+        let title = window.title().to_string();
+        window.isVisible()
+            && [Locale::English, Locale::SimplifiedChinese]
+                .into_iter()
+                .any(|locale| title == text_for(locale, "Settings"))
+    })
 }
 
 fn main() {
@@ -284,6 +372,10 @@ fn main() {
     }
     if std::env::var("MUSICX_NATIVE_UI_TEST").as_deref() != Ok("1") {
         println!("Skipped: set MUSICX_NATIVE_UI_TEST=1 in an interactive macOS session.");
+        return;
+    }
+    if std::env::args().any(|argument| argument == "--preview") {
+        assert_eq!(desktop::run_panel(), std::process::ExitCode::SUCCESS);
         return;
     }
     let menus_only = std::env::args().any(|argument| argument == "--menus-only");
@@ -311,7 +403,7 @@ fn main() {
     });
     assert_eq!(desktop::run_panel(), std::process::ExitCode::SUCCESS);
     let passed = worker.join().unwrap().unwrap();
-    assert_eq!(passed.len(), if menus_only { 7 } else { 17 });
+    assert_eq!(passed.len(), if menus_only { 8 } else { 18 });
     for phase in passed {
         println!("{phase}: passed");
     }

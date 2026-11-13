@@ -13,18 +13,57 @@ use objc2_foundation::{
     NSBundle, NSDistributedNotificationCenter, NSNotification, NSNotificationSuspensionBehavior,
     NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, ns_string,
 };
-use std::{cell::RefCell, process::ExitCode, rc::Rc};
+use std::{
+    cell::RefCell,
+    process::ExitCode,
+    rc::Rc,
+    sync::atomic::{AtomicBool, Ordering},
+};
 thread_local! {
     static PANEL: RefCell<Option<Panel>> = const { RefCell::new(None) };
+    static SETTINGS: RefCell<Option<SettingsPanel>> = const { RefCell::new(None) };
 }
+static PREFERRED_LEFT: AtomicBool = AtomicBool::new(false);
 
 pub fn refresh_language() {
-    dispatch2::DispatchQueue::main().exec_async(menus::refresh_language);
+    dispatch2::DispatchQueue::main().exec_async(|| {
+        menus::refresh_language();
+        SETTINGS.with_borrow(|panel| {
+            if let Some(panel) = panel {
+                panel
+                    .window
+                    .setTitle(&NSString::from_str(crate::protocol::tr!("Settings")));
+            }
+        });
+    });
 }
 struct Panel {
     window: Retained<NSWindow>,
     view: Rc<AppView>,
     details_left: std::cell::Cell<bool>,
+}
+struct SettingsPanel {
+    window: Retained<NSWindow>,
+    view: Rc<AppView>,
+}
+
+/// Updated by AppKit when the player moves, including between displays.
+pub fn preferred_details_left() -> bool {
+    PREFERRED_LEFT.load(Ordering::Relaxed)
+}
+
+fn update_details_side() {
+    PANEL.with_borrow(|panel| {
+        if let Some(panel) = panel {
+            let frame = panel.window.frame();
+            let left = if frame.size.width > f64::from(PLAYER_WIDTH) + 1.0 {
+                panel.details_left.get()
+            } else {
+                visible_frame(&panel.window).is_some_and(|visible| prefer_left(frame, visible))
+            };
+            PREFERRED_LEFT.store(left, Ordering::Relaxed);
+        }
+    });
 }
 
 fn visible_frame(window: &NSWindow) -> Option<NSRect> {
@@ -73,6 +112,7 @@ pub fn request_details_left() -> tokio::sync::oneshot::Receiver<bool> {
             }
             visible_frame(&panel.window).is_some_and(|visible| prefer_left(frame, visible))
         });
+        PREFERRED_LEFT.store(left, Ordering::Relaxed);
         let _ = send.send(left);
     });
     receive
@@ -185,9 +225,29 @@ define_class!(
         }
     }
     unsafe impl NSWindowDelegate for PanelDelegate {
+        #[unsafe(method(windowDidMove:))]
+        fn moved(&self, _notification: &NSNotification) { update_details_side(); }
+        #[unsafe(method(windowDidChangeScreen:))]
+        fn changed_screen(&self, _notification: &NSNotification) { update_details_side(); }
         #[unsafe(method(windowWillClose:))]
-        fn closed(&self, _notification: &NSNotification) {
-            dispatch2::DispatchQueue::main().exec_async(stop_panel);
+        fn closed(&self, notification: &NSNotification) {
+            let settings_closed = SETTINGS.with_borrow(|panel| {
+                panel.as_ref().is_some_and(|panel| {
+                    notification.object()
+                        .and_then(|object| object.downcast::<NSWindow>().ok())
+                        .is_some_and(|window| window.windowNumber() == panel.window.windowNumber())
+                })
+            });
+            dispatch2::DispatchQueue::main().exec_async(move || {
+                if settings_closed {
+                    stop_settings();
+                    if !PANEL.with_borrow(|panel| panel.as_ref().is_some_and(|panel| panel.window.isVisible())) {
+                        stop_panel();
+                    }
+                } else if SETTINGS.with_borrow(Option::is_none) {
+                    stop_panel();
+                }
+            });
         }
     }
 );
@@ -203,6 +263,77 @@ fn show_panel() {
             panel.window.makeKeyAndOrderFront(None);
         }
     });
+}
+
+pub fn open_settings(group: crate::sources_ui::SettingsGroup) {
+    crate::sources_ui::select_settings_group(group);
+    dispatch2::DispatchQueue::main().exec_async(show_settings);
+}
+
+/// Settings is one independently focusable native window, never a drawer page.
+pub fn show_settings() {
+    let mtm = MainThreadMarker::new().expect("main thread");
+    let app = NSApplication::sharedApplication(mtm);
+    if SETTINGS.with_borrow(Option::is_none) {
+        let mut options = panel_options();
+        options.app_id = crate::protocol::component_app_id("settings");
+        options.title = crate::protocol::tr!("Settings").into();
+        options.data_dir = crate::protocol::data_dir().map(|directory| directory.join("settings"));
+        options.size = (704, 520);
+        options.transparent = false;
+        options.decorated = true;
+        let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(704.0, 520.0));
+        let window = unsafe {
+            NSWindow::initWithContentRect_styleMask_backing_defer(
+                NSWindow::alloc(mtm),
+                frame,
+                NSWindowStyleMask::Titled
+                    | NSWindowStyleMask::Closable
+                    | NSWindowStyleMask::Miniaturizable
+                    | NSWindowStyleMask::Resizable,
+                NSBackingStoreType::Buffered,
+                false,
+            )
+        };
+        unsafe {
+            window.setReleasedWhenClosed(false);
+        }
+        window.setTitle(&NSString::from_str(crate::protocol::tr!("Settings")));
+        window.setContentMinSize(NSSize::new(640.0, 440.0));
+        window.setTabbingMode(NSWindowTabbingMode::Disallowed);
+        PANEL.with_borrow(|panel| {
+            if let Some(panel) = panel {
+                window.setDelegate(panel.window.delegate().as_deref());
+            }
+        });
+        let view = AppView::new(mtm, options);
+        view.set_theme_overrides(Some(include_str!("../../../../assets/theme.json")))
+            .expect("valid player palette");
+        window.setContentView(Some(&view.view()));
+        window.center();
+        view.load(nsh_platform_macos::App::Rust(
+            Root::of::<crate::ui::Settings>().app_id(crate::protocol::component_app_id("settings")),
+        ));
+        SETTINGS.with_borrow_mut(|panel| *panel = Some(SettingsPanel { window, view }));
+    }
+    app.activate();
+    SETTINGS.with_borrow(|panel| {
+        if let Some(panel) = panel {
+            if panel.window.isMiniaturized() {
+                panel.window.deminiaturize(None);
+            }
+            panel.window.makeKeyAndOrderFront(None);
+        }
+    });
+}
+
+fn stop_settings() {
+    if let Some(panel) = SETTINGS.with_borrow_mut(Option::take) {
+        panel.window.setDelegate(None);
+        panel.window.close();
+        panel.window.setContentView(None);
+        panel.view.stop();
+    }
 }
 
 fn panel_options() -> AppOptions {
@@ -286,6 +417,7 @@ pub fn run_panel() -> ExitCode {
             details_left: std::cell::Cell::new(false),
         })
     });
+    update_details_side();
     let notifications = NSDistributedNotificationCenter::defaultCenter();
     let reopen = NSString::from_str(&crate::protocol::panel_reopen_notification());
     let process_id = NSString::from_str(&std::process::id().to_string());
@@ -310,6 +442,7 @@ pub fn run_panel() -> ExitCode {
 
 pub fn stop_panel() {
     crate::source_browser::cancel_active_login();
+    stop_settings();
     let panel = PANEL.with_borrow_mut(Option::take);
     if let Some(panel) = panel {
         panel.window.setDelegate(None);
