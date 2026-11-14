@@ -107,20 +107,38 @@ fn request<T: serde::de::DeserializeOwned>(action: Action) -> anyhow::Result<T> 
 }
 impl Browser {
     fn network_permission(self, enabled: bool) {
-        let Some(source) = self.selected.with(|s| s.as_ref().map(|s| s.id.clone())) else {
+        let Some((source, expected_fingerprint)) = self.selected.with(|s| {
+            s.as_ref()
+                .map(|s| (s.id.clone(), s.permission_fingerprint.clone()))
+        }) else {
             return;
         };
         self.work(
-            move || request::<MusicSource>(Action::SetNetworkPermission { source, enabled }),
+            move || {
+                request::<MusicSource>(Action::SetNetworkPermission {
+                    source,
+                    enabled,
+                    expected_fingerprint,
+                })
+            },
             |this, source| this.selected.set(Some(source)),
         );
     }
     fn process_permission(self, enabled: bool) {
-        let Some(source) = self.selected.with(|s| s.as_ref().map(|s| s.id.clone())) else {
+        let Some((source, expected_fingerprint)) = self.selected.with(|s| {
+            s.as_ref()
+                .map(|s| (s.id.clone(), s.permission_fingerprint.clone()))
+        }) else {
             return;
         };
         self.work(
-            move || request::<MusicSource>(Action::SetProcessPermission { source, enabled }),
+            move || {
+                request::<MusicSource>(Action::SetProcessPermission {
+                    source,
+                    enabled,
+                    expected_fingerprint,
+                })
+            },
             |this, source| this.selected.set(Some(source)),
         );
     }
@@ -580,6 +598,7 @@ fn verification_details(source: &MusicSource) -> Vec<String> {
             evidence.verified_at
         ),
         tr!("Verified features: {}", checks.join(" · ")),
+        tr!("Trust covers the listed functional checks, not a security audit or platform certification").into(),
         tr!("Full-track playback and account access still depend on the service").into(),
     ];
     for limitation in &evidence.limitations {
@@ -701,7 +720,7 @@ pub fn sources_view(
                     .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.verification.is_some())),move||text(move||this.selected.with(|s|s.as_ref().map_or_else(String::new,verification_label))).text_size(px(12.0)).font_weight(FontWeight::SEMIBOLD).text_color(move||theme().foreground)))
                     .child(each(move||this.selected.with(|s|s.as_ref().map_or_else(Vec::new,verification_details)),Clone::clone,move|line,_|caption(move||line.get()))))
                 .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|!s.description.is_empty())),move||caption(move||this.selected.with(|s|s.as_ref().map_or_else(String::new,|s|s.description.clone())))))
-                .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|!s.notes.is_empty())),move||caption(move||this.selected.with(|s|s.as_ref().map_or_else(String::new,|s|s.notes.join("\n"))))))
+                .child(each(move||this.selected.with(|s|s.as_ref().map_or_else(Vec::new,|s|s.notes.clone())),Clone::clone,move|note,_|caption(move||note.get())))
                 .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.repository.is_some()&&(!s.installed||this.managing.get()))),move||button()
                     .accessibility_label(Some(tr!("Open source project").into())).on_press(move||{if let Some(url)=this.selected.with(|s|s.as_ref().and_then(|s|s.repository.clone())){spawn(async move{let _=open_url(url).await;});}})
                     .py(px(6.0)).rounded(px(4.0)).hover(|s|s.bg(theme().muted)).child(caption(move||this.selected.with(|s|s.as_ref().and_then(|s|s.repository.clone()).unwrap_or_default())))))

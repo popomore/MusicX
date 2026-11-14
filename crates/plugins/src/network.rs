@@ -21,7 +21,12 @@ pub(crate) fn granted(manifest: &Manifest) -> bool {
     })();
     check.unwrap_or(false)
 }
-pub(crate) fn set(id: &str, enabled: bool) -> anyhow::Result<()> {
+pub(crate) fn set(
+    id: &str,
+    enabled: bool,
+    expected: Option<&str>,
+    guard: &std::sync::MutexGuard<'_, ()>,
+) -> anyhow::Result<()> {
     use musicx_core::{protocol::tr, storage};
     anyhow::ensure!(mygo::valid_id(id), tr!("Invalid plugin ID"));
     let root = mygo::plugin_root()?.join(id);
@@ -34,7 +39,7 @@ pub(crate) fn set(id: &str, enabled: bool) -> anyhow::Result<()> {
     if enabled {
         storage::save_private(
             &name,
-            &serde_json::to_string(&crate::plugin_files::hashes(&root)?)?,
+            &serde_json::to_string(&crate::permissions::reviewed_files(&root, expected, guard)?)?,
         )?;
     } else if let Err(error) = std::fs::remove_file(storage::state_dir()?.join(name))
         && error.kind() != std::io::ErrorKind::NotFound

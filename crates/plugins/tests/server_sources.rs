@@ -103,6 +103,11 @@ export async function probe({url}){return (await fetch(url,{headers:{'X-Token':h
 export function qualityProbe(){return host.storage.get('lastQuality')}
 export async function binaryProbe(){const response=await fetch(host.setting('server')+'/binary',{method:'PROPFIND',headers:{'X-Token':host.setting('apiKey')},body:new Uint8Array([0,255,128,1])});return Array.from(new Uint8Array(await response.arrayBuffer()))}
 "#).unwrap();
+    fs::write(
+        fixture.join("SETTINGS.JSON"),
+        json!({"server":server,"apiKey":"fixture-key"}).to_string(),
+    )
+    .unwrap();
     mygo::install(&fixture).unwrap();
     assert!(
         mygo::search("private.server", "query", 0).is_err(),
@@ -176,6 +181,9 @@ export async function binaryProbe(){const response=await fetch(host.setting('ser
     music_sources::execute(MusicSourceAction::SetNetworkPermission {
         source: "mygo:private.server".into(),
         enabled: true,
+        expected_fingerprint: music_sources::get_source("mygo:private.server")
+            .unwrap()
+            .permission_fingerprint,
     })
     .unwrap();
     assert!(
@@ -188,11 +196,22 @@ export async function binaryProbe(){const response=await fetch(host.setting('ser
         204
     );
     worker.join().unwrap();
+    let reviewed = music_sources::get_source("mygo:private.server")
+        .unwrap()
+        .permission_fingerprint;
     fs::write(
         root.join("state/mygo-plugins/private.server/extra.txt"),
         "modified",
     )
     .unwrap();
+    assert!(
+        music_sources::execute(MusicSourceAction::SetNetworkPermission {
+            source: "mygo:private.server".into(),
+            enabled: true,
+            expected_fingerprint: reviewed
+        })
+        .is_err()
+    );
     assert!(
         !music_sources::get_source("mygo:private.server")
             .unwrap()

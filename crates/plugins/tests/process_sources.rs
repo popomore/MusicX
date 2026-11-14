@@ -87,6 +87,9 @@ export function serverPid(){return host.storage.get('serverPid')}
         music_sources::execute(MusicSourceAction::SetProcessPermission {
             source: "mygo:process.fixture".into(),
             enabled,
+            expected_fingerprint: music_sources::get_source("mygo:process.fixture")
+                .unwrap()
+                .permission_fingerprint,
         })
         .unwrap()
     };
@@ -116,7 +119,21 @@ export function serverPid(){return host.storage.get('serverPid')}
             .as_ref(),
         b"audio-bytes"
     );
+    grant(false);
+    assert_ne!(
+        unsafe { libc::kill(pid, 0) },
+        0,
+        "revoking permission must terminate an active leased helper"
+    );
     drop(media);
+    grant(true);
+    let replacement = mygo::resolve_with_quality(track.clone(), Quality::Standard).unwrap();
+    let replacement_pid = mygo::invoke("process.fixture", "serverPid", json!({}))
+        .unwrap()
+        .as_i64()
+        .unwrap() as i32;
+    drop(replacement);
+    assert_ne!(unsafe { libc::kill(replacement_pid, 0) }, 0);
     assert_ne!(
         unsafe { libc::kill(pid, 0) },
         0,
@@ -128,7 +145,19 @@ export function serverPid(){return host.storage.get('serverPid')}
     let local_path = local.url.to_file_path().unwrap();
     assert_ne!(local_path, installed.join("clip.wav"));
     assert_eq!(fs::read(&local_path).unwrap(), b"fixture-file-audio");
+    let reviewed = music_sources::get_source("mygo:process.fixture")
+        .unwrap()
+        .permission_fingerprint;
     fs::write(installed.join("clip.wav"), b"reused cache path").unwrap();
+    assert!(
+        music_sources::execute(MusicSourceAction::SetProcessPermission {
+            source: "mygo:process.fixture".into(),
+            enabled: true,
+            expected_fingerprint: reviewed
+        })
+        .is_err(),
+        "an old page must not authorize changed files"
+    );
     assert_eq!(fs::read(&local_path).unwrap(), b"fixture-file-audio");
     drop(local);
     assert!(!local_path.exists());

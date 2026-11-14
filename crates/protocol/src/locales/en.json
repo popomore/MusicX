@@ -753,5 +753,13 @@
   "More {}": "More {}",
   "The tested track returned a {}-second preview": "The tested track returned a {}-second preview",
   "Background extensions are not supported by this host": "Background extensions are not supported by this host",
-  "Generated audio exceeds 256 MiB": "Generated audio exceeds 256 MiB"
+  "Generated audio exceeds 256 MiB": "Generated audio exceeds 256 MiB",
+  "Source permissions are busy; try again": "Source permissions are busy; try again",
+  "Refresh the source before granting permission": "Refresh the source before granting permission",
+  "Source files changed; reopen its settings before granting permission": "Source files changed; reopen its settings before granting permission",
+  "This source needs a complete package with its helper files": "This source needs a complete package with its helper files",
+  "The source archive is incomplete; the existing installation was kept": "The source archive is incomplete; the existing installation was kept",
+  "Helpers must run in the foreground without detaching. Detached daemons are not supported or stopped by revoking permission.": "Helpers must run in the foreground without detaching. Detached daemons are not supported or stopped by revoking permission.",
+  "This source cannot control the device volume": "This source cannot control the device volume",
+  "Trust covers the listed functional checks, not a security audit or platform certification": "Trust covers the listed functional checks, not a security audit or platform certification"
 }

@@ -43,6 +43,15 @@ export function storage_limits() {
 
 export function stored() { return host.storage.get("catalog").length; }
 
+export async function aborted_requests(){
+  const poll=globalThis.__fetchPoll;globalThis.__fetchPoll=()=>null;
+  const errors=[];try{for(let i=0;i<20;i++){
+    const controller=new AbortController();const pending=fetch('https://example.com/not-permitted',{signal:controller.signal});controller.abort();
+    try{await pending;}catch(error){errors.push(error.message);}
+  }}finally{globalThis.__fetchPoll=poll;}
+  return errors;
+}
+
 export async function form_fetch() {
   let request;
   globalThis.__fetchStart=undefined;

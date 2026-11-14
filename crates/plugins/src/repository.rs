@@ -13,6 +13,7 @@ const MAX_ARCHIVE: u64 = 32 * 1024 * 1024;
 const MAX_SCRIPT: u64 = 2 * 1024 * 1024;
 
 pub(crate) struct Package {
+    pub assets_complete: bool,
     pub manifest: Vec<u8>,
     pub script: Vec<u8>,
     pub version: String,
@@ -59,6 +60,7 @@ pub(crate) fn latest_version(repo: &str, api: &str) -> Result<String> {
 
 pub(crate) fn download_from(repo: &str, api: &str) -> Result<Package> {
     let release = latest(repo, api)?;
+    let mut assets_complete = true;
     let ((manifest, script, locales), assets) = match crate::http::fetch(&release.url, MAX_ARCHIVE)
     {
         Ok(bytes) => {
@@ -68,6 +70,7 @@ pub(crate) fn download_from(repo: &str, api: &str) -> Result<Package> {
         }
         Err(error) => {
             if let Some(commit) = release.commit.as_deref() {
+                assets_complete = false;
                 (
                     source_files(repo, commit, "https://raw.githubusercontent.com")
                         .with_context(|| format!("{}: {error}", tr!("Plugin download failed")))?,
@@ -79,6 +82,7 @@ pub(crate) fn download_from(repo: &str, api: &str) -> Result<Package> {
         }
     };
     Ok(Package {
+        assets_complete,
         manifest,
         script,
         version: release.version,
@@ -117,6 +121,11 @@ fn source_files(repo: &str, commit: &str, raw: &str) -> Result<Unpacked> {
         Ok(url.into())
     };
     let manifest = crate::http::fetch(&address("plugin.json")?, 65536)?;
+    let parsed: crate::mygo::Manifest = serde_json::from_slice(&manifest)?;
+    ensure!(
+        crate::process::programs(&parsed).is_empty(),
+        tr!("This source needs a complete package with its helper files")
+    );
     let main = entry_name(&manifest)?;
     let script = crate::http::fetch(&address(&main)?, MAX_SCRIPT)?;
     let mut locales = std::collections::BTreeMap::new();
@@ -143,6 +152,7 @@ pub(crate) fn pinned(repo: &str, commit: &str) -> Result<Package> {
     let (manifest, script, locales) = unpack(bytes.clone())?;
     let assets = unpack_assets(bytes, &manifest)?;
     Ok(Package {
+        assets_complete: true,
         manifest,
         script,
         version: commit.to_owned(),
@@ -513,6 +523,23 @@ mod tests {
         worker.join().unwrap();
         assert!(source_files("../repo", &commit, &api).is_err());
         assert!(source_files("owner/repo", "HEAD", &api).is_err());
+    }
+
+    #[test]
+    fn source_only_fallback_refuses_a_helper_dependent_package() {
+        let commit = "b".repeat(40);
+        let (api, worker) = server(|_| {
+            vec![(
+                format!("/owner/repo/{commit}/plugin.json"),
+                200,
+                br#"{"id":"fixture","permissions":{"process":["bin/helper"]}}"#.to_vec(),
+            )]
+        });
+        let error = source_files("owner/repo", &commit, &api).unwrap_err();
+        assert!(error.to_string().contains(tr!(
+            "This source needs a complete package with its helper files"
+        )));
+        worker.join().unwrap();
     }
 
     #[test]

@@ -575,6 +575,8 @@ pub struct MusicSource {
     pub network_unrestricted: bool,
     #[serde(default)]
     pub network_granted: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_fingerprint: Option<String>,
     #[serde(default)]
     pub pages: Vec<SourceNavigation>,
     pub settings: Vec<SourceSetting>,
@@ -678,10 +680,14 @@ pub enum MusicSourceAction {
     SetProcessPermission {
         source: String,
         enabled: bool,
+        #[serde(default)]
+        expected_fingerprint: Option<String>,
     },
     SetNetworkPermission {
         source: String,
         enabled: bool,
+        #[serde(default)]
+        expected_fingerprint: Option<String>,
     },
     Invoke {
         source: String,

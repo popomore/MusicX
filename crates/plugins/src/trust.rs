@@ -116,12 +116,29 @@ pub(crate) fn installed(manifest: &Manifest) -> Option<SourceVerification> {
     let platform = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
     records()
         .iter()
-        .find(|r| r.verification.platform == platform && matches(r, manifest, &dir))
+        .find(|r| {
+            r.id == manifest.id
+                && repository_key(&r.repository)
+                    == manifest.repository.as_deref().and_then(repository_key)
+                && r.verification.platform == platform
+                && matches_installed(r, manifest, &dir)
+        })
         .map(|r| {
             let mut verification = r.verification.clone();
             verification.installed_payload_matches = true;
             verification
         })
+}
+fn matches_installed(record: &Record, claimed: &Manifest, dir: &Path) -> bool {
+    let Ok(actual) = mygo::manifest(dir) else {
+        return false;
+    };
+    claimed.id == actual.id
+        && claimed.version == actual.version
+        && claimed.repository.as_deref().and_then(repository_key)
+            == actual.repository.as_deref().and_then(repository_key)
+        && manifest_digest(claimed) == manifest_digest(&actual)
+        && matches(record, &actual, dir)
 }
 
 #[cfg(test)]
@@ -156,6 +173,17 @@ mod tests {
             locales: BTreeMap::from([("en.json".into(), digest(b"{}"))]),
             assets: BTreeMap::new(),
         };
+        let original = serde_json::to_vec(&manifest).unwrap();
+        fs::write(root.join("plugin.json"), &original).unwrap();
+        assert!(matches_installed(&record, &manifest, &root));
+        let mut changed: serde_json::Value = serde_json::from_slice(&original).unwrap();
+        changed["permissions"]["network"] = serde_json::json!(["*"]);
+        fs::write(root.join("plugin.json"), changed.to_string()).unwrap();
+        assert!(
+            !matches_installed(&record, &manifest, &root),
+            "stale catalog metadata must not conceal a changed installed manifest"
+        );
+        fs::write(root.join("plugin.json"), original).unwrap();
         assert!(matches(&record, &manifest, &root));
         manifest
             .metadata

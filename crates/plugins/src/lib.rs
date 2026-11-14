@@ -11,6 +11,7 @@ pub mod music_sources;
 pub mod mygo;
 mod network;
 mod oauth;
+mod permissions;
 mod plugin_files;
 pub mod plugin_updates;
 mod process;

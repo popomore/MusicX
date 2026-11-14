@@ -139,23 +139,11 @@ pub fn page(source: &str, method: &str, params: Value) -> Result<SourcePage> {
         let id = params["id"]
             .as_str()
             .context(tr!("Invalid source item identifier"))?;
-        bounded_id(id)?;
-        let value = mygo::invoke(plugin, method, json!({"id":id}))?;
+        let (origin, tracks) = crate::music_sources::playlist_snapshot(source, id)?;
         return Ok(SourcePage {
-            id: id.into(),
-            title: value["name"]
-                .as_str()
-                .unwrap_or(id)
-                .chars()
-                .take(512)
-                .collect(),
-            tracks: tracks(
-                plugin,
-                value["tracks"]
-                    .as_array()
-                    .map(Vec::as_slice)
-                    .unwrap_or_default(),
-            )?,
+            id: origin.id,
+            title: origin.name.chars().take(512).collect(),
+            tracks,
             ..Default::default()
         });
     } else {

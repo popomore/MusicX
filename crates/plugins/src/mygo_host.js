@@ -144,7 +144,7 @@ globalThis.fetch = async (url, init = {}) => {
         const started=JSON.parse(__fetchStart(request));
         if (started.error) throw new Error(started.error);
         for (;;) {
-            if (init.signal?.aborted) throw new Error("Request aborted");
+            if (init.signal?.aborted) {if(typeof __fetchCancel==='function')__fetchCancel(started.id);throw new Error("Request aborted");}
             raw=__fetchPoll(started.id);
             if (raw!=null) break;
             await new Promise(resolve=>setTimeout(resolve,10));

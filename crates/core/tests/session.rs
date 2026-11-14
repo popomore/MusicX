@@ -29,6 +29,8 @@ static NATIVE_AUDIO_ENDED: AtomicBool = AtomicBool::new(false);
 static NATIVE_DURATION: AtomicU64 = AtomicU64::new(180.0_f64.to_bits());
 static PLAYBACK_ELAPSED: AtomicU64 = AtomicU64::new(0);
 static STATION_BATCH: AtomicU64 = AtomicU64::new(10);
+static FAIL_TRACK: AtomicU64 = AtomicU64::new(0);
+static EXTRA_STATION_TRACK: AtomicBool = AtomicBool::new(false);
 
 fn dispatch(message: Message) {
     MESSAGES.get().unwrap().send(message).unwrap();
@@ -40,11 +42,19 @@ impl DataSource for Source {
     fn station_next(&self, source: &str, id: &str) -> Result<Vec<Track>> {
         assert_eq!(source, "mygo:station-fixture");
         assert_eq!(id, "fm");
-        Ok(vec![track(STATION_BATCH.fetch_add(1, Ordering::Relaxed))])
+        let id = STATION_BATCH.fetch_add(1, Ordering::Relaxed);
+        let mut tracks = vec![track(id)];
+        if EXTRA_STATION_TRACK.load(Ordering::Relaxed) {
+            tracks.push(track(id + 1));
+        }
+        Ok(tracks)
     }
     fn resolve(&self, track: Track, _: Quality) -> Result<Media> {
         RESOLVES.fetch_add(1, Ordering::Relaxed);
-        if FAIL_RESOLVE.load(Ordering::Relaxed) {
+        if FAIL_RESOLVE.load(Ordering::Relaxed)
+            || (FAIL_TRACK.load(Ordering::Relaxed) != 0
+                && FAIL_TRACK.load(Ordering::Relaxed) == track.id)
+        {
             bail!("offline");
         }
         Ok(media(track))
@@ -214,6 +224,13 @@ fn run_scenario(phases: &[&str]) {
         run_worker(&directory, phase);
     }
     std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn radio_refills_retry_unavailable_tracks_and_reconcile_enqueued_successors() {
+    for phase in ["radio_refill_retry", "radio_refill_enqueue"] {
+        run_scenario(&[phase]);
+    }
 }
 
 #[test]
@@ -447,6 +464,49 @@ fn session_worker() {
     let mut player = Player::<Audio>::new(dispatch, &SOURCE);
     let action = |player: &mut Player<Audio>, action| player.handle(Message::Action(action, None));
     match phase.as_str() {
+        "radio_refill_retry" | "radio_refill_enqueue" => {
+            resolve_command(
+                &mut player,
+                Action::ReplaceQueue {
+                    tracks: vec![track(1)],
+                    index: 0,
+                    context: QueueContext::Station {
+                        source: "mygo:station-fixture".into(),
+                        id: "fm".into(),
+                        name: "FM".into(),
+                    },
+                },
+                &receive,
+            )
+            .unwrap();
+            if phase == "radio_refill_retry" {
+                FAIL_TRACK.store(10, Ordering::Relaxed);
+                EXTRA_STATION_TRACK.store(true, Ordering::Relaxed);
+            }
+            NATIVE_AUDIO_ENDED.store(true, Ordering::Relaxed);
+            player.tick();
+            let ready = receive.recv_timeout(Duration::from_secs(2)).unwrap();
+            if phase == "radio_refill_enqueue" {
+                command(&mut player, Action::Enqueue(media(track(99)))).unwrap();
+                player.handle(ready);
+                player.tick();
+                assert!(
+                    player.status().switching,
+                    "discarding a stale refill must re-arm the enqueued successor"
+                );
+                player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+                assert_eq!(player.status().track.unwrap().id, 99);
+            } else {
+                player.handle(ready);
+                player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+                assert!(
+                    player.status().switching,
+                    "a failed first FM track must retry the next candidate"
+                );
+                player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+                assert_eq!(player.status().track.unwrap().id, 11);
+            }
+        }
         "radio" => {
             let context = QueueContext::Station {
                 source: "mygo:station-fixture".into(),

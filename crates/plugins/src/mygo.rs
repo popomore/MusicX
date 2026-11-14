@@ -647,6 +647,7 @@ fn install_mode(
         if repository {
             crate::installation::write(&pending, &installed)?;
         }
+        let _permission = crate::permissions::lock()?;
         if let Some(expected) = expected {
             expected.verify(&target)?;
         }
@@ -693,8 +694,9 @@ pub(crate) fn uninstall(id: &str) -> Result<()> {
         tr!("Complete or cancel account connection for this source first")
     );
     let target = plugin_root()?.join(id);
-    crate::process::set(id, false)?;
-    crate::network::set(id, false)?;
+    let permission = crate::permissions::lock()?;
+    crate::process::set(id, false, None, &permission)?;
+    crate::network::set(id, false, None, &permission)?;
     ensure!(
         target.is_dir() && !fs::symlink_metadata(&target)?.file_type().is_symlink(),
         tr!("Source not installed or invalid directory type")

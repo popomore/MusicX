@@ -46,6 +46,8 @@ fn plugin_web_apis() {
     .unwrap();
     mygo::install(&fixture).unwrap();
     let value = mygo::invoke("web-compat", "probe", json!({})).unwrap();
+    let aborted = mygo::invoke("web-compat", "aborted_requests", json!({})).unwrap();
+    assert_eq!(aborted, json!(vec!["Request aborted"; 20]));
     assert_eq!(
         value["relative"],
         "https://example.com/search?q=%E4%B8%AD%E6%96%87&x=2"

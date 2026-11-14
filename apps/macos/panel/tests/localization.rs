@@ -110,6 +110,7 @@ fn verified_source_details() {
         let mut app = Headless::start(config).unwrap();
         app.first_render().unwrap();
         assert!(app.shows(&protocol::tr!("Trusted version {}", "0.2.4")));
+        assert!(app.shows(protocol::tr!("Trust covers the listed functional checks, not a security audit or platform certification")));
         assert!(app.shows(protocol::tr!(
             "The tested track returned a 60-second preview"
         )));

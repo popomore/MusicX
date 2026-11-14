@@ -12,7 +12,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-type Call = Arc<dyn Fn(&str, Value, u64) -> anyhow::Result<Value> + Send + Sync>;
+// None means an optional control is unavailable; Some(Null) is a successful RPC.
+type Call = Arc<dyn Fn(&str, Value, u64) -> anyhow::Result<Option<Value>> + Send + Sync>;
 enum Command {
     Start(bool, f32),
     Play,
@@ -24,6 +25,15 @@ enum Command {
 struct Cache {
     snapshot: RemoteSnapshot,
     at: Instant,
+}
+impl Cache {
+    fn advance(&mut self) {
+        if self.snapshot.playing {
+            self.snapshot.position = (self.snapshot.position + self.at.elapsed().as_secs_f64())
+                .min(self.snapshot.duration.unwrap_or(f64::INFINITY));
+        }
+        self.at = Instant::now();
+    }
 }
 pub(crate) struct Session {
     send: Sender<Command>,
@@ -59,9 +69,22 @@ impl Session {
         let owner_plugin = plugin.clone();
         std::thread::spawn(move || {
             let call = move |method: &str, args: Value| call(method, args, generation);
+            let begin = |position: f64, volume: f32| -> anyhow::Result<bool> {
+                let volume_supported = call(
+                    "remoteVolume",
+                    json!({"percent":(volume*100.0).round() as u32}),
+                )?
+                .is_some();
+                call(
+                    "remotePlay",
+                    json!({"ids":[id],"start":0,"position":(position*1000.0) as u64}),
+                )?;
+                Ok(volume_supported)
+            };
             let mut started = false;
             let mut playing = false;
             let mut volume = 1.0;
+            let mut reported_volume = 1.0;
             let mut desired_position = 0.0;
             let mut owns = false;
             let mut failures = 0u32;
@@ -75,8 +98,10 @@ impl Session {
                     Err(_) => Some(Command::Stop),
                 };
                 if matches!(command, Some(Command::Stop)) {
-                    if started && owns && owned() {
-                        let _ = call("remotePause", json!({}));
+                    if owns && owned() {
+                        if started {
+                            let _ = call("remotePause", json!({}));
+                        }
                         let mut owners = owners().lock().unwrap();
                         if owners.get(&plugin) == Some(&generation) {
                             owners.remove(&plugin);
@@ -92,6 +117,7 @@ impl Session {
                     continue;
                 }
                 let mut completion = None;
+                let mut unsupported = false;
                 let is_command = command.is_some();
                 let result = match command {
                     Some(Command::Start(play, value)) => {
@@ -99,8 +125,16 @@ impl Session {
                         volume = value;
                         playing = play;
                         if play {
-                            started = true;
-                            call("remotePlay",json!({"ids":[id],"start":0,"position":(desired_position*1000.0) as u64})).map(|_|())
+                            let result = begin(desired_position, volume);
+                            started = result.is_ok();
+                            if let Ok(supported) = result {
+                                if supported {
+                                    reported_volume = volume;
+                                } else {
+                                    volume = reported_volume;
+                                }
+                            }
+                            result.map(|_| ())
                         } else {
                             Ok(())
                         }
@@ -111,8 +145,16 @@ impl Session {
                         if started {
                             call("remoteResume", json!({})).map(|_| ())
                         } else {
-                            started = true;
-                            call("remotePlay",json!({"ids":[id],"start":0,"position":(desired_position*1000.0) as u64})).map(|_|())
+                            let result = begin(desired_position, volume);
+                            started = result.is_ok();
+                            if let Ok(supported) = result {
+                                if supported {
+                                    reported_volume = volume;
+                                } else {
+                                    volume = reported_volume;
+                                }
+                            }
+                            result.map(|_| ())
                         }
                     }
                     Some(Command::Pause) => {
@@ -124,32 +166,52 @@ impl Session {
                         }
                     }
                     Some(Command::Volume(value)) => {
-                        volume = value;
                         if started {
                             call(
                                 "remoteVolume",
                                 json!({"percent":(value*100.0).round() as u32}),
                             )
-                            .map(|_| ())
+                            .map(|response| {
+                                if response.is_some() {
+                                    volume = value;
+                                    reported_volume = value;
+                                } else {
+                                    unsupported = true;
+                                }
+                            })
                         } else {
+                            volume = value;
                             Ok(())
                         }
                     }
                     Some(Command::Seek(position, done)) => {
-                        desired_position = position;
                         completion = Some(done);
                         if started {
-                            call("remoteSeek", json!({"position":(position*1000.0) as u64}))
-                                .map(|_| ())
+                            call("remoteSeek", json!({"position":(position*1000.0) as u64})).map(
+                                |response| {
+                                    if response.is_some() {
+                                        desired_position = position;
+                                    } else {
+                                        unsupported = true;
+                                    }
+                                },
+                            )
                         } else {
+                            desired_position = position;
                             Ok(())
                         }
                     }
                     None if started => call("remoteState", json!({})).and_then(|value| {
+                        let value = value.ok_or_else(|| {
+                            anyhow::anyhow!(crate::protocol::tr!(
+                                "This source does not support this capability"
+                            ))
+                        })?;
                         let mut cache = state.lock().unwrap();
+                        cache.advance();
                         if value.is_null() {
-                            if cache.snapshot.position + cache.at.elapsed().as_secs_f64()
-                                >= cache.snapshot.duration.unwrap_or(f64::INFINITY) - 1.0
+                            if cache.snapshot.position
+                                >= cache.snapshot.duration.unwrap_or(f64::INFINITY) - 0.12
                             {
                                 cache.snapshot.position =
                                     cache.snapshot.duration.unwrap_or(cache.snapshot.position);
@@ -165,23 +227,27 @@ impl Session {
                                     )
                                 );
                             }
-                            cache.snapshot.position = value["position"]
+                            if let Some(position) = value["position"]
                                 .as_f64()
                                 .filter(|n| n.is_finite() && *n >= 0.0)
-                                .unwrap_or_default()
-                                / 1000.0;
+                            {
+                                cache.snapshot.position = position / 1000.0;
+                            }
                             if let Some(duration) = value["duration"]
                                 .as_f64()
                                 .filter(|n| n.is_finite() && *n > 0.0)
                             {
                                 cache.snapshot.duration = Some(duration / 1000.0);
                             }
-                            cache.snapshot.playing = value["playing"].as_bool().unwrap_or(false);
+                            cache.snapshot.playing =
+                                value["playing"].as_bool().unwrap_or(cache.snapshot.playing);
                             cache.snapshot.volume = value["volume"]
                                 .as_f64()
                                 .filter(|n| n.is_finite())
                                 .map(|n| (n / 100.0).clamp(0.0, 1.0) as f32)
-                                .unwrap_or(volume);
+                                .unwrap_or(reported_volume);
+                            reported_volume = cache.snapshot.volume;
+                            volume = reported_volume;
                         }
                         cache.at = Instant::now();
                         Ok(())
@@ -192,6 +258,13 @@ impl Session {
                 let ok = result.is_ok();
                 let mut cache = state.lock().unwrap();
                 cache.snapshot.waiting = false;
+                if unsupported {
+                    if let Some(done) = completion {
+                        drop(cache);
+                        done(false);
+                    }
+                    continue;
+                }
                 match result {
                     Ok(()) => {
                         failures = 0;
@@ -210,6 +283,7 @@ impl Session {
                     drop(cache);
                     done(ok);
                 } else if is_command {
+                    cache.advance();
                     cache.snapshot.playing = playing && ok;
                     cache.snapshot.volume = volume;
                     if ok {
@@ -233,7 +307,9 @@ impl Session {
             if let Some(waiting) = waiting {
                 state.snapshot.waiting = waiting;
             }
-            state.snapshot.error = None;
+            if matches!(command, Command::Start(..) | Command::Play) {
+                state.snapshot.error = None;
+            }
         }
         let _ = self.send.send(command);
     }
@@ -292,9 +368,20 @@ pub(crate) fn for_track(track: &Track) -> Option<Arc<dyn RemotePlayback>> {
     }
     let plugin = source.plugin.clone();
     let callback = Arc::new(move |method: &str, args: Value, generation: u64| {
+        if matches!(method, "remoteVolume" | "remoteSeek") {
+            // This work runs on the session worker, including capability discovery.
+            if !crate::music_sources::get_source(&format!("mygo:{plugin}"))?
+                .host_capabilities
+                .iter()
+                .any(|c| c == method)
+            {
+                return Ok(None);
+            }
+        }
         mygo::invoke_guarded(&plugin, method, args, || {
             owners().lock().unwrap().get(&plugin) == Some(&generation)
         })
+        .map(Some)
     });
     Some(Session::new(
         source.plugin.clone(),
@@ -332,11 +419,11 @@ mod tests {
                 let _ = entered.send(());
                 let _ = gate.lock().unwrap().recv_timeout(Duration::from_secs(3));
             }
-            Ok(if method == "remoteState" {
+            Ok(Some(if method == "remoteState" {
                 json!({"trackId":"song","playing":true,"position":12000,"duration":60000,"volume":40})
             } else {
                 Value::Null
-            })
+            }))
         });
         let session = Session::new(plugin, "song".into(), 60.0, callback);
         session.start(false, 0.7).unwrap();
@@ -360,9 +447,11 @@ mod tests {
         release.send(()).unwrap();
         wait(|| log.lock().unwrap().iter().any(|c| c.0 == "remotePause"));
         let calls = log.lock().unwrap();
-        assert_eq!(calls[0].0, "remotePlay");
+        assert_eq!(calls[0].0, "remoteVolume");
+        assert_eq!(calls[0].1, json!({"percent":70}));
+        assert_eq!(calls[1].0, "remotePlay");
         assert_eq!(
-            calls[0].1,
+            calls[1].1,
             json!({"ids":["song"],"start":0,"position":7000})
         );
         assert!(
@@ -395,6 +484,133 @@ mod tests {
     }
 
     #[test]
+    fn failed_start_retries_the_selected_track_instead_of_resuming_another() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let log = calls.clone();
+        let attempts = Arc::new(AtomicU64::new(0));
+        let tried = attempts.clone();
+        let callback: Call = Arc::new(move |method, args, _| {
+            log.lock().unwrap().push((method.to_owned(), args));
+            if method == "remotePlay" && tried.fetch_add(1, Ordering::Relaxed) == 0 {
+                anyhow::bail!("offline");
+            }
+            Ok(Some(Value::Null))
+        });
+        let session = Session::new(
+            format!("remote-retry-{}", musicx_core::storage::random_hex::<8>()),
+            "selected".into(),
+            60.0,
+            callback,
+        );
+        session.start(true, 0.0).unwrap();
+        wait(|| session.snapshot().error.is_some());
+        session.play();
+        wait(|| session.snapshot().playing && session.snapshot().error.is_none());
+        assert_eq!(attempts.load(Ordering::Relaxed), 2);
+        assert!(!calls.lock().unwrap().iter().any(|c| c.0 == "remoteResume"));
+    }
+
+    #[test]
+    fn null_state_retains_elapsed_progress_and_reaches_the_end() {
+        let polls = Arc::new(AtomicU64::new(0));
+        let observed = polls.clone();
+        let callback: Call = Arc::new(move |method, _, _| {
+            if method == "remoteState" {
+                observed.fetch_add(1, Ordering::Relaxed);
+            }
+            Ok(Some(Value::Null))
+        });
+        let session = Session::new(
+            format!("remote-clock-{}", musicx_core::storage::random_hex::<8>()),
+            "selected".into(),
+            10.0,
+            callback,
+        );
+        session.start(true, 0.4).unwrap();
+        wait(|| session.snapshot().playing);
+        session.cache.lock().unwrap().at = Instant::now() - Duration::from_millis(1500);
+        wait(|| {
+            polls.load(Ordering::Relaxed) >= 1
+                && session.cache.lock().unwrap().at.elapsed() < Duration::from_secs(1)
+        });
+        assert!(
+            session.snapshot().position >= 2.0,
+            "a null poll must not reset the interpolated clock"
+        );
+        session.cache.lock().unwrap().at = Instant::now() - Duration::from_secs(20);
+        wait(|| {
+            let cache = session.cache.lock().unwrap();
+            !cache.snapshot.playing && cache.snapshot.position == 10.0
+        });
+    }
+
+    #[test]
+    fn missing_optional_controls_preserve_playback_volume_and_errors() {
+        let volumes = Arc::new(AtomicU64::new(0));
+        let seen = volumes.clone();
+        let callback: Call = Arc::new(move |method, _, _| {
+            if method == "remoteVolume" {
+                seen.fetch_add(1, Ordering::Relaxed);
+                return Ok(None);
+            }
+            if method == "remoteSeek" {
+                return Ok(None);
+            }
+            Ok(Some(Value::Null))
+        });
+        let session = Session::new(
+            format!(
+                "remote-optional-{}",
+                musicx_core::storage::random_hex::<8>()
+            ),
+            "selected".into(),
+            60.0,
+            callback,
+        );
+        session.start(true, 0.0).unwrap();
+        wait(|| session.snapshot().playing);
+        session.set_volume(0.2);
+        wait(|| volumes.load(Ordering::Relaxed) >= 2);
+        assert_eq!(session.snapshot().volume, 1.0);
+        assert!(session.snapshot().playing && session.snapshot().error.is_none());
+        session.cache.lock().unwrap().snapshot.error = Some("previous error".into());
+        let (done, complete) = mpsc::channel();
+        session.seek(
+            5.0,
+            Box::new(move |ok| {
+                done.send(ok).unwrap();
+            }),
+        );
+        assert!(!complete.recv_timeout(Duration::from_secs(2)).unwrap());
+        assert_eq!(session.snapshot().error.as_deref(), Some("previous error"));
+        assert!(session.snapshot().playing);
+    }
+
+    #[test]
+    fn non_seek_controls_do_not_rewind_the_interpolated_clock() {
+        let callback: Call = Arc::new(|_, _, _| Ok(Some(Value::Null)));
+        let session = Session::new(
+            format!(
+                "remote-control-clock-{}",
+                musicx_core::storage::random_hex::<8>()
+            ),
+            "selected".into(),
+            60.0,
+            callback,
+        );
+        session.start(true, 0.5).unwrap();
+        wait(|| session.snapshot().playing);
+        session.cache.lock().unwrap().at = Instant::now() - Duration::from_millis(800);
+        let before = session.snapshot().position;
+        session.set_volume(0.4);
+        wait(|| session.snapshot().volume == 0.4);
+        assert!(session.snapshot().position >= before);
+        session.pause();
+        wait(|| !session.snapshot().playing);
+        assert!(session.snapshot().position >= before);
+    }
+
+    #[test]
     fn an_old_session_cannot_pause_its_replacement() {
         let plugin = format!("remote-owner-{}", musicx_core::storage::random_hex::<8>());
         let log = Arc::new(Mutex::new(Vec::new()));
@@ -403,7 +619,7 @@ mod tests {
         let callback: Call = Arc::new(move |method, _, generation| {
             ensure_owner(&key, generation)?;
             calls.lock().unwrap().push((method.to_owned(), generation));
-            Ok(Value::Null)
+            Ok(Some(Value::Null))
         });
         let old = Session::new(plugin.clone(), "old".into(), 60.0, callback.clone());
         old.start(true, 0.5).unwrap();

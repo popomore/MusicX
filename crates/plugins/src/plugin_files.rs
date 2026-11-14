@@ -23,15 +23,27 @@ pub(crate) fn path_allowed(name: &str) -> bool {
             .all(|c| matches!(c, Component::Normal(_)))
 }
 pub(crate) fn excluded(name: &str) -> bool {
-    matches!(name, "settings.json" | "musicx-install.json")
-        || name
-            .split('/')
-            .next()
-            .is_some_and(|s| matches!(s, ".git" | ".github" | "node_modules" | "target" | ".goals"))
+    let first = name
+        .split('/')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    matches!(first.as_str(), "settings.json" | "musicx-install.json")
+        || name.split('/').next().is_some_and(|s| {
+            matches!(
+                s.to_ascii_lowercase().as_str(),
+                ".git" | ".github" | "node_modules" | "target" | ".goals"
+            )
+        })
 }
 pub(crate) fn write(root: &Path, name: &str, asset: &Asset) -> Result<()> {
     ensure!(
-        path_allowed(name) && !excluded(name),
+        path_allowed(name)
+            && !excluded(name)
+            && !matches!(
+                name.to_ascii_lowercase().as_str(),
+                "plugin.json" | "index.js" | "locales/en.json" | "locales/zh-cn.json"
+            ),
         tr!("Invalid plugin package file path or type")
     );
     let path = root.join(name);
@@ -199,6 +211,17 @@ mod tests {
     use super::*;
     #[test]
     fn package_paths_and_copies_are_bounded_and_do_not_follow_links() {
+        for name in [
+            "SETTINGS.JSON",
+            "sEtTiNgS.JsOn",
+            "MUSICX-INSTALL.JSON",
+            "SETTINGS.JSON/nested",
+        ] {
+            assert!(
+                excluded(name),
+                "filesystem-equivalent host files must stay excluded: {name}"
+            );
+        }
         for name in ["../bad", "/tmp/bad", "a/../b", "a\\b", ""] {
             assert!(!path_allowed(name), "{name}");
         }
@@ -207,6 +230,24 @@ mod tests {
             musicx_core::storage::random_hex::<8>()
         ));
         fs::create_dir_all(&root).unwrap();
+        for name in [
+            "PLUGIN.JSON",
+            "INDEX.JS",
+            "LOCALES/EN.JSON",
+            "locales/ZH-CN.JSON",
+        ] {
+            assert!(
+                write(
+                    &root,
+                    name,
+                    &Asset {
+                        bytes: b"untrusted override".to_vec(),
+                        executable: false
+                    }
+                )
+                .is_err()
+            );
+        }
         fs::write(root.join("index.js"), "export function search(){}").unwrap();
         fs::create_dir(root.join("nested")).unwrap();
         assert!(copy_assets(&root, &root.join("nested"), &root.join("index.js")).is_err());

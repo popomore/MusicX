@@ -454,6 +454,7 @@ fn source_descriptor(
     mut fields: Vec<SourceSettingDefinition>,
     limit: Option<String>,
     qr: bool,
+    permission_fingerprint: Option<String>,
 ) -> Result<MusicSource> {
     let process_programs = crate::process::programs(&m);
     let process_granted = installed && crate::process::granted(&m);
@@ -492,6 +493,12 @@ fn source_descriptor(
     };
     if network_unrestricted && !network_granted {
         notes.push(tr!("Network access is limited to server URLs saved in source settings").into());
+    }
+    if !process_programs.is_empty() {
+        notes.push(tr!("Helpers must run in the foreground without detaching. Detached daemons are not supported or stopped by revoking permission.").into());
+    }
+    if m.playback == "remote" && !exports.iter().any(|c| c == "remoteVolume") {
+        notes.push(tr!("This source cannot control the device volume").into());
     }
     let verification = if installed {
         crate::trust::installed(&m)
@@ -557,6 +564,7 @@ fn source_descriptor(
         process_granted,
         network_unrestricted,
         network_granted,
+        permission_fingerprint,
         pages,
         capabilities: exports,
         settings,
@@ -567,6 +575,8 @@ fn source_descriptor(
     })
 }
 pub fn get_source(source: &str) -> Result<MusicSource> {
+    // Keep the displayed permissions and their approval token in one install snapshot.
+    let _permissions = crate::permissions::lock()?;
     let id = plugin(source)?;
     let dir = mygo::plugin_root()?.join(id);
     let m = mygo::manifest(&dir)?;
@@ -579,7 +589,15 @@ pub fn get_source(source: &str) -> Result<MusicSource> {
     let limit = limitation(&m, false, false);
     let qr = code.contains("host.signInPrompt") && exports.iter().any(|v| v == "signIn");
     let web = code.contains("host.webSignIn");
-    let mut result = source_descriptor(m, true, exports, fields, limit, qr)?;
+    let permission_fingerprint = if !crate::process::programs(&m).is_empty()
+        || m.permissions.network.iter().any(|g| g == "*")
+    {
+        Some(crate::permissions::fingerprint(&dir)?)
+    } else {
+        None
+    };
+    let mut result =
+        source_descriptor(m, true, exports, fields, limit, qr, permission_fingerprint)?;
     result.web_sign_in = cfg!(target_os = "macos") && web;
     result.oauth_sign_in = cfg!(target_os = "macos")
         && code.contains("host.waitForRedirect")
@@ -682,6 +700,7 @@ fn catalog_from(entries: Vec<source_catalog::Entry>) -> Result<Vec<MusicSource>>
             fields,
             limit,
             qr,
+            None,
         )?);
     }
     Ok(result)
@@ -790,6 +809,11 @@ fn install_package_from(
     };
     let manifest = package.manifest;
     let script = package.script;
+    // A source-only fallback must never replace working bundled assets.
+    ensure!(
+        package.assets_complete || replacing.is_none(),
+        tr!("The source archive is incomplete; the existing installation was kept")
+    );
     use sha2::{Digest, Sha256};
     let mut m: mygo::Manifest = serde_json::from_slice(&manifest)?;
     if let Some(id) = replacing {
@@ -1233,12 +1257,34 @@ pub fn execute(input: MusicSourceAction) -> Result<Value> {
             method,
             params,
         } => serde_json::to_value(crate::discovery::page(&source, &method, params)?)?,
-        MusicSourceAction::SetNetworkPermission { source, enabled } => {
-            crate::network::set(plugin(&source)?, enabled)?;
+        MusicSourceAction::SetNetworkPermission {
+            source,
+            enabled,
+            expected_fingerprint,
+        } => {
+            let guard = crate::permissions::lock()?;
+            crate::network::set(
+                plugin(&source)?,
+                enabled,
+                expected_fingerprint.as_deref(),
+                &guard,
+            )?;
+            drop(guard);
             serde_json::to_value(get_source(&source)?)?
         }
-        MusicSourceAction::SetProcessPermission { source, enabled } => {
-            crate::process::set(plugin(&source)?, enabled)?;
+        MusicSourceAction::SetProcessPermission {
+            source,
+            enabled,
+            expected_fingerprint,
+        } => {
+            let guard = crate::permissions::lock()?;
+            crate::process::set(
+                plugin(&source)?,
+                enabled,
+                expected_fingerprint.as_deref(),
+                &guard,
+            )?;
+            drop(guard);
             serde_json::to_value(get_source(&source)?)?
         }
         MusicSourceAction::Invoke {
@@ -1465,6 +1511,7 @@ mod tests {
             vec![field],
             None,
             false,
+            None,
         )
         .unwrap();
         assert!(source.settings[0].secret);

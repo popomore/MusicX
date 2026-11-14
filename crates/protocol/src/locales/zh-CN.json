@@ -753,5 +753,13 @@
   "More {}": "更多 {}",
   "The tested track returned a {}-second preview": "受测曲目返回了 {} 秒试听",
   "Background extensions are not supported by this host": "此宿主尚不支持后台扩展",
-  "Generated audio exceeds 256 MiB": "生成的音频超过 256 MiB"
+  "Generated audio exceeds 256 MiB": "生成的音频超过 256 MiB",
+  "Source permissions are busy; try again": "来源权限暂时繁忙，请重试",
+  "Refresh the source before granting permission": "请刷新来源后再授权",
+  "Source files changed; reopen its settings before granting permission": "来源文件已变化，请重新打开其设置后再授权",
+  "This source needs a complete package with its helper files": "此来源需要包含辅助程序文件的完整安装包",
+  "The source archive is incomplete; the existing installation was kept": "来源下载包不完整，已保留现有安装",
+  "Helpers must run in the foreground without detaching. Detached daemons are not supported or stopped by revoking permission.": "辅助程序必须保持前台运行，不能自行脱离进程组。脱离的后台服务不受支持，撤销权限也无法停止它们。",
+  "This source cannot control the device volume": "此来源无法控制设备音量",
+  "Trust covers the listed functional checks, not a security audit or platform certification": "可信仅表示所列功能已验证，不代表安全审计或平台官方认证"
 }

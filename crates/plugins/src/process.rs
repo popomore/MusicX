@@ -50,7 +50,12 @@ pub(crate) fn granted(manifest: &Manifest) -> bool {
     })();
     check.unwrap_or(false)
 }
-pub(crate) fn set(id: &str, enabled: bool) -> Result<()> {
+pub(crate) fn set(
+    id: &str,
+    enabled: bool,
+    expected: Option<&str>,
+    guard: &std::sync::MutexGuard<'_, ()>,
+) -> Result<()> {
     ensure!(mygo::valid_id(id), tr!("Invalid plugin ID"));
     let root = mygo::plugin_root()?.join(id);
     let manifest = mygo::manifest(&root)?;
@@ -61,7 +66,7 @@ pub(crate) fn set(id: &str, enabled: bool) -> Result<()> {
     if enabled {
         storage::save_private(
             &approval_name(id),
-            &serde_json::to_string(&plugin_files::hashes(&root)?)?,
+            &serde_json::to_string(&crate::permissions::reviewed_files(&root, expected, guard)?)?,
         )?;
     } else {
         let path = storage::state_dir()?.join(approval_name(id));
@@ -217,6 +222,7 @@ impl Runtime {
         }
     }
     fn spawn(&self, text: &str, deadline: Instant) -> Result<Value> {
+        let _permission = crate::permissions::lock()?;
         ensure!(
             text.len() <= 2 * 1024 * 1024 && Instant::now() < deadline,
             tr!("External program request is too large or expired")
@@ -470,4 +476,87 @@ pub(crate) fn install_paths(ctx: &Ctx<'_>, manifest: &Manifest) -> Result<()> {
         })?,
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn revocation_serializes_a_pending_helper_launch() {
+        if std::env::var_os("MUSICX_PERMISSION_RACE_CHILD").is_none() {
+            let root = std::env::temp_dir().join(format!(
+                "musicx-permission-race-{}",
+                storage::random_hex::<8>()
+            ));
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "process::tests::revocation_serializes_a_pending_helper_launch",
+                    "--nocapture",
+                ])
+                .env("MUSICX_PERMISSION_RACE_CHILD", "1")
+                .env("MUSICX_DATA_DIR", &root)
+                .env("MUSICX_LANGUAGE", "en")
+                .output()
+                .unwrap();
+            fs::remove_dir_all(root).unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let root = mygo::plugin_root().unwrap().join("race");
+        fs::create_dir(&root).unwrap();
+        fs::write(
+            root.join("plugin.json"),
+            r#"{"id":"race","permissions":{"process":["/bin/cat"]}}"#,
+        )
+        .unwrap();
+        fs::write(root.join("index.js"), "export function probe(){}").unwrap();
+        let guard = crate::permissions::lock().unwrap();
+        set(
+            "race",
+            true,
+            Some(&crate::permissions::fingerprint(&root).unwrap()),
+            &guard,
+        )
+        .unwrap();
+        drop(guard);
+        let runtime = Runtime::new(&mygo::manifest(&root).unwrap())
+            .unwrap()
+            .unwrap();
+        let worker = runtime.clone();
+        let guard = crate::permissions::lock().unwrap();
+        let (ready, entered) = mpsc::channel();
+        let (sent, completed) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            ready.send(()).unwrap();
+            let result = worker.spawn(
+                r#"{"program":"/bin/cat","args":[]}"#,
+                Instant::now() + std::time::Duration::from_secs(10),
+            );
+            sent.send(result.is_ok()).unwrap();
+        });
+        entered.recv().unwrap();
+        assert!(
+            matches!(
+                completed.recv_timeout(std::time::Duration::from_millis(100)),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            ),
+            "launch must wait while permission state is being changed"
+        );
+        set("race", false, None, &guard).unwrap();
+        drop(guard);
+        assert!(
+            !completed
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap(),
+            "a helper cannot launch after revocation wins"
+        );
+        worker.join().unwrap();
+        assert!(runtime.children.lock().unwrap().is_empty());
+    }
 }

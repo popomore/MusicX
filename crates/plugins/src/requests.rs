@@ -13,18 +13,23 @@ use std::{
 
 type Work = Box<dyn FnOnce() -> String + Send>;
 type Slot = Arc<Mutex<Option<String>>>;
+struct Pending {
+    result: Slot,
+    aborted: Arc<AtomicBool>,
+}
 struct Task {
     work: Work,
     slot: Slot,
     cancelled: Arc<AtomicBool>,
+    aborted: Arc<AtomicBool>,
 }
 impl Task {
     fn run(self) {
-        if self.cancelled.load(Ordering::Acquire) {
+        if self.cancelled.load(Ordering::Acquire) || self.aborted.load(Ordering::Acquire) {
             return;
         }
         let result = (self.work)();
-        if !self.cancelled.load(Ordering::Acquire) {
+        if !self.cancelled.load(Ordering::Acquire) && !self.aborted.load(Ordering::Acquire) {
             *self.slot.lock().unwrap() = Some(result);
         }
     }
@@ -69,7 +74,7 @@ impl Bindings {
         deadline: Instant,
     ) -> rquickjs::Result<Self> {
         let cancelled = Arc::new(AtomicBool::new(false));
-        let slots = Arc::new(Mutex::new((0u32, BTreeMap::<u32, Slot>::new())));
+        let slots = Arc::new(Mutex::new((0u32, BTreeMap::<u32, Pending>::new())));
         let pending = slots.clone();
         let cancellation = cancelled.clone();
         ctx.globals().set(
@@ -85,11 +90,13 @@ impl Bindings {
                 pending.0 += 1;
                 let id = pending.0;
                 let slot = Arc::new(Mutex::new(None));
+                let aborted = Arc::new(AtomicBool::new(false));
                 let client = client.clone();
                 let grants = grants.clone();
                 let task = Task {
                     slot: slot.clone(),
                     cancelled: cancellation.clone(),
+                    aborted: aborted.clone(),
                     work: Box::new(move || {
                         crate::mygo::fetch(&client, &input, &grants, deadline)
                             .unwrap_or_else(|error| json!({"error":error.to_string()}))
@@ -99,10 +106,17 @@ impl Bindings {
                 if workers().try_send(task).is_err() {
                     return json!({"error":"Plugin request queue is busy"}).to_string();
                 }
-                pending.1.insert(id, slot);
+                pending.1.insert(
+                    id,
+                    Pending {
+                        result: slot,
+                        aborted,
+                    },
+                );
                 json!({"id":id}).to_string()
             })?,
         )?;
+        let cancellations = slots.clone();
         ctx.globals().set(
             "__fetchPoll",
             Function::new(ctx.clone(), move |id: u32| -> Option<String> {
@@ -110,11 +124,19 @@ impl Bindings {
                 let Some(slot) = slots.1.get(&id) else {
                     return Some(json!({"error":"Unknown plugin request"}).to_string());
                 };
-                let result = slot.lock().unwrap().take();
+                let result = slot.result.lock().unwrap().take();
                 if result.is_some() {
                     slots.1.remove(&id);
                 }
                 result
+            })?,
+        )?;
+        ctx.globals().set(
+            "__fetchCancel",
+            Function::new(ctx.clone(), move |id: u32| {
+                if let Some(pending) = cancellations.lock().unwrap().1.remove(&id) {
+                    pending.aborted.store(true, Ordering::Release);
+                }
             })?,
         )?;
         Ok(Self { cancelled })
@@ -139,6 +161,7 @@ mod tests {
                 .send(Task {
                     slot,
                     cancelled: Arc::new(AtomicBool::new(false)),
+                    aborted: Arc::new(AtomicBool::new(false)),
                     work: Box::new(move || {
                         sent.send(()).unwrap();
                         let (lock, condition) = &*gate;
@@ -162,6 +185,7 @@ mod tests {
         Task {
             slot: Arc::new(Mutex::new(None)),
             cancelled: Arc::new(AtomicBool::new(true)),
+            aborted: Arc::new(AtomicBool::new(false)),
             work: Box::new(move || {
                 ran.store(true, Ordering::Release);
                 "bad".into()

@@ -221,7 +221,7 @@ pub(crate) fn invoke(source: &str, method: &str, params: Value) -> Result<Value>
         .context(tr!("Choose a plugin source"))?;
     let mut result = mygo::invoke(plugin, method, params)?;
     mygo::remember_artwork(plugin, &result);
-    if method == "stationNext" {
+    if method == "stationNext" && result.is_array() {
         if let Some(rows) = result.as_array_mut() {
             ensure!(
                 rows.len() <= musicx_core::protocol::MAX_QUEUE_TRACKS,

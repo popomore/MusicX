@@ -68,6 +68,7 @@ pub enum Message {
         revision: u64,
         serial: u64,
         request: u64,
+        automatic: bool,
         tracks: Result<Vec<Track>>,
         reply: Reply,
     },
@@ -780,6 +781,7 @@ impl<A: AudioOutput> Player<A> {
                 revision,
                 serial,
                 request,
+                automatic,
                 tracks,
                 reply,
             } => {
@@ -791,6 +793,14 @@ impl<A: AudioOutput> Player<A> {
                 {
                     if self.station_request == Some((revision, serial, request)) {
                         self.station_request = None;
+                        if automatic
+                            && self.requested_play
+                            && !self.switching
+                            && self.status().state == State::Ended
+                        {
+                            self.end_handled = false;
+                            self.advance_on_end();
+                        }
                     }
                     if let Some(reply) = reply {
                         let _ = reply.send(Err(anyhow!(tr!("Radio session changed"))));
@@ -809,7 +819,16 @@ impl<A: AudioOutput> Player<A> {
                         Arc::make_mut(&mut self.queue).extend(tracks);
                         self.index = Some(index);
                         self.queue_revision += 1;
-                        self.resolve_selection(reply);
+                        if automatic {
+                            self.resolve_automatic_next(AutoAdvance {
+                                index,
+                                attempt: 1,
+                                seek_serial: self.seek_serial,
+                                retry_until: Instant::now() + AUTO_ADVANCE_RETRY_WINDOW,
+                            });
+                        } else {
+                            self.resolve_selection(reply);
+                        }
                     }
                     Ok(_) => self.respond(
                         Err(anyhow!(tr!("The station returned no playable tracks"))),
@@ -1004,6 +1023,7 @@ impl<A: AudioOutput> Player<A> {
                 revision,
                 serial,
                 request,
+                automatic: !manual,
                 tracks: provider.station_next(&source, &id),
                 reply,
             })

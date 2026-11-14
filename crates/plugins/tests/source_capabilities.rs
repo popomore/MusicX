@@ -43,8 +43,9 @@ fn public_source_actions_preserve_identity_and_require_explicit_writes() {
 const track={id:'opaque:one',name:'Song',artists:[{id:'artist',name:'Artist'}],duration:42000,unavailable:true};
 export function home(){return {title:'Home',sections:[{tracks:[track]},{playlists:[{id:'list',tracks:[track]}]}]};}
 export function browse({page}){return {title:page,sections:[{tracks:[track]}]};}
-export function stationNext(){return [track]}
+export function stationNext({id}){return id==='envelope'?{tracks:[track]}:[track]}
 export function stations(){return [{id:'fm',name:'Fixture FM'}]}
+export function playlist(){return {playlist:{name:'Wrapped playlist',tracks:[track]}}}
 export function createPlaylist({name}){host.storage.set('writes',(host.storage.get('writes')||0)+1);return {id:'created',name,tracks:[track]}}
 export function comments(){return {comments:[{id:'c',text:'hello'}],more:false}}
 export function qqReadSession(){return {token:'must-not-be-exposed'}}
@@ -67,6 +68,15 @@ export function stream(){return {url:'https://example.com/song.mp3'}}
     .unwrap();
     assert_eq!(native_page["tracks"][0]["duration"], 42.0);
     assert_eq!(native_page["collections"][0]["kind"], "playlist");
+    let wrapped = music_sources::execute(MusicSourceAction::Page {
+        source: "mygo:capability.fixture".into(),
+        method: "playlist".into(),
+        params: json!({"id":"wrapped:collection/one"}),
+    })
+    .unwrap();
+    assert_eq!(wrapped["title"], "Wrapped playlist");
+    assert_eq!(wrapped["tracks"][0]["duration"], 42.0);
+    assert_eq!(wrapped["tracks"][0]["source"]["id"], "opaque:one");
     let station_page = music_sources::execute(MusicSourceAction::Page {
         source: "mygo:capability.fixture".into(),
         method: "stations".into(),
@@ -82,6 +92,12 @@ export function stream(){return {url:'https://example.com/song.mp3'}}
     .unwrap();
     assert_eq!(station["station"]["source"], "mygo:capability.fixture");
     assert_eq!(station["tracks"][0]["duration"], 42.0);
+    let envelope = call("stationNext", json!({"id":"envelope"})).unwrap();
+    assert_eq!(envelope["tracks"][0]["duration"], 42.0);
+    assert_eq!(
+        envelope["tracks"][0]["source"]["plugin"],
+        "capability.fixture"
+    );
     let page = call("home", json!({})).unwrap();
     let track = &page["sections"][0]["tracks"][0];
     assert_eq!(
