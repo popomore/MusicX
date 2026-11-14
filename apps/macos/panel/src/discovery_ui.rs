@@ -218,7 +218,13 @@ pub fn episode_details(model: Model) -> impl IntoElement {
 }
 
 pub fn browse(model: Model) -> impl IntoElement {
-    let initial = model.discovery.get().unwrap_or(Action::List);
+    dynamic(move || {
+        let initial = model.discovery.get().unwrap_or(Action::List);
+        untracked(|| browser(model, initial))
+    })
+}
+
+fn browser(model: Model, initial: Action) -> impl IntoElement {
     let this = Browser {
         owner: Owner::current(),
         action: signal(initial.clone()),

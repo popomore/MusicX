@@ -294,6 +294,103 @@ fn setup_navigation() {
     assert!(player.shows("Compact player"));
 }
 
+#[component]
+fn PlayerEntryScreen() -> impl IntoElement {
+    let model = model::Model::new();
+    model.status_ready.set(true);
+    effect(move || {
+        let height = window().height.0;
+        let mut track: protocol::Track = serde_json::from_value(serde_json::json!({
+            "id": 1, "title": "Navigation fixture", "artist": "Alpha",
+            "duration": 180.0, "source": {"plugin": "fixture", "id": "track-1"},
+            "artists": [{"id": "alpha-id", "name": "Alpha"}]
+        }))
+        .unwrap();
+        if (520.0..530.0).contains(&height) {
+            track.artist = "Alpha / Beta".into();
+            track.artists.push(protocol::Artist {
+                id: "beta-id".into(),
+                name: "Beta".into(),
+                ..Default::default()
+            });
+        } else if (530.0..540.0).contains(&height) {
+            track.artists.clear();
+        } else if (540.0..550.0).contains(&height) {
+            track.source = None;
+        } else if height >= 550.0 {
+            track.artists[0].id = " ".into();
+        }
+        model.status.update(|status| {
+            status.track = Some(track);
+            status.position = f64::from(height - 500.0);
+        });
+    });
+    view()
+        .flex_1()
+        .child(ui::desktop_ui::shell(model))
+        .child(text(move || {
+            if let Some(protocol::MusicSourceAction::Artist { source, id }) = model.discovery.get()
+                && model.page.get() == model::Page::Discovery
+                && model.drawer_open.get()
+            {
+                format!("Artist destination: {source}/{id}")
+            } else if model.page.get() == model::Page::Queue && model.drawer_open.get() {
+                "Queue destination".into()
+            } else {
+                "Compact destination".into()
+            }
+        }))
+}
+
+fn player_entries() {
+    for language in ["en", "zh-CN"] {
+        std::fs::write(protocol::data_dir().unwrap().join("language"), language).unwrap();
+        protocol::i18n::refresh();
+        player_entry_checks();
+    }
+}
+
+fn player_entry_checks() {
+    let press_artist = |app: &mut Headless, name: &str| {
+        app.press(&format!("label:{}", protocol::tr!("View artist {}", name)))
+    };
+    let mut config = EngineConfig::new(Root::of::<PlayerEntryScreen>());
+    config.viewport = Size::new(px(628.0), px(512.0));
+    config.environment.window = config.viewport;
+    let mut app = Headless::start(config).unwrap();
+    app.first_render().unwrap();
+    app.press(&format!("label:{}", protocol::tr!("Show now playing")))
+        .unwrap();
+    assert!(
+        app.shows("Queue destination"),
+        "a track without an album still opens Now Playing"
+    );
+    press_artist(&mut app, "Alpha").unwrap();
+    assert!(app.shows("Artist destination: mygo:fixture/alpha-id"));
+
+    app.set_viewport(Size::new(px(628.0), px(520.0))).unwrap();
+    press_artist(&mut app, "Alpha / Beta").unwrap();
+    // A normal playback snapshot must preserve an open collaboration chooser.
+    app.set_viewport(Size::new(px(628.0), px(521.0))).unwrap();
+    press_artist(&mut app, "Beta").unwrap();
+    assert!(app.shows("Artist destination: mygo:fixture/beta-id"));
+    press_artist(&mut app, "Alpha / Beta").unwrap();
+    press_artist(&mut app, "Alpha").unwrap();
+    assert!(app.shows("Artist destination: mygo:fixture/alpha-id"));
+
+    for height in [530.0, 540.0, 550.0] {
+        app.set_viewport(Size::new(px(628.0), px(height))).unwrap();
+        assert!(app.shows("Alpha"));
+        assert!(
+            press_artist(&mut app, "Alpha").is_err(),
+            "missing artist/source identity must leave plain text"
+        );
+    }
+    app.set_viewport(Size::new(px(628.0), px(512.0))).unwrap();
+    press_artist(&mut app, "Alpha").unwrap();
+    assert!(app.shows("Artist destination: mygo:fixture/alpha-id"));
+}
+
 fn exercise() {
     let directory = protocol::data_dir().unwrap();
     assert_eq!(
@@ -370,6 +467,7 @@ fn exercise() {
     verified_source_details();
     settings_escape();
     setup_navigation();
+    player_entries();
     println!(
         "localization: real App layout, settings sidebar, resizing, language refresh, system default, manual switching, Model preservation, reopen, scoped Escape closing and setup navigation passed"
     );
