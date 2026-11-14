@@ -10,9 +10,9 @@ The menu bar icon shows playback state and opens the compact player. Closing the
 
 The player shows the cover, track title, artist, album, audio quality badge, progress, and basic controls. The quality popover separates the reported stream quality from the listener's preference. The optional one-line lyric preview opens full lyrics, which follow playback and support seeking when the source provides timestamps. Track information links back to its source and album. Queue, history, and playlists open beside the player so playback controls remain available. Hovering the available opening edge reveals a translucent arrow that opens Now Playing. The edge follows the available space on the current display as the window moves.
 
-Settings opens a separate window from the application menu or Command-comma. Its sidebar switches between Language, Playback, Music Sources, MCP Connection, and Version & Updates. The Music Sources menu command opens that settings group directly. Repeated settings commands focus the same window, and settings can close independently of the player.
+Settings opens a separate window from the application menu or Command-comma. Its sidebar switches between Language, Playback, Music Sources, Agent, and Version & Updates. The Music Sources menu command opens that settings group directly. Repeated settings commands focus the same window, and settings can close independently of the player.
 
-Search and discovery are exposed through MCP. Use MCP Connection in settings to copy the endpoint configuration and connect a client. The player panel focuses on the current session and music already available in albums, playlists, and history.
+Search and discovery are exposed through MCP. Use Agent in macOS settings to set up Codex or Claude Code automatically, or copy the MCP endpoint configuration for another client. The player panel focuses on the current session and music already available in albums, playlists, and history.
 
 ## Queue, library, and history
 

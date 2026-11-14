@@ -1,6 +1,9 @@
 //! Exercise the production settings language buttons in an isolated process.
 // Shared source files include libtest imports that this custom harness doesn't use.
 #![allow(unused_imports)]
+#[path = "../src/agent_setup.rs"]
+#[allow(dead_code)] // This custom harness does not run embedded configuration unit tests.
+mod agent_setup;
 #[path = "../src/controls.rs"]
 mod controls;
 #[path = "../src/desktop.rs"]
@@ -209,6 +212,45 @@ fn settings_escape() {
     }
 }
 
+#[component]
+fn SetupNavigationScreen() -> impl IntoElement {
+    let model = model::Model::new();
+    model.status_ready.set(true);
+    view()
+        .flex_1()
+        .child(text(move || {
+            if model.drawer_open.get() {
+                "Details opened"
+            } else {
+                "Compact player"
+            }
+        }))
+        .child(ui::desktop_ui::shell(model))
+}
+
+fn setup_navigation() {
+    sources_ui::select_settings_group(sources_ui::SettingsGroup::Language);
+    let mut config = EngineConfig::new(Root::of::<SetupNavigationScreen>());
+    config.viewport = Size::new(px(320.0), px(540.0));
+    config.environment.window = config.viewport;
+    config.environment.os = nsh_core::platform::Os::MacOs;
+    let mut player = Headless::start(config).unwrap();
+    player.first_render().unwrap();
+    player.press(protocol::tr!("Add music source")).unwrap();
+    assert_eq!(
+        sources_ui::selected_settings_group(),
+        sources_ui::SettingsGroup::Sources,
+        "adding a source must target standalone Settings, never the player drawer"
+    );
+    assert!(player.shows("Compact player"));
+    player.press(protocol::tr!("Connect your agent")).unwrap();
+    assert_eq!(
+        sources_ui::selected_settings_group(),
+        sources_ui::SettingsGroup::Agent
+    );
+    assert!(player.shows("Compact player"));
+}
+
 fn exercise() {
     let directory = protocol::data_dir().unwrap();
     assert_eq!(
@@ -244,13 +286,15 @@ fn exercise() {
     app.wait_for("text:mini:false mirror:false").unwrap();
     app.press("Music sources").unwrap();
     assert!(app.shows("Automatically update plugins"));
-    app.press("MCP connection").unwrap();
+    app.press("Agent").unwrap();
     assert!(app.shows("Copy MCP config"));
+    assert!(app.shows("Codex"));
+    assert!(app.shows("Claude Code"));
     assert!(!app.shows("Lyric preview"));
     app.press("Version & updates").unwrap();
     assert!(app.shows("Check for updates"));
     assert!(!app.shows("Copy MCP config"));
-    sources_ui::select_settings_group(sources_ui::SettingsGroup::Mcp);
+    sources_ui::select_settings_group(sources_ui::SettingsGroup::Agent);
     app.wait(Duration::from_millis(150)).unwrap();
     assert!(
         app.shows("Copy MCP config"),
@@ -281,8 +325,9 @@ fn exercise() {
     drop(app);
     source_navigation();
     settings_escape();
+    setup_navigation();
     println!(
-        "localization: real App layout, settings sidebar, resizing, language refresh, system default, manual switching, Model preservation, reopen and scoped Escape closing passed"
+        "localization: real App layout, settings sidebar, resizing, language refresh, system default, manual switching, Model preservation, reopen, scoped Escape closing and setup navigation passed"
     );
 }
 

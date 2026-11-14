@@ -113,7 +113,7 @@ fn small_button(
     )
 }
 
-fn header(model: Model) -> impl IntoElement {
+fn header() -> impl IntoElement {
     view()
         .flex_row()
         .window_drag(true)
@@ -121,14 +121,6 @@ fn header(model: Model) -> impl IntoElement {
         .h(px(26.0))
         .gap(px(2.0))
         .child(view().flex_1().min_w(px(12.0)).h_full().window_drag(true))
-        .child(now_playing_button(model))
-        .child(
-            view()
-                .w(px(1.0))
-                .h(px(10.0))
-                .mx(px(3.0))
-                .bg(move || theme().muted),
-        )
         .child(small_button(
             tr!("Minimize window"),
             Icon::Minimize,
@@ -139,47 +131,6 @@ fn header(model: Model) -> impl IntoElement {
             Icon::Close,
             nsh_core::element::desktop::close_window,
         ))
-}
-
-fn now_playing_button(model: Model) -> impl IntoElement {
-    let cover = computed(move || {
-        model
-            .status
-            .with(|s| s.track.as_ref().and_then(|t| t.cover_url.clone()))
-    });
-    view().tooltip(hint(tr!("Now playing"))).child(
-        button()
-            .accessibility_label(Some(tr!("Open now playing").into()))
-            .on_press(move || {
-                if model.drawer_open.get() && model.page.get() == Page::Queue {
-                    model.open(Page::Player);
-                } else {
-                    model.open(Page::Queue);
-                }
-            })
-            .selected(move || model.drawer_open.get() && model.page.get() == Page::Queue)
-            .selected_style(|s| s.bg(theme().muted))
-            .w(px(26.0))
-            .h(px(26.0))
-            .items_center()
-            .justify_center()
-            .rounded(px(6.0))
-            .hover(|s| s.bg(theme().muted).cursor_pointer())
-            .active(|s| s.opacity(0.65))
-            .child(
-                when(
-                    move || cover.with(Option::is_some),
-                    move || {
-                        crate::controls::artwork(
-                            move || cover.get(),
-                            || tr!("Current track artwork").into(),
-                            22.0,
-                        )
-                    },
-                )
-                .otherwise(|| icon(|| Icon::Queue, 15.0, false)),
-            ),
-    )
 }
 
 fn transport(model: Model, previous: bool) -> impl IntoElement {
@@ -278,7 +229,7 @@ fn details_navigation(model: Model) -> impl IntoElement {
         ))
 }
 
-pub(super) fn shell(model: Model) -> impl IntoElement {
+pub(crate) fn shell(model: Model) -> impl IntoElement {
     let hint_left = signal(crate::desktop::preferred_details_left());
     set_interval(std::time::Duration::from_millis(150), move || {
         if !model.drawer_open.get() {
@@ -321,7 +272,7 @@ pub(super) fn shell(model: Model) -> impl IntoElement {
                 .px(px(24.0))
                 .pt(px(12.0))
                 .pb(px(12.0))
-                .child(header(model))
+                .child(header())
                 // The player remains mounted while its details are open.
                 .child(player(model)),
         )
@@ -373,7 +324,6 @@ pub(super) fn shell(model: Model) -> impl IntoElement {
                                         text(move || match model.page.get() {
                                             Page::Info => tr!("Track information"),
                                             Page::Lyrics => tr!("Lyrics"),
-                                            Page::Sources => tr!("Music sources"),
                                             Page::History => tr!("History"),
                                             Page::Library => tr!("My playlists"),
                                             Page::Queue => tr!("Now playing"),
@@ -410,18 +360,6 @@ pub(super) fn shell(model: Model) -> impl IntoElement {
                         .child(when(
                             move || model.page.get() == Page::Lyrics,
                             move || super::lyrics_ui::lyrics(model),
-                        ))
-                        .child(when(
-                            move || model.page.get() == Page::Sources,
-                            move || {
-                                crate::source_browser::sources_view(
-                                    move |action| model.open_source(action),
-                                    move || model.open(Page::Player),
-                                    move || model.open(Page::Library),
-                                    None,
-                                    crate::source_browser::Start::Catalog,
-                                )
-                            },
                         ))
                         .child(when(
                             move || model.page.get() == Page::Info,
@@ -559,8 +497,8 @@ fn empty_player(model: Model) -> impl IntoElement {
         .child(
             view()
                 .mt(px(24.0))
-                .child(setup_action(tr!("Add music source"), move || {
-                    model.open(Page::Sources)
+                .child(setup_action(tr!("Add music source"), || {
+                    crate::desktop::open_settings(crate::sources_ui::SettingsGroup::Sources)
                 })),
         )
         .child(
@@ -571,7 +509,7 @@ fn empty_player(model: Model) -> impl IntoElement {
                 .child(crate::controls::action(
                     tr!("Connect your agent"),
                     || false,
-                    || crate::desktop::open_settings(crate::sources_ui::SettingsGroup::Mcp),
+                    || crate::desktop::open_settings(crate::sources_ui::SettingsGroup::Agent),
                 ))
                 .child(
                     text(tr!("Choose music and control playback through chat"))

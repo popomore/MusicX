@@ -106,7 +106,7 @@ pub enum SettingsGroup {
     Language,
     Playback,
     Sources,
-    Mcp,
+    Agent,
     Updates,
 }
 
@@ -116,7 +116,7 @@ impl SettingsGroup {
         Self::Language,
         Self::Playback,
         Self::Sources,
-        Self::Mcp,
+        Self::Agent,
         Self::Updates,
     ];
 
@@ -125,7 +125,7 @@ impl SettingsGroup {
             Self::Language => tr!("Language"),
             Self::Playback => tr!("Playback"),
             Self::Sources => tr!("Music sources"),
-            Self::Mcp => tr!("MCP connection"),
+            Self::Agent => tr!("Agent"),
             Self::Updates => tr!("Version & updates"),
         }
     }
@@ -140,9 +140,13 @@ pub fn select_settings_group(group: SettingsGroup) {
 }
 
 #[cfg(target_os = "macos")]
+pub fn selected_settings_group() -> SettingsGroup {
+    SettingsGroup::ALL[SETTINGS_GROUP.load(std::sync::atomic::Ordering::SeqCst)]
+}
+
+#[cfg(target_os = "macos")]
 pub fn settings_view(model: Model) -> impl IntoElement {
-    let read_group =
-        || SettingsGroup::ALL[SETTINGS_GROUP.load(std::sync::atomic::Ordering::SeqCst)];
+    let read_group = selected_settings_group;
     let group = signal(read_group());
     set_interval(std::time::Duration::from_millis(100), move || {
         let next = read_group();
@@ -220,8 +224,8 @@ pub fn settings_view(model: Model) -> impl IntoElement {
                             move || flow(model, false, || {}, true),
                         ))
                         .child(when(
-                            move || group.get() == SettingsGroup::Mcp,
-                            || scroll().flex_1().child(mcp_settings()),
+                            move || group.get() == SettingsGroup::Agent,
+                            || scroll().flex_1().child(agent_settings()),
                         ))
                         .child(when(
                             move || group.get() == SettingsGroup::Updates,
@@ -498,11 +502,71 @@ fn settings_action(
         )
 }
 
+#[cfg(target_os = "macos")]
+fn agent_settings() -> impl IntoElement {
+    view()
+        .gap(px(12.0))
+        .child(settings_heading(tr!("Agent")))
+        .child(caption(tr!("Set up music control in your agent.")))
+        .child(agent_setup_row(crate::agent_setup::Agent::Codex))
+        .child(agent_setup_row(crate::agent_setup::Agent::ClaudeCode))
+        .child(view().my(px(8.0)).child(settings_separator()))
+        .child(mcp_settings())
+}
+
+#[cfg(target_os = "macos")]
+fn agent_setup_row(agent: crate::agent_setup::Agent) -> impl IntoElement {
+    let busy = signal(false);
+    let message = signal(String::new());
+    view()
+        .gap(px(4.0))
+        .child(
+            view().flex_row().items_center().gap(px(12.0))
+                .child(view().flex_1().child(text(agent.label()).text_size(px(12.0))
+                    .text_color(move || theme().foreground)))
+                .child(
+                    button().accessibility_label(Some(agent.setup_label().into()))
+                        .disabled(move || busy.get() || remote::mcp_token().is_none())
+                        .on_press(move || {
+                            if busy.get() { return; }
+                            busy.set(true);
+                            message.set(String::new());
+                            let (send, receive) = oneshot::channel();
+                            std::thread::spawn(move || { let _ = send.send(agent.configure()); });
+                            spawn(async move {
+                                let result = receive.await;
+                                busy.set(false);
+                                message.set(match result {
+                                    Ok(Ok(())) => tr!("Setup complete. Restart {agent} to connect."; agent = agent.label()),
+                                    Ok(Err(error)) => error.to_string(),
+                                    Err(_) => tr!("Request ended; please try again").into(),
+                                });
+                            });
+                        })
+                        .h(px(28.0)).px(px(10.0)).items_center().justify_center()
+                        .rounded(px(6.0)).bg(move || theme().muted.opacity(0.5))
+                        .hover(|s| s.bg(theme().muted)).active(|s| s.opacity(0.65))
+                        .disabled_style(|s| s.opacity(0.4))
+                        .child(text(move || if busy.get() { tr!("Setting up…") } else { tr!("Automatic setup") })
+                            .text_size(px(11.0)).text_color(move || theme().foreground)),
+                ),
+        )
+        .child(when(move || !message.with(String::is_empty), move || caption(move || message.get())))
+}
+
 fn mcp_settings() -> impl IntoElement {
     let message = signal("");
+    #[cfg(target_os = "macos")]
+    let title = text("MCP")
+        .text_size(px(14.0))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(move || theme().foreground)
+        .mb(px(4.0));
+    #[cfg(target_os = "ios")]
+    let title = settings_heading(tr!("MCP connection"));
     view()
         .gap(px(8.0))
-        .child(settings_heading(tr!("MCP connection")))
+        .child(title)
         .child(
             view()
                 .px(px(8.0))

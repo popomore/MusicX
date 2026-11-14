@@ -17,6 +17,7 @@ pub enum Page {
     History,
     Album,
     Discovery,
+    #[cfg(target_os = "ios")]
     Sources,
     Library,
     #[cfg(target_os = "macos")]
@@ -235,7 +236,9 @@ impl Model {
                 Page::Queue => remote::read_json("/ui/queue").map(|q| Loaded::Queue(Box::new(q))),
                 #[cfg(target_os = "macos")]
                 Page::Lyrics => unreachable!(),
-                Page::Player | Page::Sources | Page::Library | Page::Discovery => unreachable!(),
+                #[cfg(target_os = "ios")]
+                Page::Sources => unreachable!(),
+                Page::Player | Page::Library | Page::Discovery => unreachable!(),
             };
             let _ = send.send(result);
         });
@@ -276,7 +279,9 @@ impl Model {
     }
     fn slot(page: Page) -> Option<usize> {
         match page {
-            Page::Player | Page::Sources | Page::Library | Page::Discovery => None,
+            #[cfg(target_os = "ios")]
+            Page::Sources => None,
+            Page::Player | Page::Library | Page::Discovery => None,
             Page::Info => Some(0),
             #[cfg(target_os = "macos")]
             Page::Lyrics => Some(0),

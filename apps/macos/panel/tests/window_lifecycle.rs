@@ -1,6 +1,9 @@
 //! Opt-in native regression: run the real panel on AppKit's main thread.
 // Shared source files include libtest imports that this custom harness doesn't use.
 #![allow(unused_imports)]
+#[path = "../src/agent_setup.rs"]
+#[allow(dead_code)] // This custom harness does not run embedded configuration unit tests.
+mod agent_setup;
 #[path = "../src/controls.rs"]
 mod controls;
 #[path = "../src/desktop.rs"]

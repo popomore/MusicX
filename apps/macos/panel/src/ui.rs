@@ -21,7 +21,7 @@ use tokio::sync::oneshot;
 
 #[cfg(target_os = "macos")]
 #[path = "desktop_ui.rs"]
-mod desktop_ui;
+pub(crate) mod desktop_ui;
 #[cfg(target_os = "macos")]
 use desktop_ui::track_row;
 #[cfg(target_os = "macos")]
