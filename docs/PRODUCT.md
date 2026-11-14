@@ -6,11 +6,13 @@ MusicX is a compact native player for people who choose music with an agent and 
 
 The native menu bar provides application settings, standard editing, playback and volume commands, view navigation, window controls, and help. Settings uses Command-comma; Show Player uses Command-0; Now Playing, History, My Playlists, and Music Sources use Command-1 through Command-4. Playback actions are disabled when unavailable, and menu labels follow the selected interface language.
 
-The menu bar icon shows playback state and opens the compact player. Closing the window releases its resources while MusicX Helper keeps playing and recording history. The system's Now Playing controls and media keys remain available. To end the session and stop the helper, use Quit MusicX.
+The menu bar icon shows playback state and opens the compact player. Closing the last UI window releases its resources while MusicX Helper keeps playing and recording history. The player can be reopened while settings remains open. The system's Now Playing controls and media keys remain available. To end the session and stop the helper, use Quit MusicX.
 
-The player shows the cover, track title, artist, album, audio quality badge, progress, and basic controls. The quality popover separates the reported stream quality from the listener's preference. The optional one-line lyric preview opens full lyrics, which follow playback and support seeking when the source provides timestamps. Track information links back to its source and album. Queue, history, playlists, and settings open beside the player so playback controls remain available.
+The player shows the cover, track title, artist, album, audio quality badge, progress, and basic controls. The quality popover separates the reported stream quality from the listener's preference. The optional one-line lyric preview opens full lyrics, which follow playback and support seeking when the source provides timestamps. Track information links back to its source and album. Queue, history, and playlists open beside the player so playback controls remain available. Hovering the available opening edge reveals a translucent arrow that opens Now Playing. The edge follows the available space on the current display as the window moves.
 
-Search and discovery are exposed through MCP. Use MCP Connection in settings to copy the endpoint configuration and connect a client. The player panel focuses on the current session and music already available in albums, playlists, and history.
+Settings opens a separate window from the application menu or Command-comma. Its sidebar switches between Language, Playback, Music Sources, Agent, and Version & Updates. The Music Sources menu command opens that settings group directly. Repeated settings commands focus the same window, and settings can close independently of the player.
+
+Search and discovery are exposed through MCP. Use Agent in macOS settings to set up Codex or Claude Code automatically, or copy the MCP endpoint configuration for another client. The player panel focuses on the current session and music already available in albums, playlists, and history.
 
 ## Queue, library, and history
 

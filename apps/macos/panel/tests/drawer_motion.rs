@@ -134,6 +134,51 @@ fn start(reduced_motion: bool) -> (Headless, Arc<Mutex<Vec<f32>>>) {
     (app, positions)
 }
 
+#[component]
+fn HintScreen() -> impl IntoElement {
+    let left = signal(false);
+    let opened = signal(false);
+    view()
+        .flex_1()
+        .child(
+            button()
+                .on_press(move || left.update(|value| *value = !*value))
+                .child(text("Change side")),
+        )
+        .child(when(opened, || text("Details opened")))
+        .child(when(
+            move || !opened.get(),
+            move || {
+                drawer::details_hint()
+                    .left(left)
+                    .on_press(move || opened.set(true))
+            },
+        ))
+}
+
+#[test]
+fn edge_hint_follows_the_selected_side_and_opens_only_when_pressed() {
+    let mut config = EngineConfig::new(Root::of::<HintScreen>());
+    config.viewport = Size::new(px(drawer::PLAYER_WIDTH), px(512.0));
+    config.environment.window = config.viewport;
+    config.environment.os = nsh_core::platform::Os::MacOs;
+    let mut app = Headless::start(config).unwrap();
+    app.first_render().unwrap();
+    let right = musicx_protocol::tr!("Open details on the right");
+    let left = musicx_protocol::tr!("Open details on the left");
+    app.hover(right).unwrap();
+    assert!(
+        !app.shows("Details opened"),
+        "hover only reveals an invitation"
+    );
+    app.press("Change side").unwrap();
+    app.hover(left).unwrap();
+    assert!(!app.screen().matches(&format!("label:{right}")).unwrap());
+    app.press(left).unwrap();
+    assert!(app.shows("Details opened"));
+    assert!(!app.screen().matches(&format!("label:{left}")).unwrap());
+}
+
 #[test]
 fn details_open_outward_on_both_sides() {
     for (side, sign) in [("Left", 1.0), ("Right", -1.0)] {

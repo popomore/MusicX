@@ -1,6 +1,9 @@
 //! Exercise the production settings language buttons in an isolated process.
 // Shared source files include libtest imports that this custom harness doesn't use.
 #![allow(unused_imports)]
+#[path = "../src/agent_setup.rs"]
+#[allow(dead_code)] // This custom harness does not run embedded configuration unit tests.
+mod agent_setup;
 #[path = "../src/controls.rs"]
 mod controls;
 #[path = "../src/desktop.rs"]
@@ -39,6 +42,10 @@ fn on_disconnected() {}
 #[component]
 fn LanguageScreen() -> impl IntoElement {
     let model = model::Model::new();
+    let mirror = model::Model::new();
+    set_interval(Duration::from_millis(50), move || {
+        mirror.refresh_mini_lyrics()
+    });
     model.status.update(|status| status.volume = 0.42);
     view()
         .flex_1()
@@ -46,6 +53,13 @@ fn LanguageScreen() -> impl IntoElement {
             model
                 .status
                 .with(|status| format!("volume:{}", status.volume))
+        }))
+        .child(text(move || {
+            format!(
+                "mini:{} mirror:{}",
+                model.show_mini_lyrics.get(),
+                mirror.show_mini_lyrics.get()
+            )
         }))
         .child(dynamic(move || {
             model.language.get();
@@ -55,7 +69,7 @@ fn LanguageScreen() -> impl IntoElement {
 
 fn start() -> Headless {
     let mut config = EngineConfig::new(Root::of::<LanguageScreen>());
-    config.viewport = Size::new(px(296.0), px(512.0));
+    config.viewport = Size::new(px(704.0), px(520.0));
     config.environment.window = config.viewport;
     let mut app = Headless::start(config).unwrap();
     app.first_render().unwrap();
@@ -111,6 +125,132 @@ fn player_layout() {
     }
 }
 
+#[component]
+fn PlayerNavigationScreen() -> impl IntoElement {
+    let model = model::Model::new();
+    desktop::menus::connect(model);
+    view().child(text(move || {
+        match (model.page.get(), model.discovery.get()) {
+            (model::Page::Discovery, Some(protocol::MusicSourceAction::Shows { source }))
+                if model.drawer_open.get() =>
+            {
+                format!("Podcast source: {source}")
+            }
+            _ => "Player ready".into(),
+        }
+    }))
+}
+
+#[component]
+fn SettingsNavigationScreen() -> impl IntoElement {
+    let model = model::Model::new();
+    view()
+        .child(
+            nsh_base::button()
+                .on_press(|| {
+                    desktop::menus::request_source(protocol::MusicSourceAction::Shows {
+                        source: "qa-podcasts".into(),
+                    })
+                })
+                .child(text("Browse podcasts")),
+        )
+        .child(text(move || {
+            if model.page.get() == model::Page::Player && !model.drawer_open.get() {
+                "Settings remains independent"
+            } else {
+                "Settings opened a player page"
+            }
+        }))
+}
+
+fn source_navigation() {
+    let mut player =
+        Headless::start(EngineConfig::new(Root::of::<PlayerNavigationScreen>())).unwrap();
+    player.first_render().unwrap();
+    let mut settings =
+        Headless::start(EngineConfig::new(Root::of::<SettingsNavigationScreen>())).unwrap();
+    settings.first_render().unwrap();
+    settings.press("Browse podcasts").unwrap();
+    player.wait_for("text:Podcast source: qa-podcasts").unwrap();
+    assert!(settings.shows("Settings remains independent"));
+}
+
+fn settings_escape() {
+    use nsh_core::{Command, desktop::DesktopCommand, platform::Os};
+    let start = |root, width| {
+        let mut config = EngineConfig::new(root);
+        config.viewport = Size::new(px(width), px(520.0));
+        config.environment.window = config.viewport;
+        config.environment.os = Os::MacOs;
+        let mut app = Headless::start(config).unwrap();
+        app.first_render().unwrap();
+        app
+    };
+    let player = start(Root::of::<ui::App>(), 320.0);
+    let mut settings = start(Root::of::<ui::Settings>(), 704.0);
+    let close = Command::Desktop(Box::new(DesktopCommand::Close));
+    let close_count = |app: &Headless| {
+        app.screen()
+            .commands()
+            .iter()
+            .filter(|(_, command)| command == &close)
+            .count()
+    };
+    for language in ["English", "简体中文"] {
+        settings.press(language).unwrap();
+        let before = close_count(&settings);
+        settings.press_key("Escape").unwrap();
+        assert_eq!(
+            close_count(&settings),
+            before + 1,
+            "Escape must request closing the settings surface after selecting {language}"
+        );
+        assert!(
+            !player.screen().sent(&close),
+            "closing settings must leave the player surface open"
+        );
+    }
+}
+
+#[component]
+fn SetupNavigationScreen() -> impl IntoElement {
+    let model = model::Model::new();
+    model.status_ready.set(true);
+    view()
+        .flex_1()
+        .child(text(move || {
+            if model.drawer_open.get() {
+                "Details opened"
+            } else {
+                "Compact player"
+            }
+        }))
+        .child(ui::desktop_ui::shell(model))
+}
+
+fn setup_navigation() {
+    sources_ui::select_settings_group(sources_ui::SettingsGroup::Language);
+    let mut config = EngineConfig::new(Root::of::<SetupNavigationScreen>());
+    config.viewport = Size::new(px(320.0), px(540.0));
+    config.environment.window = config.viewport;
+    config.environment.os = nsh_core::platform::Os::MacOs;
+    let mut player = Headless::start(config).unwrap();
+    player.first_render().unwrap();
+    player.press(protocol::tr!("Add music source")).unwrap();
+    assert_eq!(
+        sources_ui::selected_settings_group(),
+        sources_ui::SettingsGroup::Sources,
+        "adding a source must target standalone Settings, never the player drawer"
+    );
+    assert!(player.shows("Compact player"));
+    player.press(protocol::tr!("Connect your agent")).unwrap();
+    assert_eq!(
+        sources_ui::selected_settings_group(),
+        sources_ui::SettingsGroup::Agent
+    );
+    assert!(player.shows("Compact player"));
+}
+
 fn exercise() {
     let directory = protocol::data_dir().unwrap();
     assert_eq!(
@@ -135,6 +275,32 @@ fn exercise() {
         std::fs::read_to_string(directory.join("language")).unwrap(),
         "en\n"
     );
+    app.press("Playback").unwrap();
+    assert!(app.shows("Volume normalization"));
+    assert!(app.shows("Lyric preview"));
+    assert!(
+        !app.shows("English"),
+        "only the selected settings group is shown"
+    );
+    app.press("Lyric preview").unwrap();
+    app.wait_for("text:mini:false mirror:false").unwrap();
+    app.press("Music sources").unwrap();
+    assert!(app.shows("Automatically update plugins"));
+    app.press("Agent").unwrap();
+    assert!(app.shows("Copy MCP config"));
+    assert!(app.shows("Codex"));
+    assert!(app.shows("Claude Code"));
+    assert!(!app.shows("Lyric preview"));
+    app.press("Version & updates").unwrap();
+    assert!(app.shows("Check for updates"));
+    assert!(!app.shows("Copy MCP config"));
+    sources_ui::select_settings_group(sources_ui::SettingsGroup::Agent);
+    app.wait(Duration::from_millis(150)).unwrap();
+    assert!(
+        app.shows("Copy MCP config"),
+        "contextual setup opens the MCP group"
+    );
+    app.press("Language").unwrap();
     app.press("简体中文").unwrap();
     app.wait(Duration::from_millis(100)).unwrap();
     assert!(app.shows("版本与更新"));
@@ -156,8 +322,12 @@ fn exercise() {
         app.shows("Language"),
         "reopening settings must use the saved language"
     );
+    drop(app);
+    source_navigation();
+    settings_escape();
+    setup_navigation();
     println!(
-        "localization: real App layout, resizing, language refresh, system default, manual switching, Model preservation and reopen passed"
+        "localization: real App layout, settings sidebar, resizing, language refresh, system default, manual switching, Model preservation, reopen, scoped Escape closing and setup navigation passed"
     );
 }
 

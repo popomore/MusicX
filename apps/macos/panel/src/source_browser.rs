@@ -11,21 +11,61 @@ use nsh_base::{button, input, theme};
 use nsh_core::{element::ImageSrc, prelude::*};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    sync::Mutex,
+    sync::{
+        Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::oneshot;
-static LOGIN_JOB: Mutex<Option<String>> = Mutex::new(None);
-pub fn cancel_active_login() {
-    if let Ok(mut job) = LOGIN_JOB.lock()
-        && let Some(id) = job.take()
-    {
-        remote::cancel_source_login(id);
+#[derive(Default)]
+struct LoginJobs(BTreeMap<u64, String>);
+
+impl LoginJobs {
+    fn take(&mut self, owner: u64) -> Option<String> {
+        self.0.remove(&owner)
+    }
+    fn finish(&mut self, owner: u64, job: &str) {
+        if self.0.get(&owner).is_some_and(|current| current == job) {
+            self.0.remove(&owner);
+        }
+    }
+    #[cfg(any(target_os = "macos", test))]
+    fn drain(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.0).into_values().collect()
     }
 }
-fn remember_job(job: Option<String>) {
-    if let Ok(mut value) = LOGIN_JOB.lock() {
-        *value = job;
+
+static LOGIN_JOBS: Mutex<LoginJobs> = Mutex::new(LoginJobs(BTreeMap::new()));
+
+#[derive(Clone, Copy)]
+struct LoginOwner(u64);
+impl LoginOwner {
+    fn new() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        Self(NEXT.fetch_add(1, Ordering::Relaxed))
+    }
+    fn remember(self, job: String) {
+        self.cancel();
+        LOGIN_JOBS.lock().unwrap().0.insert(self.0, job);
+    }
+    fn finish(self, job: &str) {
+        LOGIN_JOBS.lock().unwrap().finish(self.0, job);
+    }
+    fn cancel(self) {
+        let job = LOGIN_JOBS.lock().unwrap().take(self.0);
+        if let Some(job) = job {
+            remote::cancel_source_login(job);
+        }
+    }
+}
+
+/// Process shutdown cancels every remaining browser's job.
+#[cfg(target_os = "macos")]
+pub fn cancel_active_logins() {
+    let jobs = LOGIN_JOBS.lock().unwrap().drain();
+    for job in jobs {
+        remote::cancel_source_login(job);
     }
 }
 #[derive(Clone, Copy, PartialEq)]
@@ -38,6 +78,7 @@ enum Page {
 }
 #[derive(Clone, Copy)]
 struct Browser {
+    login_owner: LoginOwner,
     root: Page,
     managing: Signal<bool>,
     configuring: Signal<bool>,
@@ -94,7 +135,7 @@ impl Browser {
         });
     }
     fn list(self, catalog: bool) {
-        cancel_active_login();
+        self.login_owner.cancel();
         self.login.set(None);
         self.selected.set(None);
         self.account.set(None);
@@ -241,6 +282,9 @@ impl Browser {
         );
     }
     fn sign_in(self, method: SignInMethod) {
+        if self.busy.get() {
+            return;
+        }
         let Some(source) = self.selected.with(|v| v.as_ref().map(|v| v.id.clone())) else {
             return;
         };
@@ -252,7 +296,7 @@ impl Browser {
                 .unwrap_or_default()
                 .as_nanos()
         );
-        remember_job(Some(job.clone()));
+        self.login_owner.remember(job.clone());
         self.work(
             move || {
                 request::<SourceLogin>(Action::SignIn {
@@ -287,7 +331,7 @@ impl Browser {
                 let terminal = matches!(job.status.as_str(), "success" | "error" | "cancelled");
                 let success = job.status == "success";
                 if terminal {
-                    remember_job(None);
+                    this.login_owner.finish(&job.job);
                     this.message.set(if success {
                         tr!("Account connected").into()
                     } else {
@@ -306,7 +350,7 @@ impl Browser {
         );
     }
     fn cancel(self) {
-        cancel_active_login();
+        self.login_owner.cancel();
         self.login.set(None);
         self.page.set(Page::Detail);
         self.message.set(tr!("Account connection canceled").into());
@@ -481,7 +525,7 @@ pub enum Start {
     Catalog,
 }
 pub fn sources_view(
-    model: crate::model::Model,
+    open_source: impl Fn(Action) + Copy + 'static,
     back: impl Fn() + Copy + 'static,
     done: impl Fn() + Copy + 'static,
     initial: Option<MusicSource>,
@@ -493,6 +537,7 @@ pub fn sources_view(
         Start::Catalog => Page::Catalog,
     };
     let this = Browser {
+        login_owner: LoginOwner::new(),
         root,
         managing: signal(false),
         configuring: signal(false),
@@ -516,7 +561,7 @@ pub fn sources_view(
         playlists: signal(Vec::new()),
         playlist_id: signal(String::new()),
     };
-    cleanup(cancel_active_login);
+    cleanup(move || this.login_owner.cancel());
     match start {
         Start::Catalog => this.list(true),
         Start::Detail => {
@@ -607,7 +652,7 @@ pub fn sources_view(
                         .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|!s.settings.is_empty())),move||action(tr!("Source settings"),move||this.busy.get(),move||this.configuring.update(|v|*v = !*v))))
                         .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.capabilities.iter().any(|v|v=="liked"))),move||action(tr!("Import cloud likes"),move||this.busy.get(),move||this.import_collection(true))))
                         .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.capabilities.iter().any(|v|v=="recent"))),move||action(tr!("Import cloud history"),move||this.busy.get(),move||this.import_collection(false))))
-                        .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.capabilities.iter().any(|v|v=="shows"))),move||action(tr!("Browse podcasts"),move||this.busy.get(),move||{if let Some(source)=this.selected.with(|s|s.as_ref().map(|s|s.id.clone())){model.open_source(Action::Shows{source});}})))
+                        .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.capabilities.iter().any(|v|v=="shows"))),move||action(tr!("Browse podcasts"),move||this.busy.get(),move||{if let Some(source)=this.selected.with(|s|s.as_ref().map(|s|s.id.clone())){open_source(Action::Shows{source});}})))
                         .child(when(move||this.configuring.get(),move||view().gap(px(10.0))
                         .child(each(move||this.selected.with(|s|s.as_ref().map_or_else(Vec::new,|s|s.settings.clone())),|f|f.definition.key.clone(),move|field,_|{
                             view().gap(px(5.0))
@@ -666,4 +711,49 @@ pub fn sources_view(
         .child(when(move||this.imported.get(),move||crate::controls::primary(tr!("View imported playlists"),move||this.busy.get(),done)))
         .child(when(move||this.busy.get(),||caption(tr!("Loading or saving…"))))
         .child(when(move||this.page.get()!=Page::Catalog,move||caption(move||this.message.get())))
+}
+
+#[cfg(test)]
+mod login_tests {
+    use super::*;
+
+    #[test]
+    fn closing_an_unrelated_browser_keeps_the_settings_login() {
+        let settings = LoginOwner::new();
+        let imports = LoginOwner::new();
+        settings.remember("settings-login".into());
+        imports.cancel();
+        imports.remember("import-login".into());
+        imports.cancel();
+        assert_eq!(
+            LOGIN_JOBS
+                .lock()
+                .unwrap()
+                .0
+                .get(&settings.0)
+                .map(String::as_str),
+            Some("settings-login")
+        );
+        settings.finish("old-login");
+        assert_eq!(
+            LOGIN_JOBS
+                .lock()
+                .unwrap()
+                .0
+                .get(&settings.0)
+                .map(String::as_str),
+            Some("settings-login")
+        );
+        settings.finish("settings-login");
+        assert!(!LOGIN_JOBS.lock().unwrap().0.contains_key(&settings.0));
+    }
+
+    #[test]
+    fn process_shutdown_drains_every_remaining_login() {
+        let mut jobs = LoginJobs::default();
+        jobs.0.insert(1, "settings-login".into());
+        jobs.0.insert(2, "import-login".into());
+        assert_eq!(jobs.drain(), vec!["settings-login", "import-login"]);
+        assert!(jobs.drain().is_empty());
+    }
 }

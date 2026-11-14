@@ -1,3 +1,4 @@
+mod agent_setup;
 mod artwork;
 mod controls;
 mod desktop;

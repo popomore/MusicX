@@ -40,7 +40,9 @@ Stable releases become GitHub Latest and check for updates daily using Sparkle, 
 
 ## Connect an MCP client
 
-Open **Settings → MCP Connection** in MusicX and choose **Copy MCP Configuration**. Paste the configuration into a client that supports Streamable HTTP. If your client asks for separate fields, use the address shown in MusicX and **Copy Token** to supply the bearer token.
+On macOS, open **Settings → Agent** and choose **Automatic setup** beside Codex or Claude Code, then restart that agent to connect. MusicX adds its MCP connection to the agent's user configuration and keeps other settings.
+
+For other clients, use **Copy MCP config** in the MCP section and paste it into a client that supports Streamable HTTP. If your client asks for separate fields, use the address shown in MusicX and **Copy token** to supply the bearer token. On iPhone, these controls remain under **MCP Connection**.
 
 The client can search, play, queue, seek, and work with sources, local playlists, and playback history. [MCP tool reference](docs/DEVELOPMENT.md#mcp-tools)
 

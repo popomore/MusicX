@@ -19,10 +19,43 @@ pub(crate) static SETTINGS_WRITER: Mutex<()> = Mutex::new(());
 struct LoginRegistry {
     active: Option<Arc<LoginJob>>,
     cancelled: std::collections::VecDeque<String>,
+    completed: std::collections::VecDeque<SourceLogin>,
+}
+impl LoginRegistry {
+    fn activate(&mut self, job: Arc<LoginJob>) {
+        if let Some(previous) = self.active.replace(job)
+            && !previous.running.load(Ordering::SeqCst)
+            && let Ok(mut state) = previous.snapshot()
+            && matches!(state.status.as_str(), "success" | "error" | "cancelled")
+        {
+            // Keep only bounded terminal snapshots, never the sign-in VM or QR prompt.
+            state.svg = None;
+            state.qr_url = None;
+            self.completed.push_back(state);
+            if self.completed.len() > 32 {
+                self.completed.pop_front();
+            }
+        }
+    }
+    fn state(&self, id: &str) -> Result<SourceLogin> {
+        if let Some(job) = self
+            .active
+            .as_ref()
+            .filter(|job| job.snapshot().is_ok_and(|state| state.job == id))
+        {
+            return job.snapshot();
+        }
+        self.completed
+            .iter()
+            .find(|state| state.job == id)
+            .cloned()
+            .context(tr!("Connection changed; please reopen"))
+    }
 }
 static LOGIN: Mutex<LoginRegistry> = Mutex::new(LoginRegistry {
     active: None,
     cancelled: std::collections::VecDeque::new(),
+    completed: std::collections::VecDeque::new(),
 });
 
 fn plugin(source: &str) -> Result<&str> {
@@ -1074,7 +1107,7 @@ pub fn begin_sign_in_method(
         cancel: AtomicBool::new(false),
         running: AtomicBool::new(true),
     });
-    registry.active = Some(job.clone());
+    registry.activate(job.clone());
     let initial = job.snapshot()?;
     drop(registry);
     std::thread::spawn(move || {
@@ -1138,9 +1171,7 @@ pub fn login_state(id: &str, cancel: bool) -> Result<SourceLogin> {
             ..Default::default()
         });
     }
-    current
-        .context(tr!("Connection changed; please reopen"))?
-        .snapshot()
+    registry.state(id)
 }
 
 pub fn execute(input: MusicSourceAction) -> Result<Value> {
@@ -1209,6 +1240,36 @@ pub fn execute(input: MusicSourceAction) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn completed_login_remains_pollable_after_another_browser_starts() {
+        let job = |id: &str, status: &str| {
+            Arc::new(LoginJob {
+                state: Mutex::new(SourceLogin {
+                    job: id.into(),
+                    source: "mygo:qa".into(),
+                    status: status.into(),
+                    ..Default::default()
+                }),
+                cancel: AtomicBool::new(false),
+                running: AtomicBool::new(status == "waiting"),
+            })
+        };
+        let mut registry = LoginRegistry {
+            active: None,
+            cancelled: Default::default(),
+            completed: Default::default(),
+        };
+        registry.activate(job("settings-A", "success"));
+        registry.activate(job("player-B", "waiting"));
+        assert_eq!(registry.state("settings-A").unwrap().status, "success");
+        assert_eq!(registry.state("player-B").unwrap().status, "waiting");
+        for index in 0..40 {
+            registry.activate(job(&format!("completed-{index}"), "success"));
+        }
+        assert!(registry.completed.len() <= 32);
+        assert!(registry.state("settings-A").is_err());
+        assert_eq!(registry.state("completed-38").unwrap().status, "success");
+    }
     #[test]
     fn exports_skip_comments_strings_and_support_aliases() {
         assert_eq!(
