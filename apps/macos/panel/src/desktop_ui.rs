@@ -6,7 +6,7 @@ use crate::{
     protocol::{State, Track},
     remote::{Action, submit},
 };
-use nsh_base::{SliderValue, button, slider, theme};
+use nsh_base::{SliderValue, button, popover, slider, theme};
 use nsh_core::{element::ImageSrc, prelude::*};
 
 #[derive(Clone, Copy)]
@@ -524,6 +524,128 @@ fn empty_player(model: Model) -> impl IntoElement {
         ))
 }
 
+fn artist_entry(model: Model) -> impl IntoElement {
+    let metadata = computed(move || {
+        model.status.with(|s| {
+            s.track.as_ref().map(|track| {
+                (
+                    track.artist.clone(),
+                    track.source.as_ref().map(|s| s.plugin.clone()),
+                    track.artists.clone(),
+                )
+            })
+        })
+    });
+    dynamic(move || {
+        let (name, plugin, artists) = metadata.get().unwrap_or_default();
+        let mut seen = std::collections::HashSet::new();
+        let artists: Vec<_> = artists
+            .into_iter()
+            .filter(|artist| {
+                !artist.id.trim().is_empty()
+                    && !artist.name.trim().is_empty()
+                    && seen.insert(artist.id.clone())
+            })
+            .collect();
+        let name = if name.trim().is_empty() {
+            artists
+                .iter()
+                .map(|artist| artist.name.as_str())
+                .collect::<Vec<_>>()
+                .join(" / ")
+        } else {
+            name
+        };
+        let plugin = plugin.filter(|plugin| !plugin.trim().is_empty());
+        if artists.is_empty() || plugin.is_none() {
+            return text(name)
+                .max_w(px(88.0))
+                .number_of_lines(1)
+                .text_size(px(11.0))
+                .text_color(move || theme().muted_foreground)
+                .into_element();
+        }
+        let source = format!("mygo:{}", plugin.unwrap());
+        let entry = button()
+            .accessibility_label(Some(tr!("View artist {}", name).into()))
+            .max_w(px(88.0))
+            .min_w(px(0.0))
+            .py(px(4.0))
+            .px(px(3.0))
+            .rounded(px(4.0))
+            .hover(|s| s.bg(theme().muted))
+            .active(|s| s.opacity(0.65))
+            .child(
+                text(name)
+                    .number_of_lines(1)
+                    .text_size(px(11.0))
+                    .text_color(move || theme().muted_foreground),
+            );
+        if artists.len() == 1 {
+            let id = artists[0].id.clone();
+            return entry
+                .on_press(move || {
+                    model.open_source(crate::protocol::MusicSourceAction::Artist {
+                        source: source.clone(),
+                        id: id.clone(),
+                    });
+                })
+                .into_element();
+        }
+        let open = signal(false);
+        popover()
+            .open(move || Some(open.get()))
+            .on_open_change(move |event: &nsh_base::PopoverEvent| {
+                if let nsh_base::PopoverEvent::OpenChange(value, _) = event {
+                    open.set(*value);
+                }
+            })
+            .placement(Placement::Bottom)
+            .align(Align::Start)
+            .offset(px(6.0))
+            .margin(px(12.0))
+            .popup_style(move |s| {
+                s.w(px(220.0))
+                    .p(px(6.0))
+                    .bg(theme().background)
+                    .border_1()
+                    .border_color(theme().muted)
+                    .rounded(px(8.0))
+            })
+            .trigger(entry)
+            .child(view().gap(px(2.0)).child(each(
+                move || artists.clone(),
+                |artist| artist.id.clone(),
+                move |artist, _| {
+                    let source = source.clone();
+                    button()
+                        .accessibility_label(move || {
+                            Some(tr!("View artist {}", artist.with(|a| a.name.clone())).into())
+                        })
+                        .on_press(move || {
+                            open.set(false);
+                            model.open_source(crate::protocol::MusicSourceAction::Artist {
+                                source: source.clone(),
+                                id: artist.with(|a| a.id.clone()),
+                            });
+                        })
+                        .px(px(8.0))
+                        .py(px(7.0))
+                        .rounded(px(4.0))
+                        .hover(|s| s.bg(theme().muted))
+                        .active(|s| s.opacity(0.65))
+                        .child(
+                            text(move || artist.with(|a| a.name.clone()))
+                                .text_size(px(12.0))
+                                .number_of_lines(1)
+                                .text_color(move || theme().foreground),
+                        )
+                },
+            )))
+            .into_element()
+    })
+}
+
 fn active_player(model: Model) -> impl IntoElement {
     let playing = move || {
         model
@@ -558,13 +680,8 @@ fn active_player(model: Model) -> impl IntoElement {
             .child(
                 view().items_center().mt(px(8.0)).child(
                     button()
-                        .accessibility_label(Some(tr!("Browse this album").into()))
-                        .disabled(move || {
-                            model
-                                .status
-                                .with(|s| s.track.as_ref().is_none_or(|t| t.album.is_none()))
-                        })
-                        .on_press(move || model.open(Page::Album))
+                        .accessibility_label(Some(tr!("Show now playing").into()))
+                        .on_press(move || model.open(Page::Queue))
                         .rounded(px(8.0))
                         .active(|s| s.opacity(0.9))
                         .child(
@@ -674,20 +791,7 @@ fn active_player(model: Model) -> impl IntoElement {
                             .items_center()
                             .gap(px(4.0))
                             .mt(px(3.0))
-                            .child(
-                                text(move || {
-                                    model.status.with(|s| {
-                                        s.track.as_ref().map_or_else(
-                                            || tr!("Choose music with your agent").into(),
-                                            |t| t.artist.clone(),
-                                        )
-                                    })
-                                })
-                                .max_w(px(88.0))
-                                .number_of_lines(1)
-                                .text_size(px(11.0))
-                                .text_color(move || theme().muted_foreground),
-                            )
+                            .child(artist_entry(model))
                             .child(when(
                                 move || {
                                     model.status.with(|s| {
