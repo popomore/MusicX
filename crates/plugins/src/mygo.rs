@@ -45,6 +45,8 @@ fn aes_ecb(key: &str, text: &str) -> Result<String> {
 }
 
 const MAX_BODY: u64 = 2 * 1024 * 1024;
+const MAX_FETCH_BODY: u64 = 8 * 1024 * 1024;
+const MAX_STORAGE: usize = 4 * 1024 * 1024;
 const METADATA_TIMEOUT: Duration = Duration::from_secs(3);
 static PLUGIN_CALL: Mutex<()> = Mutex::new(());
 static METADATA: Mutex<VecDeque<(String, String, Track)>> = Mutex::new(VecDeque::new());
@@ -233,6 +235,7 @@ pub(crate) fn fill_artwork(track: &mut Track) {
         json!({"query":query,"kind":"tracks","offset":0}),
         None,
         None,
+        None,
         METADATA_TIMEOUT,
     ) else {
         return;
@@ -408,6 +411,22 @@ fn parse_lyrics(result: &Value) -> crate::protocol::Lyrics {
 mod catalog_tests {
     use super::*;
     #[test]
+    fn namespaced_plugin_ids_remain_one_safe_path_component() {
+        assert!(valid_id("world.fansionia.mygo-music-yoi"));
+        for id in [
+            ".",
+            "..",
+            ".hidden",
+            "name.",
+            "name..other",
+            "a/b",
+            "a\\b",
+            "",
+        ] {
+            assert!(!valid_id(id), "{id}");
+        }
+    }
+    #[test]
     fn aes_ecb_matches_openssl_pkcs7_vector_and_rejects_invalid_keys() {
         assert_eq!(
             aes_ecb("0123456789abcdef", "hello").unwrap(),
@@ -422,6 +441,7 @@ mod catalog_tests {
         let context = JsContext::full(&rt).unwrap();
         context.with(|ctx| {
             ctx.eval::<(),_>(r#"globalThis.__translations='{}';globalThis.__language='zh-CN';globalThis.__storage='{}';globalThis.__settings='{}';globalThis.__platform='darwin';globalThis.__arch='arm64';globalThis.__fetch=()=>JSON.stringify({status:200,body:'{}',headers:[['set-cookie','a=1; Expires=Thu, 01 Jan 2037 00:00:00 GMT'],['set-cookie','b=2']]});"#).unwrap();
+            crate::web_api::install(&ctx).unwrap();
             ctx.eval::<(),_>(include_str!("mygo_host.js")).unwrap();
             ctx.eval::<(),_>("globalThis.checked='';fetch('https://example.com').then(r=>checked=JSON.stringify(r.headers.getSetCookie()));").unwrap();
             while ctx.execute_pending_job() {}
@@ -495,6 +515,8 @@ struct Fetch {
     #[serde(default)]
     headers: HashMap<String, String>,
     body: Option<String>,
+    #[serde(default, rename = "bodyBase64")]
+    body_base64: Option<String>,
 }
 
 pub(crate) fn plugin_root() -> Result<PathBuf> {
@@ -506,9 +528,10 @@ pub(crate) fn plugin_root() -> Result<PathBuf> {
 pub(crate) fn valid_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 100
+        && id.split('.').all(|part| !part.is_empty())
         && id
             .bytes()
-            .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b'.'))
 }
 
 pub(crate) fn manifest(dir: &Path) -> Result<Manifest> {
@@ -556,10 +579,9 @@ fn install_mode(
     expected: Option<&crate::installation::Snapshot>,
 ) -> Result<String> {
     let manifest = manifest(source)?;
-    ensure!(
-        crate::music_sources::limitation(&manifest, false, false).is_none(),
-        tr!("This source is not supported by the current host")
-    );
+    if let Some(reason) = crate::music_sources::limitation(&manifest, false, false) {
+        anyhow::bail!(reason);
+    }
     let script = entry(source, &manifest)?;
     let root = plugin_root()?;
     let target = root.join(&manifest.id);
@@ -601,6 +623,7 @@ fn install_mode(
         crate::music_sources::check_single_file_script(&code)?;
         fs::write(pending.join("index.js"), code)?;
         fs::write(pending.join("plugin.json"), serde_json::to_vec(&installed)?)?;
+        crate::plugin_files::copy_assets(source, &pending, &script)?;
         for language in ["en", "zh-CN"] {
             let path = source.join("locales").join(format!("{language}.json"));
             if path.exists() {
@@ -670,6 +693,8 @@ pub(crate) fn uninstall(id: &str) -> Result<()> {
         tr!("Complete or cancel account connection for this source first")
     );
     let target = plugin_root()?.join(id);
+    crate::process::set(id, false)?;
+    crate::network::set(id, false)?;
     ensure!(
         target.is_dir() && !fs::symlink_metadata(&target)?.file_type().is_symlink(),
         tr!("Source not installed or invalid directory type")
@@ -696,8 +721,8 @@ pub(crate) fn minimum_version_limitation(m: &Manifest) -> Option<String> {
     let Some(parsed) = parsed.filter(|v| v.len() == 3) else {
         return Some(tr!("Invalid plugin minimum version declaration").into());
     };
-    (parsed.as_slice() > [0, 1, 22].as_slice())
-        .then(|| tr!("This plugin requires MyGo {version}; the current compatibility baseline is 0.1.22"; version = version))
+    (parsed.as_slice() > [0, 1, 24].as_slice())
+        .then(|| tr!("This plugin requires MyGo {version}; the current compatibility baseline is 0.1.24"; version = version))
 }
 
 pub fn list() -> Result<Value> {
@@ -709,7 +734,8 @@ pub fn list() -> Result<Value> {
             found.push(json!({
                 "id": manifest.id, "name": manifest.name, "version": manifest.version,
                 "repository": manifest.repository,
-                "network": manifest.permissions.network, "catalog_supported": compatible(&manifest)
+                "network": manifest.permissions.network, "catalog_supported": compatible(&manifest),
+                "verification": crate::trust::installed(&manifest)
             }));
         }
     }
@@ -718,16 +744,13 @@ pub fn list() -> Result<Value> {
 }
 
 pub(crate) fn compatible(manifest: &Manifest) -> bool {
-    manifest.playback == "stream"
-        && match &manifest.permissions.process {
-            Value::Null | Value::Bool(false) => true,
-            Value::Array(commands) => commands.is_empty() || crate::ffmpeg::supported(commands),
-            _ => false,
-        }
+    matches!(manifest.playback.as_str(), "stream" | "remote")
+        && manifest.metadata.get("background").and_then(Value::as_bool) != Some(true)
+        && (!cfg!(target_os = "ios") || crate::process::programs(manifest).is_empty())
 }
 
 pub(crate) fn permitted(url: &Url, hosts: &[String]) -> bool {
-    url.scheme() == "https" && permitted_audio(url, hosts)
+    crate::network::explicit(url, hosts) || (url.scheme() == "https" && permitted_audio(url, hosts))
 }
 
 pub(crate) fn valid_audio_url(url: &Url) -> bool {
@@ -743,20 +766,26 @@ pub(crate) fn valid_audio_url(url: &Url) -> bool {
 }
 
 pub(crate) fn permitted_audio(url: &Url, hosts: &[String]) -> bool {
-    valid_audio_url(url)
-        && url.domain().is_some_and(|host| {
-            hosts.iter().any(|grant| {
-                if let Some(suffix) = grant.strip_prefix("*.") {
-                    host.strip_suffix(suffix)
-                        .is_some_and(|prefix| prefix.ends_with('.'))
-                } else {
-                    host == grant
-                }
-            })
-        })
+    crate::network::explicit(url, hosts)
+        || (valid_audio_url(url)
+            && url.domain().is_some_and(|host| {
+                hosts.iter().any(|grant| {
+                    if let Some(suffix) = grant.strip_prefix("*.") {
+                        host.strip_suffix(suffix)
+                            .is_some_and(|prefix| prefix.ends_with('.'))
+                    } else {
+                        host == grant
+                    }
+                })
+            }))
 }
 
-fn fetch(client: &Client, input: &str, grants: &[String], deadline: Instant) -> Result<Value> {
+pub(crate) fn fetch(
+    client: &Client,
+    input: &str,
+    grants: &[String],
+    deadline: Instant,
+) -> Result<Value> {
     let input: Fetch = serde_json::from_str(input)?;
     let url = Url::parse(&input.url)?;
     ensure!(
@@ -767,7 +796,19 @@ fn fetch(client: &Client, input: &str, grants: &[String], deadline: Instant) -> 
     ensure!(!remaining.is_zero(), tr!("Plugin request timed out"));
     let method = Method::from_bytes(input.method.as_deref().unwrap_or("GET").as_bytes())?;
     ensure!(
-        matches!(method, Method::GET | Method::POST | Method::HEAD),
+        matches!(
+            method,
+            Method::GET
+                | Method::POST
+                | Method::HEAD
+                | Method::PUT
+                | Method::PATCH
+                | Method::DELETE
+                | Method::OPTIONS
+        ) || matches!(
+            method.as_str(),
+            "PROPFIND" | "PROPPATCH" | "MKCOL" | "COPY" | "MOVE" | "LOCK" | "UNLOCK"
+        ),
         tr!("Unsupported HTTP method")
     );
     let mut request = client
@@ -782,7 +823,10 @@ fn fetch(client: &Client, input: &str, grants: &[String], deadline: Instant) -> 
         );
         request = request.header(name, value);
     }
-    if let Some(body) = input.body {
+    if let Some(body) = input.body_base64 {
+        use base64::Engine;
+        request = request.body(base64::engine::general_purpose::STANDARD.decode(body)?);
+    } else if let Some(body) = input.body {
         request = request.body(body);
     }
     let response = request
@@ -802,24 +846,56 @@ fn fetch(client: &Client, input: &str, grants: &[String], deadline: Instant) -> 
         })
         .collect();
     let mut bytes = Vec::new();
-    response.take(MAX_BODY + 1).read_to_end(&mut bytes)?;
+    response.take(MAX_FETCH_BODY + 1).read_to_end(&mut bytes)?;
     ensure!(
-        bytes.len() as u64 <= MAX_BODY,
-        tr!("Plugin response exceeds 2 MiB")
+        bytes.len() as u64 <= MAX_FETCH_BODY,
+        tr!("Plugin response exceeds 8 MiB")
     );
-    Ok(json!({"status":status,"headers":headers,"body":String::from_utf8_lossy(&bytes)}))
+    use base64::Engine;
+    let binary = std::str::from_utf8(&bytes)
+        .is_err()
+        .then(|| base64::engine::general_purpose::STANDARD.encode(&bytes));
+    Ok(
+        json!({"status":status,"headers":headers,"body":String::from_utf8_lossy(&bytes),"base64":binary}),
+    )
 }
 
 fn optional_json(path: &Path) -> Result<String> {
-    match fs::read_to_string(path) {
-        Ok(text) => Ok(text),
+    match fs::File::open(path) {
+        Ok(file) => {
+            let mut text = String::new();
+            file.take(MAX_STORAGE as u64 + 1)
+                .read_to_string(&mut text)?;
+            ensure!(
+                text.len() <= MAX_STORAGE,
+                tr!("Plugin storage exceeds 4 MiB")
+            );
+            Ok(text)
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok("{}".into()),
         Err(error) => Err(error.into()),
     }
 }
 
 pub fn invoke(id: &str, export: &str, args: Value) -> Result<Value> {
-    invoke_with_playback(id, export, args, None)
+    invoke_with_playback(id, export, args, None, None)
+}
+
+pub(crate) fn invoke_guarded(
+    id: &str,
+    export: &str,
+    args: Value,
+    current: impl FnOnce() -> bool,
+) -> Result<Value> {
+    let _guard = PLUGIN_CALL
+        .lock()
+        .map_err(|_| anyhow!(tr!("Plugin runtime lock unavailable")))?;
+    ensure!(current(), tr!("This remote playback session has ended"));
+    ensure!(
+        !crate::music_sources::auth_active(id),
+        tr!("This source is connecting an account; complete or cancel first")
+    );
+    invoke_inner(id, export, args, None, None, None, Duration::from_secs(18))
 }
 
 fn invoke_with_playback(
@@ -827,6 +903,7 @@ fn invoke_with_playback(
     export: &str,
     args: Value,
     playback: Option<Arc<Mutex<crate::ffmpeg::Playback>>>,
+    helpers: Option<Arc<crate::process::Runtime>>,
 ) -> Result<Value> {
     let _guard = PLUGIN_CALL
         .lock()
@@ -835,7 +912,15 @@ fn invoke_with_playback(
         !crate::music_sources::auth_active(id),
         tr!("This source is connecting an account; complete or cancel first")
     );
-    invoke_inner(id, export, args, None, playback, Duration::from_secs(18))
+    invoke_inner(
+        id,
+        export,
+        args,
+        None,
+        playback,
+        helpers,
+        Duration::from_secs(18),
+    )
 }
 
 pub(crate) fn invoke_sign_in(
@@ -856,6 +941,7 @@ pub(crate) fn invoke_sign_in(
         json!({"method":method}),
         Some(job),
         None,
+        None,
         Duration::from_secs(300),
     )
 }
@@ -866,23 +952,22 @@ fn invoke_inner(
     args: Value,
     login: Option<std::sync::Arc<crate::music_sources::LoginJob>>,
     playback: Option<Arc<Mutex<crate::ffmpeg::Playback>>>,
+    helpers: Option<Arc<crate::process::Runtime>>,
     timeout: Duration,
 ) -> Result<Value> {
     ensure!(valid_id(id), tr!("Invalid plugin ID"));
     let dir = plugin_root()?.join(id);
     let manifest = manifest(&dir).context(tr!("This MyGo plugin is not installed"))?;
-    if let Some(reason) = minimum_version_limitation(&manifest) {
+    if let Some(reason) = crate::music_sources::limitation(&manifest, false, false) {
         anyhow::bail!("{reason}");
     }
-    ensure!(
-        id == manifest.id && compatible(&manifest),
-        tr!("This plugin requires an external process or remote playback")
-    );
+    ensure!(id == manifest.id, tr!("Invalid plugin ID"));
     let script = fs::read(entry(&dir, &manifest)?)?;
     let storage_name = format!("mygo-{id}-storage.json");
     let storage = optional_json(&state_dir()?.join(&storage_name))?;
     let settings = optional_json(&dir.join("settings.json"))?;
     let mut settings: Value = serde_json::from_str(&settings)?;
+    let grants = crate::network::for_manifest(&manifest, &settings);
     for field in &manifest.settings {
         if let Some(default) = &field.value {
             settings
@@ -899,14 +984,17 @@ fn invoke_inner(
         settings["loginMethod"] = args["method"].clone();
     }
     let settings = settings.to_string();
-    let grants = manifest.permissions.network;
-    let process = manifest.permissions.process;
+    let process = manifest.permissions.process.clone();
+    let helpers = helpers.or(crate::process::Runtime::new(&manifest)?);
     let redirect_grants = grants.clone();
     let client = Client::builder()
         .redirect(Policy::custom(move |attempt| {
             if attempt.previous().len() < 5
                 && permitted(attempt.url(), &redirect_grants)
-                && attempt.previous().last().and_then(Url::host_str) == attempt.url().host_str()
+                && attempt
+                    .previous()
+                    .last()
+                    .is_some_and(|previous| previous.origin() == attempt.url().origin())
             {
                 attempt.follow()
             } else {
@@ -916,7 +1004,7 @@ fn invoke_inner(
         .build()?;
     let deadline = Instant::now() + timeout;
     let rt = Runtime::new()?;
-    rt.set_memory_limit(24 * 1024 * 1024);
+    rt.set_memory_limit(64 * 1024 * 1024);
     rt.set_max_stack_size(512 * 1024);
     let interrupted = login.clone();
     rt.set_interrupt_handler(Some(Box::new(move || {
@@ -925,6 +1013,7 @@ fn invoke_inner(
     let context = JsContext::full(&rt)?;
     context.with(|ctx| {
         let global = ctx.globals();
+        let _requests=crate::requests::Bindings::install(&ctx,client.clone(),grants.clone(),deadline)?;
         let _oauth = crate::oauth::Bindings::install(&ctx, login.clone(), grants.clone(), deadline)?;
         let web_job=login.clone();let web_grants=grants.clone();let web_name=manifest.name.clone();
         global.set("__webSignIn",Function::new(ctx.clone(),move|text:String|{
@@ -940,12 +1029,9 @@ fn invoke_inner(
                 Err(error) => json!({"error":error.to_string()}),
             }.to_string()
         })?)?;
-        global.set("__url", Function::new(ctx.clone(), |value: String| {
-            match Url::parse(&value) {
-                Ok(url) => json!({"href":url.as_str(),"protocol":format!("{}:",url.scheme()),"hostname":url.host_str().unwrap_or_default(),"host":&url[url::Position::BeforeHost..url::Position::AfterPort],"port":url.port().map(|port| port.to_string()).unwrap_or_default()}),
-                Err(_) => json!({"error":"Invalid URL"}),
-            }.to_string()
-        })?)?;
+        crate::web_api::install(&ctx)?;
+        crate::process::install_paths(&ctx,&manifest)?;
+        if let Some(helpers)=&helpers { helpers.install(&ctx,deadline)?; }
         if let Some(playback) = playback.filter(|_| process.as_array().is_some_and(|commands| !commands.is_empty() && crate::ffmpeg::supported(commands))) {
             let decode_grants = grants.clone();
             global.set("__spawn", Function::new(ctx.clone(), move |text: String| {
@@ -983,7 +1069,7 @@ fn invoke_inner(
             "__save",
             Function::new(ctx.clone(), move |text: String| {
                 !storage_job.as_ref().is_some_and(|job| job.cancelled())
-                    && text.len() <= 64 * 1024
+                    && text.len() <= MAX_STORAGE
                     && musicx_core::storage::save_private(&storage_name, &text).is_ok()
             })?,
         )?;
@@ -1100,12 +1186,39 @@ pub fn resolve_with_quality(mut track: Track, quality: crate::protocol::Quality)
         .source
         .as_ref()
         .context(tr!("Plugin track identifier missing"))?;
+    let info = crate::music_sources::get_source(&format!("mygo:{}", source.plugin))?;
+    if info.playback == "remote" {
+        if let Some(reason) = info.limitation {
+            anyhow::bail!(reason);
+        }
+        ensure!(
+            ["remotePlay", "remotePause", "remoteResume", "remoteState"]
+                .iter()
+                .all(|name| info.capabilities.iter().any(|c| c == name)),
+            tr!("This source does not provide remote playback controls")
+        );
+        return Ok(Media {
+            track,
+            url: Url::parse(&format!("{}://device", musicx_plugin_api::REMOTE_SCHEME))?,
+            uses_http: false,
+            user_agent: None,
+            quality: crate::protocol::AudioQuality {
+                requested: quality,
+                ..Default::default()
+            },
+            gain_db: None,
+            peak: None,
+            lease: None,
+        });
+    }
     let playback = Arc::new(Mutex::new(crate::ffmpeg::Playback::default()));
+    let helpers = crate::process::Runtime::new(&manifest(&plugin_root()?.join(&source.plugin))?)?;
     let stream = invoke_with_playback(
         &source.plugin,
         "stream",
         json!({"id":source.id,"quality":quality.plugin_quality()}),
         Some(playback.clone()),
+        helpers.clone(),
     )?;
     let decoded = playback
         .lock()
@@ -1116,17 +1229,34 @@ pub fn resolve_with_quality(mut track: Track, quality: crate::protocol::Quality)
             .as_str()
             .context(tr!("The plugin returned no audio URL"))?,
     )?;
+    let grants = crate::network::for_plugin(&source.plugin)?;
+    let helper_stream = helpers
+        .as_ref()
+        .is_some_and(|runtime| runtime.has_children())
+        && url.scheme() == "http"
+        && url.host_str() == Some("127.0.0.1")
+        && url.username().is_empty()
+        && url.password().is_none();
+    let mut grants = grants;
+    if helper_stream {
+        grants.push(format!("@server:{}", url.origin().ascii_serialization()));
+    }
+    let private_server = crate::network::explicit(&url, &grants);
+    let generated = crate::plugin_files::owned_file(&source.plugin, &url)
+        .map(|path| crate::plugin_files::AudioFile::copy(&path))
+        .transpose()?;
     ensure!(
-        decoded.is_some() || valid_audio_url(&url),
+        generated.is_some() || decoded.is_some() || valid_audio_url(&url) || private_server,
         tr!("The plugin returned an unsupported audio URL")
     );
     let uses_http = decoded.is_none() && url.scheme() == "http";
-    let mut request_headers = if decoded.is_some() {
+    let mut request_headers = if decoded.is_some() || generated.is_some() {
         Default::default()
     } else {
         crate::assets::headers(&source.plugin, &url, "audio")?
     };
     if decoded.is_none()
+        && generated.is_none()
         && let Some(headers) = stream["headers"].as_object()
     {
         for (key, value) in headers {
@@ -1152,18 +1282,29 @@ pub fn resolve_with_quality(mut track: Track, quality: crate::protocol::Quality)
         }
     }
     let mut user_agent = request_headers.get("user-agent").cloned();
-    let mut lease = None;
-    if let Some(decoded) = decoded {
+    let helper_lease = helpers.filter(|runtime| runtime.has_children());
+    let mut lease: Option<Arc<dyn Send + Sync>> = None;
+    if let Some(generated) = generated {
+        url = generated.url()?;
+        lease = Some(generated as Arc<dyn Send + Sync>);
+    } else if let Some(decoded) = decoded {
         url = crate::ffmpeg::file_url(&decoded)?;
         lease = Some(decoded as std::sync::Arc<dyn Send + Sync>);
     } else if uses_http || request_headers.keys().any(|k| k != "user-agent") {
         let content_type = (stream["type"] == "m4a").then_some("audio/mp4");
-        let registration = crate::stream_proxy::register_audio(url, request_headers, content_type)?;
+        let registration = if private_server {
+            crate::stream_proxy::register_server(url, request_headers, grants, content_type)?
+        } else {
+            crate::stream_proxy::register_audio(url, request_headers, content_type)?
+        };
         url = registration.0;
         lease = Some(registration.1 as std::sync::Arc<dyn Send + Sync>);
         user_agent = None;
     }
     fill_artwork(&mut track);
+    if let Some(helper) = helper_lease {
+        lease = Some(Arc::new((helper, lease)));
+    }
     Ok(Media {
         lease,
         track,

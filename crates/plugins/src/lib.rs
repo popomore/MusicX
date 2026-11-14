@@ -1,5 +1,6 @@
 //! MyGo compatibility and explicit plugin source registration.
 pub mod assets;
+mod capabilities;
 mod catalog;
 mod discovery;
 mod ffmpeg;
@@ -8,13 +9,20 @@ mod installation;
 mod localization;
 pub mod music_sources;
 pub mod mygo;
+mod network;
 mod oauth;
+mod plugin_files;
 pub mod plugin_updates;
+mod process;
 mod quality;
+mod remote_playback;
 mod repository;
+mod requests;
 mod script;
 mod source_catalog;
 mod stream_proxy;
+mod trust;
+mod web_api;
 mod web_auth;
 
 use anyhow::Result;
@@ -29,6 +37,15 @@ pub struct MyGo;
 pub static MYGO: MyGo = MyGo;
 
 impl DataSource for MyGo {
+    fn station_next(&self, source: &str, id: &str) -> Result<Vec<Track>> {
+        Ok(discovery::page(source, "stationNext", serde_json::json!({"id":id}))?.tracks)
+    }
+    fn remote(
+        &self,
+        track: &Track,
+    ) -> Option<std::sync::Arc<dyn musicx_plugin_api::RemotePlayback>> {
+        remote_playback::for_track(track)
+    }
     fn artwork(&self, value: &str) -> Option<Vec<u8>> {
         let url = url::Url::parse(value).ok()?;
         let plugin = url.fragment()?.strip_prefix("musicx-plugin=")?;

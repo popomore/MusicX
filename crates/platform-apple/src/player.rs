@@ -17,7 +17,7 @@ use objc2_core_media::CMTime;
 use objc2_foundation::{NSDictionary, NSString, NSURL};
 use std::{
     cell::{Cell, RefCell},
-    sync::OnceLock,
+    sync::{Arc, OnceLock},
 };
 
 pub use musicx_core::player::{Action, State, Status};
@@ -61,6 +61,7 @@ struct AppleAudio {
     volume: Cell<f32>,
     gain: Cell<f32>,
     scale: Cell<f32>,
+    remote: Option<Arc<dyn musicx_plugin_api::RemotePlayback>>,
 }
 
 fn activate_audio_session() -> Result<()> {
@@ -71,7 +72,6 @@ fn activate_audio_session() -> Result<()> {
 
 impl AudioOutput for AppleAudio {
     fn load(output: &mut Option<Self>, media: &Media, play: bool, volume: f32) -> Result<()> {
-        activate_audio_session()?;
         let url = NSURL::URLWithString(&NSString::from_str(media.url.as_str()))
             .ok_or_else(|| anyhow!(tr!("Invalid audio URL")))?;
         let main = MainThreadMarker::new().expect("AVPlayer main thread");
@@ -81,10 +81,27 @@ impl AudioOutput for AppleAudio {
                 volume: Cell::new(volume),
                 gain: Cell::new(1.0),
                 scale: Cell::new(1.0),
+                remote: None,
             };
             audio.set_volume(volume);
             audio
         });
+        if media.url.scheme() == musicx_plugin_api::REMOTE_SCHEME {
+            let remote = SOURCE
+                .get()
+                .and_then(|source| source.remote(&media.track))
+                .ok_or_else(|| anyhow!(tr!("Remote playback is not available for this source")))?;
+            remote.start(play, volume)?;
+            output.remote = Some(remote);
+            output.volume.set(volume);
+            unsafe {
+                output.player.pause();
+                output.player.replaceCurrentItemWithPlayerItem(None);
+            }
+            return Ok(());
+        }
+        output.remote.take();
+        activate_audio_session()?;
         output.gain.set(musicx_core::audio::normalization_scale(
             media.gain_db,
             media.peak,
@@ -112,6 +129,22 @@ impl AudioOutput for AppleAudio {
     }
 
     fn snapshot(&self) -> AudioSnapshot {
+        if let Some(remote) = &self.remote {
+            let snapshot = remote.snapshot();
+            return AudioSnapshot {
+                position: snapshot.position,
+                duration: snapshot.duration,
+                state: if snapshot.waiting {
+                    AudioState::Waiting
+                } else if snapshot.playing {
+                    AudioState::Playing
+                } else {
+                    AudioState::Paused
+                },
+                volume: snapshot.volume,
+                error: snapshot.error,
+            };
+        }
         unsafe {
             let item = self.player.currentItem();
             let state = match self.player.timeControlStatus() {
@@ -132,27 +165,49 @@ impl AudioOutput for AppleAudio {
     }
 
     fn prepare_resume(&self) -> Result<()> {
+        if self.remote.is_some() {
+            return Ok(());
+        }
         activate_audio_session()
     }
 
     fn play(&self) {
+        if let Some(remote) = &self.remote {
+            remote.play();
+            return;
+        }
         unsafe { self.player.play() };
     }
 
     fn pause(&self) {
+        if let Some(remote) = &self.remote {
+            remote.pause();
+            return;
+        }
         unsafe { self.player.pause() };
     }
 
     fn set_normalization(&self, enabled: bool) {
+        if self.remote.is_some() {
+            return;
+        }
         self.scale.set(if enabled { self.gain.get() } else { 1.0 });
         self.set_volume(self.volume.get());
     }
     fn set_volume(&self, volume: f32) {
         self.volume.set(volume);
+        if let Some(remote) = &self.remote {
+            remote.set_volume(volume);
+            return;
+        }
         unsafe { self.player.setVolume(volume * self.scale.get()) };
     }
 
     fn seek(&self, seconds: f64, complete: impl Fn(bool) + Send + 'static) {
+        if let Some(remote) = &self.remote {
+            remote.seek(seconds, Box::new(complete));
+            return;
+        }
         let completion = block2::RcBlock::new(move |finished: objc2::runtime::Bool| {
             complete(finished.as_bool());
         });

@@ -863,12 +863,9 @@ fn source_settings(this: Sources, importing: bool) -> impl IntoElement {
                             .min_w(px(0.0))
                             .gap(px(2.0))
                             .child(
-                                text(move || {
-                                    row.with(|s| crate::controls::source_name(&s.id, &s.name))
-                                })
-                                .number_of_lines(1)
-                                .text_size(px(13.0))
-                                .text_color(move || theme().foreground),
+                                view().flex_row().items_center().gap(px(6.0))
+                                .child(text(move || row.with(|s|crate::controls::source_name(&s.id,&s.name))).number_of_lines(1).text_size(px(13.0)).text_color(move||theme().foreground))
+                                .child(when(move||row.with(|s|s.verification.is_some()),move||text(move||row.with(crate::source_browser::verification_label)).number_of_lines(1).text_size(px(10.0)).text_color(move||theme().foreground).px(px(5.0)).py(px(1.0)).rounded(px(4.0)).bg(move||theme().muted))),
                             )
                             .child(caption(move || {
                                 row.with(|source| {

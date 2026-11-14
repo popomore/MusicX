@@ -26,6 +26,8 @@ static FAIL_RESOLVE: AtomicBool = AtomicBool::new(false);
 static FAIL_LOAD: AtomicBool = AtomicBool::new(false);
 static NATIVE_AUDIO_ERROR: AtomicBool = AtomicBool::new(false);
 static PLAYBACK_ELAPSED: AtomicU64 = AtomicU64::new(0);
+static AUDIO_ENDED: AtomicBool = AtomicBool::new(false);
+static STATION_BATCH: AtomicU64 = AtomicU64::new(10);
 
 fn dispatch(message: Message) {
     MESSAGES.get().unwrap().send(message).unwrap();
@@ -34,6 +36,11 @@ fn dispatch(message: Message) {
 struct Source;
 static SOURCE: Source = Source;
 impl DataSource for Source {
+    fn station_next(&self, source: &str, id: &str) -> Result<Vec<Track>> {
+        assert_eq!(source, "mygo:station-fixture");
+        assert_eq!(id, "fm");
+        Ok(vec![track(STATION_BATCH.fetch_add(1, Ordering::Relaxed))])
+    }
     fn resolve(&self, track: Track, _: Quality) -> Result<Media> {
         RESOLVES.fetch_add(1, Ordering::Relaxed);
         if FAIL_RESOLVE.load(Ordering::Relaxed) {
@@ -62,6 +69,7 @@ impl AudioOutput for Audio {
         }
         NATIVE_AUDIO_ERROR.store(false, Ordering::Relaxed);
         PLAYBACK_ELAPSED.store(0, Ordering::Relaxed);
+        AUDIO_ENDED.store(false, Ordering::Relaxed);
         *output = Some(Self {
             position: Cell::new(0.0),
             playing: Cell::new(play),
@@ -74,7 +82,7 @@ impl AudioOutput for Audio {
             position: self.position.get()
                 + f64::from_bits(PLAYBACK_ELAPSED.load(Ordering::Relaxed)),
             duration: Some(180.0),
-            state: if self.playing.get() {
+            state: if self.playing.get() && !AUDIO_ENDED.load(Ordering::Relaxed) {
                 AudioState::Playing
             } else {
                 AudioState::Paused
@@ -201,6 +209,11 @@ fn run_scenario(phases: &[&str]) {
         run_worker(&directory, phase);
     }
     std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn radio_refills_and_discards_results_after_pause_or_a_new_queue() {
+    run_scenario(&["radio"]);
 }
 
 #[test]
@@ -405,6 +418,66 @@ fn session_worker() {
     let mut player = Player::<Audio>::new(dispatch, &SOURCE);
     let action = |player: &mut Player<Audio>, action| player.handle(Message::Action(action, None));
     match phase.as_str() {
+        "radio" => {
+            let context = QueueContext::Station {
+                source: "mygo:station-fixture".into(),
+                id: "fm".into(),
+                name: "FM".into(),
+            };
+            resolve_command(
+                &mut player,
+                Action::ReplaceQueue {
+                    tracks: vec![track(1)],
+                    index: 0,
+                    context: context.clone(),
+                },
+                &receive,
+            )
+            .unwrap();
+            PLAYBACK_ELAPSED.store(180.0_f64.to_bits(), Ordering::Relaxed);
+            AUDIO_ENDED.store(true, Ordering::Relaxed);
+            command(&mut player, Action::DisplayStatus).unwrap();
+            player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+            player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+            assert_eq!(player.status().track.as_ref().unwrap().id, 10);
+            assert_eq!(player.status().queue.len(), 2);
+            let (send, reply) = tokio::sync::oneshot::channel();
+            player.handle(Message::Action(Action::Next, Some(send)));
+            let late = receive.recv_timeout(Duration::from_secs(2)).unwrap();
+            command(&mut player, Action::Pause).unwrap();
+            command(&mut player, Action::Resume).unwrap();
+            player.handle(late);
+            assert!(reply.blocking_recv().unwrap().is_err());
+            assert_eq!(
+                player.status().track.as_ref().unwrap().id,
+                10,
+                "pause cancels the old radio batch even after resume"
+            );
+            let (send, reply) = tokio::sync::oneshot::channel();
+            player.handle(Message::Action(Action::Next, Some(send)));
+            let late = receive.recv_timeout(Duration::from_secs(2)).unwrap();
+            resolve_command(
+                &mut player,
+                Action::ReplaceQueue {
+                    tracks: vec![track(99)],
+                    index: 0,
+                    context: QueueContext::History,
+                },
+                &receive,
+            )
+            .unwrap();
+            player.handle(late);
+            assert!(reply.blocking_recv().unwrap().is_err());
+            assert_eq!(
+                player.status().track.as_ref().unwrap().id,
+                99,
+                "a late radio result cannot replace another queue"
+            );
+            assert!(
+                player.status().error.is_none(),
+                "a cancelled station request must not add an error to another queue"
+            );
+        }
         "native_retry_resume" | "native_retry_toggle" | "native_retry_offline" => {
             let lease = Arc::new(());
             let weak = Arc::downgrade(&lease);

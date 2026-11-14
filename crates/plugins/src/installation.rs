@@ -3,16 +3,9 @@ use crate::{music_sources, mygo::Manifest};
 use anyhow::{Context, Result, ensure};
 use musicx_core::protocol::tr;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, fs, io::Read, path::Path};
 
 pub(crate) const FILE: &str = "musicx-install.json";
-const PAYLOAD: &[&str] = &[
-    "plugin.json",
-    "index.js",
-    "locales/en.json",
-    "locales/zh-CN.json",
-];
 
 #[derive(Deserialize, Serialize)]
 struct Record {
@@ -43,26 +36,12 @@ fn read(path: &Path, limit: u64) -> Result<Vec<u8>> {
 }
 
 fn hashes(dir: &Path) -> Result<BTreeMap<String, String>> {
-    let root = dir.canonicalize()?;
-    let mut files = BTreeMap::new();
-    for &name in PAYLOAD {
-        let path = dir.join(name);
-        if name.starts_with("locales/") && !path.try_exists()? {
-            continue;
-        }
-        ensure!(
-            path.canonicalize()?.starts_with(&root),
-            tr!("Invalid plugin file path")
-        );
-        let bytes = read(&path, 2 * 1024 * 1024)?;
-        files.insert(name.into(), format!("{:x}", Sha256::digest(&bytes)));
-    }
-    Ok(files)
+    crate::plugin_files::hashes(dir)
 }
 
 pub(crate) fn write(dir: &Path, manifest: &Manifest) -> Result<()> {
     let record = Record {
-        schema: 1,
+        schema: 2,
         repository: manifest
             .repository
             .clone()
@@ -86,7 +65,7 @@ impl Snapshot {
     pub fn capture(dir: &Path) -> Result<Self> {
         let snapshot = Self {
             manifest: read(&dir.join("plugin.json"), 2 * 1024 * 1024)?,
-            record: read(&dir.join(FILE), 65536)?,
+            record: read(&dir.join(FILE), 1024 * 1024)?,
         };
         snapshot.verify(dir)?;
         Ok(snapshot)
@@ -94,14 +73,14 @@ impl Snapshot {
 
     pub fn verify(&self, dir: &Path) -> Result<()> {
         ensure!(
-            read(&dir.join(FILE), 65536)? == self.record
+            read(&dir.join(FILE), 1024 * 1024)? == self.record
                 && read(&dir.join("plugin.json"), 2 * 1024 * 1024)? == self.manifest,
             tr!("Source installation record changed; automatic update skipped")
         );
         let record: Record = serde_json::from_slice(&self.record)?;
         let manifest: Manifest = serde_json::from_slice(&self.manifest)?;
         ensure!(
-            record.schema == 1
+            matches!(record.schema, 1 | 2)
                 && Some(record.repository.as_str()) == manifest.repository.as_deref()
                 && record.version == manifest.version
                 && record.revision == music_sources::source_version(&manifest),

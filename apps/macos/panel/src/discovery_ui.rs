@@ -24,6 +24,7 @@ fn source(action: &Action) -> String {
         Action::Artist { source, .. }
         | Action::Album { source, .. }
         | Action::Show { source, .. }
+        | Action::Page { source, .. }
         | Action::Shows { source } => source.clone(),
         _ => String::new(),
     }
@@ -92,11 +93,30 @@ impl Browser {
             })
         });
     }
-    fn next(self, kind: &str, id: String) {
+    fn next(self, kind: &str, id: String, name: String) {
         self.history.update(|h| h.push(self.action.get()));
         let source = self.action.with(source);
         self.load(
-            if kind == "album" {
+            if matches!(kind, "station" | "playlist" | "page") {
+                Action::Page {
+                    source,
+                    method: if kind == "page" {
+                        "browse"
+                    } else if kind == "station" {
+                        "stationNext"
+                    } else {
+                        "playlist"
+                    }
+                    .into(),
+                    params: if kind == "page" {
+                        serde_json::json!({"page":id})
+                    } else {
+                        serde_json::json!({"id":id,"name":name})
+                    },
+                }
+            } else if kind == "artist" {
+                Action::Artist { source, id }
+            } else if kind == "album" {
                 Action::Album { source, id }
             } else {
                 Action::Show {
@@ -283,7 +303,7 @@ pub fn browse(model: Model) -> impl IntoElement {
                         })
                         .on_press(move || {
                             if let Some(c) = collection() {
-                                this.next(&c.kind, c.id);
+                                this.next(&c.kind, c.id, c.name);
                             } else if let Some(index) = this
                                 .page
                                 .with(|p| at.index().checked_sub(p.collections.len()))

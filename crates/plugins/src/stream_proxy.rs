@@ -84,6 +84,19 @@ pub(crate) fn register_audio(
     register_stream(url, headers, None, content_type)
 }
 
+pub(crate) fn register_server(
+    url: Url,
+    headers: BTreeMap<String, String>,
+    grants: Vec<String>,
+    content_type: Option<&'static str>,
+) -> Result<(Url, Arc<()>)> {
+    ensure!(
+        crate::network::explicit(&url, &grants),
+        tr!("Unsupported audio redirect URL")
+    );
+    register_stream(url, headers, Some(grants), content_type)
+}
+
 pub(crate) fn register_restricted(
     url: Url,
     headers: BTreeMap<String, String>,
@@ -217,11 +230,12 @@ fn serve(mut socket: TcpStream, streams: &Mutex<BTreeMap<String, Stream>>) -> Re
                     .to_str()?,
             )?;
             ensure!(
-                valid_audio_redirect(&stream.url, &next)
-                    && stream.grants.as_ref().is_none_or(|grants| {
+                match &stream.grants {
+                    None => valid_audio_redirect(&stream.url, &next),
+                    Some(grants) =>
                         crate::mygo::permitted(&next, grants)
-                            && stream.url.host_str() == next.host_str()
-                    }),
+                            && stream.url.origin() == next.origin(),
+                },
                 tr!("Unsupported audio redirect URL")
             );
             if next.host_str() != stream.url.host_str() {

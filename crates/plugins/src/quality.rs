@@ -97,6 +97,6 @@ mod tests {
             false,
         );
         assert_eq!(audio.summary(), "Hi-Res · FLAC · 96 kHz · 24 bit");
-        assert_eq!(Quality::Hires.plugin_quality(), "lossless");
+        assert_eq!(Quality::Hires.plugin_quality(), "hires");
     }
 }

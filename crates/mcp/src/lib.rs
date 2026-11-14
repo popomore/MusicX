@@ -444,6 +444,8 @@ struct SourceInput {
     #[serde(skip_serializing_if = "Option::is_none")]
     method: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    params: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     offset: Option<u64>,
@@ -504,7 +506,7 @@ impl PlayerTools {
 #[tool_router]
 impl PlayerTools {
     #[tool(
-        description = "管理音乐数据源。action=list/catalog/catalog_view/refresh_catalog/get/install/check_update/update/uninstall/configure/account/sign_in/poll/cancel/sign_out/playlists/import_playlist/import_liked/import_recent/artist/album/shows/show/auto_update_settings/set_auto_update。auto_update_settings读取插件自动更新开关，set_auto_update需要enabled布尔值。artist/album/show需要id，show可用offset分页。catalog_view/refresh_catalog返回sources、refreshing和warning，旧缓存立即可读；install可直接用owner/repo或GitHub仓库URL，无需在目录中。插件source为mygo:ID。configure的values按声明字段保存，敏感值不回显；sign_in返回扫码任务，poll/cancel用job。导入仅建本地副本，不回写来源歌单。"
+        description = "Manage music sources: list/catalog/catalog_view/refresh_catalog/get/install/check_update/update/uninstall/configure/account/sign_in/poll/cancel/sign_out/playlists/import_playlist/import_liked/import_recent/artist/album/shows/show/auto_update_settings/set_auto_update. Sources use mygo:ID; install accepts owner/repo or a GitHub URL. Source descriptors include host_capabilities and version-bound verification. action=page returns a normalized native page for home, browse, stations, stationNext or playlist; invoke returns the original public structure. set_process_permission and set_network_permission require enabled and explicit user authorization for the named source and version; verified trust never grants these permissions. action=invoke calls a public MyGo method with method and a params object: home, browse, suggest, stations, stationNext, comments, isLiked, savedAlbums, remoteDevices, remoteUse; explicit cloud edits include like, likeEpisode, saveAlbum, followArtist, savePlaylist, subscribeShow, likeComment, postComment, createPlaylist, renamePlaylist, deletePlaylist, addToPlaylist, removeFromPlaylist, movePlaylistTrack, played. Use the exact source-provided IDs and camelCase MyGo parameter names. Returned tracks retain source identity and use seconds. Perform cloud writes only when the user requests them; local hearts and local playlist edits remain local. QR/web/OAuth login uses sign_in and job polling. Imports create local snapshots."
     )]
     async fn manage_music_sources(
         &self,
