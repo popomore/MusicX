@@ -28,6 +28,9 @@ static NATIVE_AUDIO_ERROR: AtomicBool = AtomicBool::new(false);
 static NATIVE_AUDIO_ENDED: AtomicBool = AtomicBool::new(false);
 static NATIVE_DURATION: AtomicU64 = AtomicU64::new(180.0_f64.to_bits());
 static PLAYBACK_ELAPSED: AtomicU64 = AtomicU64::new(0);
+static STATION_BATCH: AtomicU64 = AtomicU64::new(10);
+static FAIL_TRACK: AtomicU64 = AtomicU64::new(0);
+static EXTRA_STATION_TRACK: AtomicBool = AtomicBool::new(false);
 
 fn dispatch(message: Message) {
     MESSAGES.get().unwrap().send(message).unwrap();
@@ -36,9 +39,22 @@ fn dispatch(message: Message) {
 struct Source;
 static SOURCE: Source = Source;
 impl DataSource for Source {
+    fn station_next(&self, source: &str, id: &str) -> Result<Vec<Track>> {
+        assert_eq!(source, "mygo:station-fixture");
+        assert_eq!(id, "fm");
+        let id = STATION_BATCH.fetch_add(1, Ordering::Relaxed);
+        let mut tracks = vec![track(id)];
+        if EXTRA_STATION_TRACK.load(Ordering::Relaxed) {
+            tracks.push(track(id + 1));
+        }
+        Ok(tracks)
+    }
     fn resolve(&self, track: Track, _: Quality) -> Result<Media> {
         RESOLVES.fetch_add(1, Ordering::Relaxed);
-        if FAIL_RESOLVE.load(Ordering::Relaxed) {
+        if FAIL_RESOLVE.load(Ordering::Relaxed)
+            || (FAIL_TRACK.load(Ordering::Relaxed) != 0
+                && FAIL_TRACK.load(Ordering::Relaxed) == track.id)
+        {
             bail!("offline");
         }
         Ok(media(track))
@@ -208,6 +224,18 @@ fn run_scenario(phases: &[&str]) {
         run_worker(&directory, phase);
     }
     std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn radio_refills_retry_unavailable_tracks_and_reconcile_enqueued_successors() {
+    for phase in ["radio_refill_retry", "radio_refill_enqueue"] {
+        run_scenario(&[phase]);
+    }
+}
+
+#[test]
+fn radio_refills_and_discards_results_after_pause_or_a_new_queue() {
+    run_scenario(&["radio"]);
 }
 
 #[test]
@@ -436,6 +464,110 @@ fn session_worker() {
     let mut player = Player::<Audio>::new(dispatch, &SOURCE);
     let action = |player: &mut Player<Audio>, action| player.handle(Message::Action(action, None));
     match phase.as_str() {
+        "radio_refill_retry" | "radio_refill_enqueue" => {
+            resolve_command(
+                &mut player,
+                Action::ReplaceQueue {
+                    tracks: vec![track(1)],
+                    index: 0,
+                    context: QueueContext::Station {
+                        source: "mygo:station-fixture".into(),
+                        id: "fm".into(),
+                        name: "FM".into(),
+                    },
+                },
+                &receive,
+            )
+            .unwrap();
+            if phase == "radio_refill_retry" {
+                FAIL_TRACK.store(10, Ordering::Relaxed);
+                EXTRA_STATION_TRACK.store(true, Ordering::Relaxed);
+            }
+            NATIVE_AUDIO_ENDED.store(true, Ordering::Relaxed);
+            player.tick();
+            let ready = receive.recv_timeout(Duration::from_secs(2)).unwrap();
+            if phase == "radio_refill_enqueue" {
+                command(&mut player, Action::Enqueue(media(track(99)))).unwrap();
+                player.handle(ready);
+                player.tick();
+                assert!(
+                    player.status().switching,
+                    "discarding a stale refill must re-arm the enqueued successor"
+                );
+                player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+                assert_eq!(player.status().track.unwrap().id, 99);
+            } else {
+                player.handle(ready);
+                player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+                assert!(
+                    player.status().switching,
+                    "a failed first FM track must retry the next candidate"
+                );
+                player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+                assert_eq!(player.status().track.unwrap().id, 11);
+            }
+        }
+        "radio" => {
+            let context = QueueContext::Station {
+                source: "mygo:station-fixture".into(),
+                id: "fm".into(),
+                name: "FM".into(),
+            };
+            resolve_command(
+                &mut player,
+                Action::ReplaceQueue {
+                    tracks: vec![track(1)],
+                    index: 0,
+                    context: context.clone(),
+                },
+                &receive,
+            )
+            .unwrap();
+            // The native end notification wins over an inaccurate final timestamp.
+            PLAYBACK_ELAPSED.store(1.0_f64.to_bits(), Ordering::Relaxed);
+            NATIVE_AUDIO_ENDED.store(true, Ordering::Relaxed);
+            command(&mut player, Action::DisplayStatus).unwrap();
+            player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+            player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+            assert_eq!(player.status().track.as_ref().unwrap().id, 10);
+            assert_eq!(player.status().queue.len(), 2);
+            let (send, reply) = tokio::sync::oneshot::channel();
+            player.handle(Message::Action(Action::Next, Some(send)));
+            let late = receive.recv_timeout(Duration::from_secs(2)).unwrap();
+            command(&mut player, Action::Pause).unwrap();
+            command(&mut player, Action::Resume).unwrap();
+            player.handle(late);
+            assert!(reply.blocking_recv().unwrap().is_err());
+            assert_eq!(
+                player.status().track.as_ref().unwrap().id,
+                10,
+                "pause cancels the old radio batch even after resume"
+            );
+            let (send, reply) = tokio::sync::oneshot::channel();
+            player.handle(Message::Action(Action::Next, Some(send)));
+            let late = receive.recv_timeout(Duration::from_secs(2)).unwrap();
+            resolve_command(
+                &mut player,
+                Action::ReplaceQueue {
+                    tracks: vec![track(99)],
+                    index: 0,
+                    context: QueueContext::History,
+                },
+                &receive,
+            )
+            .unwrap();
+            player.handle(late);
+            assert!(reply.blocking_recv().unwrap().is_err());
+            assert_eq!(
+                player.status().track.as_ref().unwrap().id,
+                99,
+                "a late radio result cannot replace another queue"
+            );
+            assert!(
+                player.status().error.is_none(),
+                "a cancelled station request must not add an error to another queue"
+            );
+        }
         "native_end" | "native_end_display" | "native_end_status" | "native_end_unknown" => {
             let mut first = track(1);
             if phase == "native_end_unknown" {

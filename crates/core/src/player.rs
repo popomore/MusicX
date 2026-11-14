@@ -64,6 +64,14 @@ pub struct AutoAdvance {
 }
 
 pub enum Message {
+    StationReady {
+        revision: u64,
+        serial: u64,
+        request: u64,
+        automatic: bool,
+        tracks: Result<Vec<Track>>,
+        reply: Reply,
+    },
     Action(Action, Reply),
     Switched {
         index: usize,
@@ -97,6 +105,8 @@ pub struct Player<A: AudioOutput> {
     volume: f32,
     queue: Arc<Vec<Track>>,
     queue_revision: u64,
+    station_request: Option<(u64, u64, u64)>,
+    station_generation: u64,
     queue_context: Option<crate::protocol::QueueContext>,
     audio_quality: Option<crate::protocol::AudioQuality>,
     audio_uses_http: bool,
@@ -126,6 +136,8 @@ impl<A: AudioOutput> Player<A> {
             source,
             queue: Arc::default(),
             queue_revision: 0,
+            station_request: None,
+            station_generation: 0,
             queue_context: None,
             audio_quality: None,
             audio_uses_http: false,
@@ -297,6 +309,7 @@ impl<A: AudioOutput> Player<A> {
     }
 
     fn prepare_selection(&mut self) {
+        self.station_request = None;
         // Checkpoint the old track before changing the queue or its index.
         self.flush_history();
         if let Some(audio) = self.audio.take() {
@@ -433,6 +446,7 @@ impl<A: AudioOutput> Player<A> {
                 });
             }
             Action::Pause => {
+                self.station_request = None;
                 ensure!(self.index.is_some(), tr!("Choose a track first"));
                 self.flush_history();
                 self.requested_play = false;
@@ -752,8 +766,75 @@ impl<A: AudioOutput> Player<A> {
                     self.prepare_selection();
                     self.index = Some(index);
                     self.resolve_selection(reply);
+                } else if matches!(action, Action::Next)
+                    && matches!(
+                        self.queue_context,
+                        Some(crate::protocol::QueueContext::Station { .. })
+                    )
+                {
+                    self.refill_station(reply, true);
                 } else {
                     self.respond(Err(anyhow!(tr!("No other track available"))), reply);
+                }
+            }
+            Message::StationReady {
+                revision,
+                serial,
+                request,
+                automatic,
+                tracks,
+                reply,
+            } => {
+                if self.station_request != Some((revision, serial, request))
+                    || self.queue_revision != revision
+                    || self.seek_serial != serial
+                    || self.switching
+                    || !self.requested_play
+                {
+                    if self.station_request == Some((revision, serial, request)) {
+                        self.station_request = None;
+                        if automatic
+                            && self.requested_play
+                            && !self.switching
+                            && self.status().state == State::Ended
+                        {
+                            self.end_handled = false;
+                            self.advance_on_end();
+                        }
+                    }
+                    if let Some(reply) = reply {
+                        let _ = reply.send(Err(anyhow!(tr!("Radio session changed"))));
+                    }
+                    return;
+                }
+                self.station_request = None;
+                match tracks {
+                    Ok(tracks) if !tracks.is_empty() && tracks.len() <= MAX_QUEUE_TRACKS => {
+                        self.prepare_selection();
+                        // Retain a bounded listening session while history stays separate.
+                        if self.queue.len() + tracks.len() > MAX_QUEUE_TRACKS {
+                            self.queue = Arc::default();
+                        }
+                        let index = self.queue.len();
+                        Arc::make_mut(&mut self.queue).extend(tracks);
+                        self.index = Some(index);
+                        self.queue_revision += 1;
+                        if automatic {
+                            self.resolve_automatic_next(AutoAdvance {
+                                index,
+                                attempt: 1,
+                                seek_serial: self.seek_serial,
+                                retry_until: Instant::now() + AUTO_ADVANCE_RETRY_WINDOW,
+                            });
+                        } else {
+                            self.resolve_selection(reply);
+                        }
+                    }
+                    Ok(_) => self.respond(
+                        Err(anyhow!(tr!("The station returned no playable tracks"))),
+                        reply,
+                    ),
+                    Err(error) => self.respond(Err(error), reply),
                 }
             }
             Message::Action(Action::DisplayStatus, reply) => {
@@ -904,8 +985,50 @@ impl<A: AudioOutput> Player<A> {
                     seek_serial: self.seek_serial,
                     retry_until: Instant::now() + AUTO_ADVANCE_RETRY_WINDOW,
                 });
+            } else {
+                self.refill_station(None, false);
             }
         }
+    }
+
+    fn refill_station(&mut self, reply: Reply, manual: bool) -> bool {
+        let Some(crate::protocol::QueueContext::Station { source, id, .. }) =
+            self.queue_context.clone()
+        else {
+            return false;
+        };
+        if !manual && !self.requested_play {
+            return false;
+        }
+        let revision = self.queue_revision;
+        let serial = self.seek_serial;
+        if self
+            .station_request
+            .is_some_and(|(r, s, _)| r == revision && s == serial)
+        {
+            if reply.is_some() {
+                self.respond(Err(anyhow!(tr!("Loading radio tracks…"))), reply);
+            }
+            return true;
+        }
+        self.station_generation += 1;
+        let request = self.station_generation;
+        self.requested_play = true;
+        self.error = None;
+        self.station_request = Some((revision, serial, request));
+        let dispatch = self.dispatch;
+        let provider = self.source;
+        thread::spawn(move || {
+            dispatch(Message::StationReady {
+                revision,
+                serial,
+                request,
+                automatic: !manual,
+                tracks: provider.station_next(&source, &id),
+                reply,
+            })
+        });
+        true
     }
 
     fn resolve_automatic_next(&mut self, pending: AutoAdvance) {

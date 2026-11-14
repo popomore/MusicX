@@ -39,6 +39,7 @@ pub fn headers(plugin: &str, url: &Url, kind: &str) -> Result<BTreeMap<String, S
             .unwrap_or(json!({}))
     };
     let mut settings = read(mygo::plugin_root()?.join(plugin).join("settings.json"));
+    let grants = crate::network::for_manifest(&m, &settings);
     for field in &m.settings {
         if let Some(value) = &field.value {
             settings
@@ -72,22 +73,18 @@ pub fn headers(plugin: &str, url: &Url, kind: &str) -> Result<BTreeMap<String, S
                 let Some(host) = replacement(host, &settings, &stored) else {
                     return false;
                 };
-                let host = match Url::parse(&host) {
+                let host_matches = match Url::parse(&host) {
                     Ok(rule_url) => {
-                        if rule_url.scheme() != url.scheme() {
-                            return false;
-                        }
-                        let Some(host) = rule_url.host_str() else {
-                            return false;
-                        };
-                        host.to_owned()
+                        rule_url.username().is_empty()
+                            && rule_url.password().is_none()
+                            && rule_url.origin() == url.origin()
                     }
                     Err(_) => {
                         // Existing host-only rules were HTTPS-only before HTTP audio support.
                         if url.scheme() != "https" {
                             return false;
                         }
-                        host
+                        mygo::permitted_audio(url, &[host])
                     }
                 };
                 let permitted = if kind == "audio" {
@@ -95,7 +92,7 @@ pub fn headers(plugin: &str, url: &Url, kind: &str) -> Result<BTreeMap<String, S
                 } else {
                     mygo::permitted
                 };
-                host != "*" && permitted(url, &[host]) && permitted(url, &m.permissions.network)
+                host_matches && permitted(url, &grants)
             });
         if !matching {
             continue;
@@ -127,25 +124,65 @@ pub fn headers(plugin: &str, url: &Url, kind: &str) -> Result<BTreeMap<String, S
     Ok(result)
 }
 
+fn artwork_base(plugin: &str, value: &str) -> Option<Url> {
+    if value.len() > 2048 {
+        return None;
+    }
+    let value = value
+        .replace("{size}", "600")
+        .replace("%7Bsize%7D", "600")
+        .replace("%7bsize%7d", "600");
+    let url = Url::parse(&value).ok()?;
+    if url.scheme() == "file" {
+        return crate::plugin_files::owned_file(plugin, &url).map(|_| url);
+    }
+    if crate::network::for_plugin(plugin)
+        .ok()
+        .is_some_and(|grants| crate::network::explicit(&url, &grants))
+    {
+        Some(url)
+    } else {
+        Url::parse(&metadata::artwork_url(&value)?).ok()
+    }
+}
+
 pub(crate) fn artwork(plugin: &str, value: &str) -> Option<String> {
-    let mut url = Url::parse(&metadata::artwork_url(value)?).ok()?;
-    if headers(plugin, &url, "image").is_ok_and(|headers| !headers.is_empty()) {
+    let mut url = artwork_base(plugin, value)?;
+    if url.scheme() == "file"
+        || crate::network::for_plugin(plugin)
+            .ok()
+            .is_some_and(|grants| crate::network::explicit(&url, &grants))
+        || headers(plugin, &url, "image").is_ok_and(|headers| !headers.is_empty())
+    {
         url.set_fragment(Some(&format!("musicx-plugin={plugin}")));
     }
     Some(url.into())
 }
 
 pub fn image(plugin: &str, value: &str) -> Result<Vec<u8>> {
-    let mut url = Url::parse(&metadata::artwork_url(value).context(tr!("Invalid artwork URL"))?)?;
+    let mut url = artwork_base(plugin, value).context(tr!("Invalid artwork URL"))?;
     url.set_fragment(None);
+    if url.scheme() == "file" {
+        let path =
+            crate::plugin_files::owned_file(plugin, &url).context(tr!("Invalid artwork URL"))?;
+        let mut bytes = Vec::new();
+        fs::File::open(path)?
+            .take(4 * 1024 * 1024 + 1)
+            .read_to_end(&mut bytes)?;
+        ensure!(bytes.len() <= 4 * 1024 * 1024, tr!("Artwork exceeds 4 MiB"));
+        return Ok(bytes);
+    }
     let headers = headers(plugin, &url, "image")?;
     let host = url.host_str().unwrap_or_default().to_owned();
+    let origin = url.origin();
+    let grants = crate::network::for_plugin(plugin)?;
     let client = Client::builder()
         .timeout(Duration::from_secs(15))
         .redirect(Policy::custom(move |r| {
             if r.previous().len() < 4
                 && r.url().host_str() == Some(&host)
-                && valid_redirect_target(r.url())
+                && r.url().origin() == origin
+                && (valid_redirect_target(r.url()) || crate::network::explicit(r.url(), &grants))
             {
                 r.follow()
             } else {

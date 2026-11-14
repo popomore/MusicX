@@ -425,8 +425,10 @@ fn settings_value(id: &str) -> Result<BTreeMap<String, String>> {
 pub(crate) fn limitation(m: &mygo::Manifest, entry_error: bool, imports: bool) -> Option<String> {
     if let Some(reason) = mygo::minimum_version_limitation(m) {
         Some(reason)
-    } else if m.playback != "stream" {
-        Some(tr!("This plugin controls a remote player; only audio sources are supported").into())
+    } else if m.metadata.get("background").and_then(Value::as_bool) == Some(true) {
+        Some(tr!("Background extensions are not supported by this host").into())
+    } else if !matches!(m.playback.as_str(), "stream" | "remote") {
+        Some(tr!("This plugin uses an unsupported playback type").into())
     } else if !mygo::compatible(m) {
         Some(tr!("This plugin requires an external program that is not supported yet").into())
     } else if !m.main.ends_with(".js") && !m.main.ends_with(".ts") {
@@ -441,13 +443,6 @@ pub(crate) fn limitation(m: &mygo::Manifest, entry_error: bool, imports: bool) -
             tr!("This plugin needs multiple modules; only single-file entries are supported")
                 .into(),
         )
-    } else if m.permissions.network.iter().any(|v| v == "*") {
-        Some(
-            tr!(
-                "This plugin requires dynamic server network permissions that are not supported yet"
-            )
-            .into(),
-        )
     } else {
         None
     }
@@ -459,7 +454,57 @@ fn source_descriptor(
     mut fields: Vec<SourceSettingDefinition>,
     limit: Option<String>,
     qr: bool,
+    permission_fingerprint: Option<String>,
 ) -> Result<MusicSource> {
+    let process_programs = crate::process::programs(&m);
+    let process_granted = installed && crate::process::granted(&m);
+    let network_unrestricted = m.permissions.network.iter().any(|g| g == "*");
+    let network_granted = installed && network_unrestricted && crate::network::granted(&m);
+    let pages = m
+        .metadata
+        .get("navigation")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .take(64)
+        .filter_map(|row| {
+            let page = row["page"].as_str()?.to_owned();
+            if page.is_empty() || page.len() > 1024 {
+                return None;
+            }
+            Some(SourceNavigation {
+                title: row["title"]
+                    .as_str()
+                    .unwrap_or(&page)
+                    .chars()
+                    .take(512)
+                    .collect(),
+                page,
+            })
+        })
+        .collect();
+    let mut notes = if m.playback == "remote" {
+        vec![
+            tr!("Audio plays on the source's selected device").into(),
+            tr!("Open the music app on the device you want to control").into(),
+        ]
+    } else {
+        Vec::new()
+    };
+    if network_unrestricted && !network_granted {
+        notes.push(tr!("Network access is limited to server URLs saved in source settings").into());
+    }
+    if !process_programs.is_empty() {
+        notes.push(tr!("Helpers must run in the foreground without detaching. Detached daemons are not supported or stopped by revoking permission.").into());
+    }
+    if m.playback == "remote" && !exports.iter().any(|c| c == "remoteVolume") {
+        notes.push(tr!("This source cannot control the device volume").into());
+    }
+    let verification = if installed {
+        crate::trust::installed(&m)
+    } else {
+        crate::trust::for_manifest(&m)
+    };
     if installed {
         let translations = crate::localization::translations(&m.id);
         if let Some(name) = translations.get(&m.name) {
@@ -508,18 +553,30 @@ fn source_descriptor(
         id: format!("mygo:{}", m.id),
         name: m.name,
         version: m.version,
+        playback: m.playback,
+        notes,
         repository: m.repository,
         installed,
         can_install: !installed && limit.is_none(),
         limitation: limit,
+        host_capabilities: crate::capabilities::supported(&exports),
+        process_programs,
+        process_granted,
+        network_unrestricted,
+        network_granted,
+        permission_fingerprint,
+        pages,
         capabilities: exports,
         settings,
         qr_sign_in: qr,
         web_sign_in: false,
         oauth_sign_in: false,
+        verification,
     })
 }
 pub fn get_source(source: &str) -> Result<MusicSource> {
+    // Keep the displayed permissions and their approval token in one install snapshot.
+    let _permissions = crate::permissions::lock()?;
     let id = plugin(source)?;
     let dir = mygo::plugin_root()?.join(id);
     let m = mygo::manifest(&dir)?;
@@ -532,7 +589,15 @@ pub fn get_source(source: &str) -> Result<MusicSource> {
     let limit = limitation(&m, false, false);
     let qr = code.contains("host.signInPrompt") && exports.iter().any(|v| v == "signIn");
     let web = code.contains("host.webSignIn");
-    let mut result = source_descriptor(m, true, exports, fields, limit, qr)?;
+    let permission_fingerprint = if !crate::process::programs(&m).is_empty()
+        || m.permissions.network.iter().any(|g| g == "*")
+    {
+        Some(crate::permissions::fingerprint(&dir)?)
+    } else {
+        None
+    };
+    let mut result =
+        source_descriptor(m, true, exports, fields, limit, qr, permission_fingerprint)?;
     result.web_sign_in = cfg!(target_os = "macos") && web;
     result.oauth_sign_in = cfg!(target_os = "macos")
         && code.contains("host.waitForRedirect")
@@ -586,6 +651,7 @@ fn catalog_from(entries: Vec<source_catalog::Entry>) -> Result<Vec<MusicSource>>
                 result.push(get_source(&format!("mygo:{id}"))?);
                 continue;
             }
+            let verification = crate::trust::for_repository(&repository);
             result.push(MusicSource {
                 id: format!("catalog:{}", row.repo),
                 name: if row.name.is_empty() {
@@ -595,6 +661,7 @@ fn catalog_from(entries: Vec<source_catalog::Entry>) -> Result<Vec<MusicSource>>
                 },
                 description: row.description,
                 repository: Some(repository),
+                verification,
                 can_install: row.discovered,
                 limitation: Some(
                     if row.discovered {
@@ -633,6 +700,7 @@ fn catalog_from(entries: Vec<source_catalog::Entry>) -> Result<Vec<MusicSource>>
             fields,
             limit,
             qr,
+            None,
         )?);
     }
     Ok(result)
@@ -741,6 +809,11 @@ fn install_package_from(
     };
     let manifest = package.manifest;
     let script = package.script;
+    // A source-only fallback must never replace working bundled assets.
+    ensure!(
+        package.assets_complete || replacing.is_none(),
+        tr!("The source archive is incomplete; the existing installation was kept")
+    );
     use sha2::{Digest, Sha256};
     let mut m: mygo::Manifest = serde_json::from_slice(&manifest)?;
     if let Some(id) = replacing {
@@ -776,10 +849,10 @@ fn install_package_from(
                 serde_json::from_value(row.manifest["settings"].clone()).unwrap_or_default();
         }
     }
-    ensure!(
-        mygo::valid_id(&m.id) && limitation(&m, false, false).is_none(),
-        tr!("This source is not supported by the current host")
-    );
+    ensure!(mygo::valid_id(&m.id), tr!("Invalid MyGo plugin ID"));
+    if let Some(reason) = limitation(&m, false, false) {
+        anyhow::bail!(reason);
+    }
     let original = std::str::from_utf8(&script).context(tr!("Plugin entry is not valid UTF-8"))?;
     let compiled = crate::script::javascript(&m.main, original)?;
     let code = compiled.as_str();
@@ -822,6 +895,9 @@ fn install_package_from(
                     bytes,
                 )?;
             }
+        }
+        for (name, asset) in package.assets {
+            crate::plugin_files::write(&staging, &name, &asset)?;
         }
         mygo::install_repository(&staging, replacing.is_some(), expected)
     })();
@@ -1176,6 +1252,46 @@ pub fn login_state(id: &str, cancel: bool) -> Result<SourceLogin> {
 
 pub fn execute(input: MusicSourceAction) -> Result<Value> {
     Ok(match input {
+        MusicSourceAction::Page {
+            source,
+            method,
+            params,
+        } => serde_json::to_value(crate::discovery::page(&source, &method, params)?)?,
+        MusicSourceAction::SetNetworkPermission {
+            source,
+            enabled,
+            expected_fingerprint,
+        } => {
+            let guard = crate::permissions::lock()?;
+            crate::network::set(
+                plugin(&source)?,
+                enabled,
+                expected_fingerprint.as_deref(),
+                &guard,
+            )?;
+            drop(guard);
+            serde_json::to_value(get_source(&source)?)?
+        }
+        MusicSourceAction::SetProcessPermission {
+            source,
+            enabled,
+            expected_fingerprint,
+        } => {
+            let guard = crate::permissions::lock()?;
+            crate::process::set(
+                plugin(&source)?,
+                enabled,
+                expected_fingerprint.as_deref(),
+                &guard,
+            )?;
+            drop(guard);
+            serde_json::to_value(get_source(&source)?)?
+        }
+        MusicSourceAction::Invoke {
+            source,
+            method,
+            params,
+        } => crate::capabilities::invoke(&source, &method, params)?,
         MusicSourceAction::List => serde_json::to_value(list()?)?,
         MusicSourceAction::AutoUpdateSettings => {
             serde_json::to_value(crate::plugin_updates::settings()?)?
@@ -1395,6 +1511,7 @@ mod tests {
             vec![field],
             None,
             false,
+            None,
         )
         .unwrap();
         assert!(source.settings[0].secret);

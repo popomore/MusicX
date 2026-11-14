@@ -125,6 +125,160 @@ fn collection(plugin: &str, kind: &str, v: &Value) -> Option<SourceCollection> {
     })
 }
 
+/// Flatten provider sections into the shared native browser without exposing helpers.
+pub fn page(source: &str, method: &str, params: Value) -> Result<SourcePage> {
+    ensure!(
+        matches!(
+            method,
+            "home" | "browse" | "stations" | "stationNext" | "playlist"
+        ),
+        tr!("This is not a public source capability")
+    );
+    let plugin = source_id(source)?;
+    let value = if method == "playlist" {
+        let id = params["id"]
+            .as_str()
+            .context(tr!("Invalid source item identifier"))?;
+        let (origin, tracks) = crate::music_sources::playlist_snapshot(source, id)?;
+        return Ok(SourcePage {
+            id: origin.id,
+            title: origin.name.chars().take(512).collect(),
+            tracks,
+            ..Default::default()
+        });
+    } else {
+        crate::capabilities::invoke(source, method, params.clone())?
+    };
+    let title = value["title"]
+        .as_str()
+        .or_else(|| value["name"].as_str())
+        .map(str::to_owned)
+        .unwrap_or_else(|| match method {
+            "stations" => tr!("Radio").into(),
+            "stationNext" => params["name"]
+                .as_str()
+                .or_else(|| params["id"].as_str())
+                .unwrap_or_default()
+                .into(),
+            _ => tr!("Recommendations").into(),
+        });
+    let mut result = SourcePage {
+        id: params["id"]
+            .as_str()
+            .or_else(|| params["page"].as_str())
+            .unwrap_or(method)
+            .into(),
+        title: title.chars().take(512).collect(),
+        description: value["description"]
+            .as_str()
+            .or_else(|| value["subtitle"].as_str())
+            .unwrap_or_default()
+            .chars()
+            .take(4000)
+            .collect(),
+        ..Default::default()
+    };
+    if method == "stationNext" {
+        result.tracks = serde_json::from_value(
+            value
+                .as_array()
+                .cloned()
+                .map(Value::Array)
+                .unwrap_or(value["tracks"].clone()),
+        )?;
+        result.station = Some(SourceStation {
+            source: source.into(),
+            id: result.id.clone(),
+            name: result.title.clone(),
+        });
+    } else if method == "stations" {
+        result.collections = value
+            .as_array()
+            .or_else(|| value["stations"].as_array())
+            .into_iter()
+            .flatten()
+            .take(1000)
+            .filter_map(|v| collection(plugin, "station", v))
+            .collect();
+    } else {
+        fn section(plugin: &str, value: &Value, page: &mut SourcePage, depth: usize) -> Result<()> {
+            ensure!(depth < 32, tr!("Source response is nested too deeply"));
+            if let Some(rows) = value["tracks"].as_array() {
+                for row in rows {
+                    page.tracks.push(serde_json::from_value(row.clone())?);
+                }
+            }
+            if let Some(links) = value["links"].as_array() {
+                for link in links {
+                    if let Some(id) = link["page"]
+                        .as_str()
+                        .filter(|s| !s.is_empty() && s.len() <= 1024)
+                    {
+                        page.collections.push(SourceCollection {
+                            kind: "page".into(),
+                            id: id.into(),
+                            name: link["title"]
+                                .as_str()
+                                .unwrap_or(id)
+                                .chars()
+                                .take(512)
+                                .collect(),
+                            description: link["subtitle"]
+                                .as_str()
+                                .unwrap_or_default()
+                                .chars()
+                                .take(4000)
+                                .collect(),
+                            cover_url: link["imageUrl"]
+                                .as_str()
+                                .and_then(|url| crate::assets::artwork(plugin, url)),
+                        });
+                    }
+                }
+            }
+            if let Some(id) = value["morePage"]
+                .as_str()
+                .filter(|s| !s.is_empty() && s.len() <= 1024)
+            {
+                page.collections.push(SourceCollection {
+                    kind: "page".into(),
+                    id: id.into(),
+                    name: tr!("More {}", value["title"].as_str().unwrap_or_default()),
+                    ..Default::default()
+                });
+            }
+            for (key, kind) in [
+                ("playlists", "playlist"),
+                ("albums", "album"),
+                ("artists", "artist"),
+                ("shows", "show"),
+                ("stations", "station"),
+            ] {
+                if let Some(rows) = value[key].as_array() {
+                    page.collections
+                        .extend(rows.iter().filter_map(|v| collection(plugin, kind, v)));
+                }
+            }
+            if let Some(rows) = value["sections"].as_array() {
+                for row in rows {
+                    section(plugin, row, page, depth + 1)?;
+                }
+            }
+            ensure!(
+                page.tracks.len() <= MAX_QUEUE_TRACKS && page.collections.len() <= 1000,
+                tr!("Source exceeds 10,000 tracks")
+            );
+            Ok(())
+        }
+        section(plugin, &value, &mut result, 0)?;
+    }
+    ensure!(
+        result.tracks.len() <= MAX_QUEUE_TRACKS,
+        tr!("Source exceeds 10,000 tracks")
+    );
+    Ok(result)
+}
+
 pub fn browse(source: &str, kind: &str, id: &str, offset: u64) -> Result<SourcePage> {
     let plugin = source_id(source)?;
     ensure!(offset <= MAX_QUEUE_TRACKS as u64, tr!("Page out of range"));
@@ -190,5 +344,6 @@ pub fn browse(source: &str, kind: &str, id: &str, offset: u64) -> Result<SourceP
             .collect(),
         more: more(&value),
         next_offset: offset + rows.len() as u64,
+        station: None,
     })
 }

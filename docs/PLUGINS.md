@@ -1,6 +1,6 @@
 # MyGo plugins in MusicX
 
-MusicX hosts a subset of the [MyGo Music plugin contract](https://github.com/egoist/mygo-music#plugins). This document describes MusicX's implementation, rather than promising that every plugin in the MyGo directory works. The compatibility baseline is MyGo **0.1.22**; the source comparison used upstream commit `30925cbcd3d420e93ce1c520640fc0fe9b5126da`.
+MusicX hosts a subset of the [MyGo Music plugin contract](https://github.com/egoist/mygo-music#plugins). This document describes MusicX's implementation, rather than promising that every plugin in the MyGo directory works. The compatibility baseline is MyGo **0.1.24**, with the host-specific boundaries documented below. The [catalog audit and retest](reports/2026-11-15-plugin-compatibility.md) record exact verification evidence.
 
 ## Supported capabilities
 
@@ -30,7 +30,7 @@ On macOS, open **Settings → Music Sources**. On iPhone, open **Music Sources**
 
 Repository installs use the latest Release's platform or generic ZIP, then its source archive. Without a Release, MusicX resolves the default branch to a fixed commit. ZIPs may contain one top-level plugin folder. Installation checks paths, sizes, host limitations, and script compilation before running any plugin code.
 
-JavaScript and TypeScript single-file entries are supported. TypeScript is transpiled locally and installed as JavaScript; imports/re-exports of external modules remain unsupported. MusicX also installs `locales/en.json` and `locales/zh-CN.json`. It does not install executables or arbitrary extra assets.
+JavaScript and TypeScript single-file entries are supported. TypeScript is transpiled locally and installed as JavaScript; imports/re-exports of external modules remain unsupported. MusicX also installs `locales/en.json` and `locales/zh-CN.json`. Bounded bundled assets and executable bits are retained, but installing a file never authorizes executing it. Reserved settings/install-record names and primary-file aliases are protected case-insensitively.
 
 Source details expose **More Options → Check for Updates**, **Update Source**, and **Remove Source**. Updates validate the new package and source ID before replacement, preserve settings/account storage, and keep the previous plugin if package validation or replacement fails. Removal requires a second confirmation in the UI, deletes plugin settings/account storage, and retains local playlists and history. Tracks from a removed source require that source to be added again before playback.
 
@@ -38,7 +38,7 @@ Source details expose **More Options → Check for Updates**, **Update Source**,
 
 Automatic updates preserve settings and account storage, wait for unfinished sign-in flows, validate source identity and compatibility, and reject lower semantic plugin versions. A source modified during download is checked again later. Local-directory installs and local-directory updates stay manual, including when their manifest declares a repository. They resume automatic updates only after an explicit repository update or reinstall. Custom catalog pins and hashes apply to automatic updates as well.
 
-Each repository install writes a host-owned `mygo-plugins/<id>/musicx-install.json`. It records the repository, declared plugin version, installed revision (Release tag or commit), a commit SHA when resolved, and SHA256 hashes of the installed manifest, compiled entry and supported locale files. These hashes exclude account storage and settings. Automatic updates require this record and verify the payload before checking and again before replacement; directly edited files pause automatic updates.
+Each repository install writes a host-owned `mygo-plugins/<id>/musicx-install.json`. It records the repository, declared plugin version, installed revision (Release tag or commit), a commit SHA when resolved, and SHA256 hashes of the installed manifest, compiled entry, supported locale files and bundled assets. These hashes exclude account storage and settings. Automatic updates require this record and verify the payload before checking and again before replacement; directly edited files pause automatic updates.
 
 Older installs without this record stay manual, even if their manifest contains `sourceVersion` or `sourceCommit`. Use **More Options → Update Source** once to establish a repository baseline and enable automatic tracking. This action remains available when no newer version exists and replaces local plugin files. A local-directory update removes the host record and returns the source to manual management.
 
@@ -72,7 +72,7 @@ Use `manage_music_sources` to browse and import:
 {"action":"show","source":"mygo:example","id":"show:123","offset":0}
 ```
 
-Artist/album/show results use `SourcePage`: `id`, `title`, `description`, `cover_url`, `tracks`, `collections`, `more`, `next_offset`. A collection carries `kind` (`album` or `show`), `id`, `name`, `description`, and `cover_url`. For show pagination, pass the previous result's `next_offset` until `more` is false. Songs and episodes in `tracks` can be passed unchanged to `play_song` or `enqueue_song`.
+Artist/album/show results use `SourcePage`: `id`, `title`, `description`, `cover_url`, `tracks`, `collections`, `more`, `next_offset`. A collection carries `kind` (`album`, `artist`, `show`, `playlist`, `station` or `page`), `id`, `name`, `description`, and `cover_url`. For show pagination, pass the previous result's `next_offset` until `more` is false. Songs and episodes in `tracks` can be passed unchanged to `play_song` or `enqueue_song`.
 
 Management examples:
 
@@ -97,28 +97,33 @@ The host implements `platform`, `arch`, JSON `storage`, `setting`, `crypto.md5`,
 - **Artwork:** `{size}` and encoded `%7Bsize%7D` placeholders resolve to 600 pixels. Artwork with applicable image request headers carries a plugin hint in its URL fragment; the helper fetches it with current credentials on both macOS and iPhone, using the iOS native transport bridge. The hint contains no credentials. Audio-only rules and unmatched hosts leave public covers on the ordinary image transport. Authenticated responses use no-store, while ordinary images preserve HTTP cache metadata. Artwork bodies are limited to 4 MiB.
 - **Loudness:** macOS Playback settings offer optional normalization, disabled by default. Source `gain` in dB and linear `peak` are used for attenuation and peak protection, with a 4 dB ReplayGain preamp. AVPlayer's volume scalar is capped at unity; MusicX does not amplify above unity. The listener's volume preference is preserved.
 - **Translations:** installed names, setting labels/help, and `host.t` use installed language files. `host.language()` defaults to `zh-CN`; `MUSICX_LANGUAGE=en` selects English plugin text when starting the helper. This does not translate the complete MusicX UI.
-- **Manifest:** omitted `name`, `version`, `main`, and `playback` use ID, empty version, `index.js`, and `stream` respectively. `minAppVersion` is validated against the MyGo 0.1.22 protocol baseline, not MusicX's own version. A higher minimum is rejected with an explanation.
+- **Manifest:** omitted `name`, `version`, `main`, and `playback` use ID, empty version, `index.js`, and `stream` respectively. `minAppVersion` is validated against the MyGo 0.1.24 protocol baseline, not MusicX's own version. A higher minimum is rejected with an explanation.
 - **FFmpeg on macOS:** verified with [Bilibili v0.4.2](https://github.com/GentleM4dman/mygo-music-bilibili/tree/43d15cca5f2eb3616bb7718a752b8e240b6c5cc5). Its manifest grants `*.bilivideo.com` and `*.bilivideo.cn`; older Bilibili packages that omit media-host grants cannot use this fallback. The plugin's version probe and MP4-to-WAV fallback run during playback resolution. The host looks for FFmpeg in the two standard Homebrew locations. It fetches audio through its proxy using the plugin's HTTPS host grants and decodes to a private temporary WAV. Decoding shares the playback resolution deadline, is limited to 256 MiB of output, and must finish before playback starts. The WAV is removed when the playback lease ends. The host recognizes the loopback URL returned by the plugin as a reference to that WAV. General `host.spawn` operations remain unsupported.
 - **Errors:** MyGo's `signIn`, `setup`, `unavailable`, and `unsupported` error codes retain their meaning in user messages. MCP source calls include a `plugin_code` in error data when available.
 
-Normal calls use a fresh 24 MiB QuickJS runtime with an 18-second deadline; sign-in can run for up to five minutes. Persist cross-call state through `host.storage`, rather than module globals, background timers, or long-lived processes. Plugin fetch responses remain bounded to 2 MiB.
+Normal calls use a fresh 64 MiB QuickJS runtime with an 18-second deadline; sign-in can run for up to five minutes. Persist cross-call state through `host.storage`, rather than module globals, background timers, or long-lived processes. Plugin fetch responses are bounded to 8 MiB, persistent JSON storage to 4 MiB, and fetch runs on six bounded workers with at most 16 pending calls per VM. Aborting a request releases its slot and cancels queued work. UTF-8, URL/URLSearchParams, Headers, base64, form and binary request bodies and response arrayBuffer() are supplied.
 
-## Differences intentionally retained
+## Source capabilities and permissions
 
-| MyGo capability | MusicX difference |
+`host_capabilities` is the supported subset of declared exports. `action=page` returns normalized native `SourcePage` results for `home`, `browse`, `stations`, `stationNext` and `playlist`; nested playlist envelopes and both radio response shapes preserve track identity and second-based timing. `SourcePage.station` starts a radio queue that refills automatically, retries unavailable candidates, and cancels stale requests after user controls or queue changes.
+
+`action=invoke` accepts a public `method` and a `params` object. It supports suggestions, likes, collections, subscriptions, played reporting, comments, playlist edits and remote device selection. Internal helper exports are denied. Cloud writes and reporting are explicit; local hearts, local history and local playlists do not automatically write back. Comments and cloud edits currently use MCP rather than a dedicated native editor.
+
+Remote playback controls the source's selected device through background RPC. Initial volume is applied before playback when the source supports it. Unsupported optional seek/volume controls preserve playback; failed startup retries the selected track. The device and provider still determine account, subscription and playback availability.
+
+Sources with wildcard network declarations default to declared public domains plus exact HTTP(S) origins explicitly saved as server settings. Defaults shipped in a package do not grant server access. Explicit unrestricted-network and external-program permissions require `expected_fingerprint` from the descriptor's current `permission_fingerprint`; stale approval is rejected. Installation swaps, helper launch and revocation use the same permission lock. Content or version changes invalidate permission. Trust never grants it.
+
+`host.spawn` supports stdin, line output, stderr, wait and kill on macOS after permission. Helpers must remain in the foreground of their original process group and must not detach/daemonize. Cleanup signals that group; it is not a sandbox or a guarantee to terminate detached descendants. Independent daemons, persistent watchers and background extensions remain unsupported. The separate constrained audio-only FFmpeg path remains available for compatible playback plugins. `host.dir`, `host.dataDir` and source-scoped `removeDataDir` are provided. Native file media stays inside that source's installed/data directories; generated audio is copied per loaded item to protect playback from reused cache filenames.
+
+Packages are limited to 32 MiB and 4,096 ZIP entries, with 64 MiB per asset and 128 MiB total. Oversized source archives may fall back to a pinned entry/manifest/locales for a new self-contained source. Such incomplete fallbacks cannot replace an existing installation or install a helper-dependent source. Rejected updates leave the working installation intact.
+
+| Remaining difference | Boundary |
 | --- | --- |
-| `home`, `browse`, manifest `navigation`, account `page` | No plugin-defined home/sidebar/page renderer. |
-| `suggest` | No search suggestions. |
-| `isLiked`, `like`, `likeEpisode`, `played` | No cloud favorite writes or local-play reporting; likes/history are read-only imports. |
-| `saveAlbum`, `savedAlbums`, `followArtist`, `savePlaylist` | No cloud collection/artist management. |
-| Cloud playlist create/rename/delete/add/remove/move | Local playlist management only; no write-back. |
-| `subscribeShow` | Podcast browsing/playback is supported; cloud subscriptions are not managed. |
-| `stations`, `stationNext` | No radio/FM session. |
-| `comments`, `likeComment`, `postComment` | No comments UI/API. |
-| `playback:"remote"`, `remote*` | Only local stream playback. |
-| `host.spawn`, `host.dir`, `host.dataDir`, `host.removeDataDir` | macOS supports the FFmpeg playback operations described above. Other process permissions and general plugin filesystem APIs are unsupported. |
-| `network:["*"]`, HTTP plugin fetch, IP hosts, `.local`, custom ports | Plugin fetch retains explicit public HTTPS host grants on port 443; remote audio also accepts public HTTP on port 80. Arbitrary-network/self-hosted/LAN plugins may be incompatible. |
-| Local ZIP picker, install URL scheme, arbitrary bundled assets | GitHub packages and local-directory CLI only; only entry, manifest, settings and supported locale files are installed. |
+| Plugin custom account/sidebar renderer | Native shared pages cover navigation, tracks, collections and radio, rather than arbitrary provider UI. |
+| Suggestions and cloud editing UI | Public MCP methods are available; native autocomplete/comment/playlist editors are not added. |
+| Background hooks, detached services and persistent module globals | Fresh VM per call; foreground helpers may live through a media lease. |
+| npm/Node/external modules | Single-file JavaScript/TypeScript entries only. |
+| Local ZIP picker and install URL scheme | GitHub packages and local-directory CLI remain the installation paths. |
 
 ## Verification boundaries
 

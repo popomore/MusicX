@@ -1943,6 +1943,7 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "hex",
+ "libc",
  "md-5",
  "musicx-core",
  "musicx-plugin-api",

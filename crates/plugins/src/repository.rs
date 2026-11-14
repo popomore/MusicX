@@ -9,15 +9,17 @@ use std::{
 };
 
 pub(crate) const API: &str = "https://api.github.com";
-const MAX_ARCHIVE: u64 = 16 * 1024 * 1024;
+const MAX_ARCHIVE: u64 = 32 * 1024 * 1024;
 const MAX_SCRIPT: u64 = 2 * 1024 * 1024;
 
 pub(crate) struct Package {
+    pub assets_complete: bool,
     pub manifest: Vec<u8>,
     pub script: Vec<u8>,
     pub version: String,
     pub commit: Option<String>,
     pub locales: std::collections::BTreeMap<String, Vec<u8>>,
+    pub assets: std::collections::BTreeMap<String, crate::plugin_files::Asset>,
 }
 
 struct Release {
@@ -58,16 +60,87 @@ pub(crate) fn latest_version(repo: &str, api: &str) -> Result<String> {
 
 pub(crate) fn download_from(repo: &str, api: &str) -> Result<Package> {
     let release = latest(repo, api)?;
-    let bytes =
-        crate::http::fetch(&release.url, MAX_ARCHIVE).context(tr!("Plugin download failed"))?;
-    let (manifest, script, locales) = unpack(bytes)?;
+    let mut assets_complete = true;
+    let ((manifest, script, locales), assets) = match crate::http::fetch(&release.url, MAX_ARCHIVE)
+    {
+        Ok(bytes) => {
+            let primary = unpack(bytes.clone())?;
+            let assets = unpack_assets(bytes, &primary.0)?;
+            (primary, assets)
+        }
+        Err(error) => {
+            if let Some(commit) = release.commit.as_deref() {
+                assets_complete = false;
+                (
+                    source_files(repo, commit, "https://raw.githubusercontent.com")
+                        .with_context(|| format!("{}: {error}", tr!("Plugin download failed")))?,
+                    Default::default(),
+                )
+            } else {
+                return Err(error).context(tr!("Plugin download failed"));
+            }
+        }
+    };
     Ok(Package {
+        assets_complete,
         manifest,
         script,
         version: release.version,
         commit: release.commit,
         locales,
+        assets,
     })
+}
+
+/// A source repository may contain large screenshots or development artifacts.
+/// The fallback stays pinned and reads only files the host can actually install.
+fn source_files(repo: &str, commit: &str, raw: &str) -> Result<Unpacked> {
+    ensure!(
+        crate::source_catalog::valid_repository(repo)
+            && commit.len() == 40
+            && commit.bytes().all(|b| b.is_ascii_hexdigit()),
+        tr!("Invalid source version")
+    );
+    let base = reqwest::Url::parse(&format!("{raw}/{repo}/{commit}/"))?;
+    let address = |name: &str| -> Result<String> {
+        let mut url = base.clone();
+        let mut segments = url
+            .path_segments_mut()
+            .map_err(|_| anyhow::anyhow!(tr!("Invalid plugin entry path")))?;
+        segments.pop_if_empty();
+        for part in Path::new(name).components() {
+            match part {
+                Component::Normal(part) => {
+                    segments.push(part.to_str().context(tr!("Invalid plugin entry path"))?);
+                }
+                Component::CurDir => {}
+                _ => anyhow::bail!(tr!("Invalid plugin entry path")),
+            }
+        }
+        drop(segments);
+        Ok(url.into())
+    };
+    let manifest = crate::http::fetch(&address("plugin.json")?, 65536)?;
+    let parsed: crate::mygo::Manifest = serde_json::from_slice(&manifest)?;
+    ensure!(
+        crate::process::programs(&parsed).is_empty(),
+        tr!("This source needs a complete package with its helper files")
+    );
+    let main = entry_name(&manifest)?;
+    let script = crate::http::fetch(&address(&main)?, MAX_SCRIPT)?;
+    let mut locales = std::collections::BTreeMap::new();
+    for language in ["en", "zh-CN"] {
+        let response =
+            crate::http::request(&address(&format!("locales/{language}.json"))?, None, None)?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            continue;
+        }
+        let bytes = crate::http::read(response.error_for_status()?, 65536)?;
+        serde_json::from_slice::<std::collections::BTreeMap<String, String>>(&bytes)
+            .context(tr!("Invalid plugin language file"))?;
+        locales.insert(language.into(), bytes);
+    }
+    Ok((manifest, script, locales))
 }
 
 pub(crate) fn pinned(repo: &str, commit: &str) -> Result<Package> {
@@ -76,13 +149,16 @@ pub(crate) fn pinned(repo: &str, commit: &str) -> Result<Package> {
         tr!("Invalid source version")
     );
     let bytes = crate::http::fetch(&format!("{API}/repos/{repo}/zipball/{commit}"), MAX_ARCHIVE)?;
-    let (manifest, script, locales) = unpack(bytes)?;
+    let (manifest, script, locales) = unpack(bytes.clone())?;
+    let assets = unpack_assets(bytes, &manifest)?;
     Ok(Package {
+        assets_complete: true,
         manifest,
         script,
         version: commit.to_owned(),
         commit: Some(commit.to_owned()),
         locales,
+        assets,
     })
 }
 
@@ -277,6 +353,65 @@ fn archive_file(
     Ok(bytes)
 }
 
+fn unpack_assets(
+    bytes: Vec<u8>,
+    manifest: &[u8],
+) -> Result<std::collections::BTreeMap<String, crate::plugin_files::Asset>> {
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes))?;
+    let names = archive
+        .file_names()
+        .map(|name| name.map(|name| name.into_owned()))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let manifest_path = names
+        .iter()
+        .find(|name| name.as_str() == "plugin.json")
+        .or_else(|| {
+            names
+                .iter()
+                .find(|name| name.ends_with("/plugin.json") && name.split('/').count() == 2)
+        })
+        .context(tr!("Plugin package must contain one top-level plugin.json"))?;
+    let prefix = manifest_path.strip_suffix("plugin.json").unwrap();
+    let main = entry_name(manifest)?;
+    let main = main.trim_start_matches("./");
+    let mut out = std::collections::BTreeMap::new();
+    let mut total = 0u64;
+    for name in names
+        .iter()
+        .filter(|name| name.starts_with(prefix) && !name.ends_with('/'))
+    {
+        let relative = &name[prefix.len()..];
+        if relative == main
+            || matches!(
+                relative,
+                "plugin.json" | "index.js" | "locales/en.json" | "locales/zh-CN.json"
+            )
+            || crate::plugin_files::excluded(relative)
+        {
+            continue;
+        }
+        ensure!(
+            crate::plugin_files::path_allowed(relative),
+            tr!("Invalid plugin package file path or type")
+        );
+        let executable = archive
+            .by_name(name)?
+            .unix_mode()
+            .is_some_and(|mode| mode & 0o111 != 0);
+        let bytes = archive_file(&mut archive, name, crate::plugin_files::MAX_FILE)?;
+        total += bytes.len() as u64;
+        ensure!(
+            total <= crate::plugin_files::MAX_TOTAL,
+            tr!("Plugin assets exceed the size limit")
+        );
+        out.insert(
+            relative.into(),
+            crate::plugin_files::Asset { bytes, executable },
+        );
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -360,6 +495,51 @@ mod tests {
         ] {
             assert!(parse_repository(input).is_err(), "{input}");
         }
+    }
+
+    #[test]
+    fn large_source_fallback_fetches_only_pinned_safe_files() {
+        let commit = "a".repeat(40);
+        let prefix = format!("/owner/repo/{commit}");
+        let (api, worker) = server(|_| {
+            vec![
+                (
+                    format!("{prefix}/plugin.json"),
+                    200,
+                    br#"{"id":"fixture","main":"plugin/index.js"}"#.to_vec(),
+                ),
+                (
+                    format!("{prefix}/plugin/index.js"),
+                    200,
+                    b"export function search(){}".to_vec(),
+                ),
+                (format!("{prefix}/locales/en.json"), 404, Vec::new()),
+                (format!("{prefix}/locales/zh-CN.json"), 200, b"{}".to_vec()),
+            ]
+        });
+        let (_, script, locales) = source_files("owner/repo", &commit, &api).unwrap();
+        assert_eq!(script, b"export function search(){}");
+        assert!(locales.contains_key("zh-CN"));
+        worker.join().unwrap();
+        assert!(source_files("../repo", &commit, &api).is_err());
+        assert!(source_files("owner/repo", "HEAD", &api).is_err());
+    }
+
+    #[test]
+    fn source_only_fallback_refuses_a_helper_dependent_package() {
+        let commit = "b".repeat(40);
+        let (api, worker) = server(|_| {
+            vec![(
+                format!("/owner/repo/{commit}/plugin.json"),
+                200,
+                br#"{"id":"fixture","permissions":{"process":["bin/helper"]}}"#.to_vec(),
+            )]
+        });
+        let error = source_files("owner/repo", &commit, &api).unwrap_err();
+        assert!(error.to_string().contains(tr!(
+            "This source needs a complete package with its helper files"
+        )));
+        worker.join().unwrap();
     }
 
     #[test]
@@ -543,6 +723,33 @@ mod tests {
         .unwrap();
         assert_eq!(script, source);
         assert_eq!(locales["zh-CN"], locale);
+    }
+
+    #[test]
+    fn packages_retain_bundled_helpers_and_reject_asset_symlinks() {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default();
+        writer.start_file("plugin.json", options).unwrap();
+        writer.write_all(MANIFEST).unwrap();
+        writer.start_file("index.js", options).unwrap();
+        writer.write_all(SCRIPT).unwrap();
+        writer
+            .start_file("bin/helper", options.unix_permissions(0o755))
+            .unwrap();
+        writer.write_all(b"fixture executable").unwrap();
+        writer.start_file("settings.json", options).unwrap();
+        writer.write_all(b"must not replace user settings").unwrap();
+        let bytes = writer.finish().unwrap().into_inner();
+        let assets = unpack_assets(bytes, MANIFEST).unwrap();
+        assert_eq!(assets.len(), 1);
+        assert!(assets["bin/helper"].executable);
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        writer.start_file("plugin.json", options).unwrap();
+        writer.write_all(MANIFEST).unwrap();
+        writer
+            .add_symlink("bin/escape", "/etc/hosts", options)
+            .unwrap();
+        assert!(unpack_assets(writer.finish().unwrap().into_inner(), MANIFEST).is_err());
     }
 
     #[test]

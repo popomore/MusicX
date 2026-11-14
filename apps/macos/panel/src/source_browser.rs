@@ -106,6 +106,42 @@ fn request<T: serde::de::DeserializeOwned>(action: Action) -> anyhow::Result<T> 
     remote::post_json("/ui/music-sources", &action)
 }
 impl Browser {
+    fn network_permission(self, enabled: bool) {
+        let Some((source, expected_fingerprint)) = self.selected.with(|s| {
+            s.as_ref()
+                .map(|s| (s.id.clone(), s.permission_fingerprint.clone()))
+        }) else {
+            return;
+        };
+        self.work(
+            move || {
+                request::<MusicSource>(Action::SetNetworkPermission {
+                    source,
+                    enabled,
+                    expected_fingerprint,
+                })
+            },
+            |this, source| this.selected.set(Some(source)),
+        );
+    }
+    fn process_permission(self, enabled: bool) {
+        let Some((source, expected_fingerprint)) = self.selected.with(|s| {
+            s.as_ref()
+                .map(|s| (s.id.clone(), s.permission_fingerprint.clone()))
+        }) else {
+            return;
+        };
+        self.work(
+            move || {
+                request::<MusicSource>(Action::SetProcessPermission {
+                    source,
+                    enabled,
+                    expected_fingerprint,
+                })
+            },
+            |this, source| this.selected.set(Some(source)),
+        );
+    }
     fn work<T: Send + 'static>(
         self,
         run: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
@@ -503,6 +539,11 @@ fn capabilities(source: &MusicSource) -> String {
     [
         ("search", tr!("Search")),
         ("stream", tr!("Play")),
+        ("remotePlay", tr!("Remote playback")),
+        ("home", tr!("Recommendations")),
+        ("browse", tr!("Browse")),
+        ("stations", tr!("Radio")),
+        ("comments", tr!("Comments")),
         ("lyrics", tr!("Lyrics")),
         ("album", tr!("Album")),
         ("artist", tr!("Artist")),
@@ -513,10 +554,74 @@ fn capabilities(source: &MusicSource) -> String {
         ("signIn", tr!("Account")),
     ]
     .iter()
-    .filter(|(key, _)| source.capabilities.iter().any(|v| v == key))
+    .filter(|(key, _)| source.host_capabilities.iter().any(|v| v == key))
     .map(|(_, label)| *label)
     .collect::<Vec<_>>()
     .join(" · ")
+}
+
+pub(crate) fn verification_label(source: &MusicSource) -> String {
+    source
+        .verification
+        .as_ref()
+        .map_or_else(String::new, |evidence| {
+            if evidence.installed_payload_matches {
+                tr!("Trusted").into()
+            } else {
+                tr!("Trusted version {}", evidence.version)
+            }
+        })
+}
+
+fn verification_details(source: &MusicSource) -> Vec<String> {
+    let Some(evidence) = &source.verification else {
+        return vec![tr!("This source has not been verified").into()];
+    };
+    let checks: Vec<_> = evidence
+        .checks
+        .iter()
+        .filter_map(|check| match check.as_str() {
+            "search" => Some(tr!("Search")),
+            "playback_sample" => Some(tr!("Short audio sample")),
+            "lyrics" => Some(tr!("Lyrics")),
+            "album" => Some(tr!("Albums")),
+            "artist" => Some(tr!("Artists")),
+            "playlist" => Some(tr!("Playlists")),
+            "show" => Some(tr!("Podcasts")),
+            _ => None,
+        })
+        .collect();
+    let mut lines = vec![
+        tr!(
+            "Version {} · Verified {}",
+            evidence.version,
+            evidence.verified_at
+        ),
+        tr!("Verified features: {}", checks.join(" · ")),
+        tr!("Trust covers the listed functional checks, not a security audit or platform certification").into(),
+        tr!("Full-track playback and account access still depend on the service").into(),
+    ];
+    for limitation in &evidence.limitations {
+        match limitation.as_str() {
+            "preview_only" => {
+                lines.push(tr!("The tested track returned a 60-second preview").into())
+            }
+            "segmented_duration" => lines
+                .push(tr!("The tested audio segment was shorter than the catalog total").into()),
+            other => {
+                if let Some(seconds) = other
+                    .strip_prefix("preview_seconds:")
+                    .and_then(|s| s.parse::<u32>().ok())
+                {
+                    lines.push(tr!(
+                        "The tested track returned a {}-second preview",
+                        seconds
+                    ));
+                }
+            }
+        }
+    }
+    lines
 }
 #[derive(Clone, Copy)]
 pub enum Start {
@@ -599,7 +704,9 @@ pub fn sources_view(
                     button().accessibility_label(move||Some(SharedString::from(tr!("Configure source {}", source().map_or_else(String::new,|s|s.name)))))
                         .disabled(move||this.busy.get()).on_press(move||{if let Some(source)=source(){this.select(source);}})
                         .h(px(70.0)).w_full().justify_center().px(px(8.0)).gap(px(4.0)).rounded(px(6.0)).hover(|s|s.bg(theme().muted))
-                        .child(text(move||source().map_or_else(String::new,|s|s.name)).number_of_lines(1).text_size(px(14.0)).text_color(move||theme().foreground))
+                        .child(view().flex_row().items_center().gap(px(6.0))
+                            .child(text(move||source().map_or_else(String::new,|s|s.name)).number_of_lines(1).text_size(px(14.0)).text_color(move||theme().foreground).flex_1().min_w(px(0.0)))
+                            .child(when(move||source().is_some_and(|s|s.verification.is_some()),move||text(move||source().map_or_else(String::new,|s|verification_label(&s))).number_of_lines(1).text_size(px(11.0)).text_color(move||theme().foreground).px(px(5.0)).py(px(2.0)).rounded(px(4.0)).bg(move||theme().muted))))
                         .child(caption(move||source().map_or_else(String::new,|s|if s.installed{tr!("Added").into()}else if s.can_install{if s.capabilities.is_empty(){s.description}else{capabilities(&s)}}else{tr!("This type is not supported yet").into()})))
                 }).flex_1().min_h(px(0.0)).estimated_item_size(px(70.0)).label(tr!("Music source list")))
         }))
@@ -609,7 +716,11 @@ pub fn sources_view(
                     .child(crate::controls::source_badge(move||this.selected.with(|s|s.as_ref().map_or_else(String::new,|s|s.id.clone()))))
                     .child(text(move||this.selected.with(|s|s.as_ref().map_or_else(String::new,|s|crate::controls::source_name(&s.id,&s.name)))).number_of_lines(2).text_size(px(19.0)).font_weight(FontWeight::SEMIBOLD).text_color(move||theme().foreground)))
                 .child(when(move||this.managing.get()||this.selected.with(|s|s.as_ref().is_some_and(|s|!s.installed)),move||caption(move||this.selected.with(|s|s.as_ref().map_or_else(String::new,|s|format!("{} · {}",s.version,capabilities(s)))))))
+                .child(view().gap(px(4.0))
+                    .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.verification.is_some())),move||text(move||this.selected.with(|s|s.as_ref().map_or_else(String::new,verification_label))).text_size(px(12.0)).font_weight(FontWeight::SEMIBOLD).text_color(move||theme().foreground)))
+                    .child(each(move||this.selected.with(|s|s.as_ref().map_or_else(Vec::new,verification_details)),Clone::clone,move|line,_|caption(move||line.get()))))
                 .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|!s.description.is_empty())),move||caption(move||this.selected.with(|s|s.as_ref().map_or_else(String::new,|s|s.description.clone())))))
+                .child(each(move||this.selected.with(|s|s.as_ref().map_or_else(Vec::new,|s|s.notes.clone())),Clone::clone,move|note,_|caption(move||note.get())))
                 .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.repository.is_some()&&(!s.installed||this.managing.get()))),move||button()
                     .accessibility_label(Some(tr!("Open source project").into())).on_press(move||{if let Some(url)=this.selected.with(|s|s.as_ref().and_then(|s|s.repository.clone())){spawn(async move{let _=open_url(url).await;});}})
                     .py(px(6.0)).rounded(px(4.0)).hover(|s|s.bg(theme().muted)).child(caption(move||this.selected.with(|s|s.as_ref().and_then(|s|s.repository.clone()).unwrap_or_default())))))
@@ -623,6 +734,20 @@ pub fn sources_view(
                 }))
                 .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.installed)),move||{
                     view().gap(px(10.0))
+                        .child(each(move||this.selected.with(|s|s.as_ref().filter(|s|s.host_capabilities.iter().any(|c|c=="browse")).map_or_else(Vec::new,|s|s.pages.clone())),|row|row.page.clone(),move|row,_|button().accessibility_label(move||Some(row.with(|r|r.title.clone()).into())).disabled(move||this.busy.get()).on_press(move||{if let Some(source)=this.selected.with(|s|s.as_ref().map(|s|s.id.clone())){open_source(Action::Page{source,method:"browse".into(),params:serde_json::json!({"page":row.with(|r|r.page.clone())})});}}).px(px(8.0)).py(px(7.0)).rounded(px(5.0)).hover(|s|s.bg(theme().muted)).child(text(move||row.with(|r|r.title.clone())).text_size(px(12.0)).text_color(move||theme().foreground))))
+                        .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.host_capabilities.iter().any(|c|c=="home"))),move||action(tr!("Recommendations"),move||this.busy.get(),move||{if let Some(source)=this.selected.with(|s|s.as_ref().map(|s|s.id.clone())){open_source(Action::Page{source,method:"home".into(),params:serde_json::json!({})});}})))
+                        .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.host_capabilities.iter().any(|c|c=="stations"))),move||action(tr!("Radio"),move||this.busy.get(),move||{if let Some(source)=this.selected.with(|s|s.as_ref().map(|s|s.id.clone())){open_source(Action::Page{source,method:"stations".into(),params:serde_json::json!({})});}})))
+                        .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.network_unrestricted)),move||view().gap(px(6.0))
+                            .child(crate::controls::section(tr!("Unrestricted network")))
+                            .child(caption(tr!("Allow this source to contact any Internet or local network server. Without this permission, it can only use declared domains and server URLs you save. Changed files require permission again.")))
+                            .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|!s.network_granted)),move||action(tr!("Allow unrestricted network for this version"),move||this.busy.get(),move||this.network_permission(true))))
+                            .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.network_granted)),move||action(tr!("Revoke unrestricted network permission"),move||this.busy.get(),move||this.network_permission(false))))))
+                        .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|!s.process_programs.is_empty())),move||view().gap(px(6.0))
+                            .child(crate::controls::section(tr!("External programs")))
+                            .child(caption(move||this.selected.with(|s|s.as_ref().map_or_else(String::new,|s|s.process_programs.join(", ")))))
+                            .child(caption(tr!("External programs can access files and services with your account's permissions. Trust verification does not grant this access. Updates or changed files require permission again.")))
+                            .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|!s.process_granted)),move||action(tr!("Allow external programs for this version"),move||this.busy.get(),move||this.process_permission(true))))
+                            .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.process_granted)),move||action(tr!("Revoke external program permission"),move||this.busy.get(),move||this.process_permission(false))))))
                         .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.capabilities.iter().any(|v|v=="account"||v=="signIn"))),move||{
                             view().gap(px(6.0)).pt(px(6.0))
                                 .child(text(tr!("Account")).text_size(px(12.0)).font_weight(FontWeight::SEMIBOLD).text_color(move||theme().foreground))

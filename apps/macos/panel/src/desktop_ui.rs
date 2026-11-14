@@ -152,6 +152,10 @@ fn transport(model: Model, previous: bool) -> impl IntoElement {
                                 i == 0
                             } else {
                                 i + 1 >= s.queue_length
+                                    && !matches!(
+                                        s.queue_context.as_ref(),
+                                        Some(crate::protocol::QueueContext::Station { .. })
+                                    )
                             }
                         })
                 })
@@ -979,6 +983,7 @@ fn queue(model: Model) -> impl IntoElement {
             snapshot.as_ref().map(|queue| {
                 use crate::protocol::QueueContext;
                 let (name, kind) = match &queue.queue_context {
+                    Some(QueueContext::Station { name, .. }) => (name.clone(),Some(tr!("Radio"))),
                     Some(QueueContext::Album { name, .. }) => (name.clone(), Some(tr!("Album"))),
                     Some(QueueContext::LocalPlaylist { id, name }) => {
                         (if id == "liked" { tr!("Liked Songs").into() } else { name.clone() }, Some(tr!("Local playlist")))

@@ -76,6 +76,50 @@ fn start() -> Headless {
     app
 }
 
+#[component]
+fn VerifiedSourceScreen() -> impl IntoElement {
+    source_browser::sources_view(
+        |_| {},
+        || {},
+        || {},
+        Some(protocol::MusicSource {
+            id: "mygo:qq-fixture".into(),
+            name: "Fixture source".into(),
+            version: "0.2.4".into(),
+            can_install: true,
+            verification: Some(protocol::SourceVerification {
+                version: "0.2.4".into(),
+                verified_at: "2026-11-15".into(),
+                platform: "macos-aarch64".into(),
+                checks: vec!["search".into(), "playback_sample".into()],
+                limitations: vec!["preview_only".into()],
+                installed_payload_matches: false,
+            }),
+            ..Default::default()
+        }),
+        source_browser::Start::Detail,
+    )
+}
+fn verified_source_details() {
+    for language in ["en", "zh-CN"] {
+        std::fs::write(protocol::data_dir().unwrap().join("language"), language).unwrap();
+        protocol::i18n::refresh();
+        let mut config = EngineConfig::new(Root::of::<VerifiedSourceScreen>());
+        config.viewport = Size::new(px(440.0), px(600.0));
+        config.environment.window = config.viewport;
+        let mut app = Headless::start(config).unwrap();
+        app.first_render().unwrap();
+        assert!(app.shows(&protocol::tr!("Trusted version {}", "0.2.4")));
+        assert!(app.shows(protocol::tr!("Trust covers the listed functional checks, not a security audit or platform certification")));
+        assert!(app.shows(protocol::tr!(
+            "The tested track returned a 60-second preview"
+        )));
+        assert!(app.shows(protocol::tr!(
+            "Full-track playback and account access still depend on the service"
+        )));
+    }
+}
+
 fn player_layout() {
     let mut config = EngineConfig::new(Root::of::<ui::App>());
     config.viewport = Size::new(px(320.0), px(512.0));
@@ -280,6 +324,14 @@ fn PlayerEntryScreen() -> impl IntoElement {
         model.status.update(|status| {
             status.track = Some(track);
             status.position = f64::from(height - 500.0);
+            status.index = Some(0);
+            status.queue_length = 1;
+            status.switching = height >= 570.0;
+            status.queue_context = (height >= 560.0).then(|| protocol::QueueContext::Station {
+                source: "mygo:fixture".into(),
+                id: "fm".into(),
+                name: "Fixture radio".into(),
+            });
         });
     });
     view()
@@ -346,6 +398,16 @@ fn player_entry_checks() {
     app.set_viewport(Size::new(px(628.0), px(512.0))).unwrap();
     press_artist(&mut app, "Alpha").unwrap();
     assert!(app.shows("Artist destination: mygo:fixture/alpha-id"));
+
+    for (height, enabled) in [(550.0, false), (560.0, true), (570.0, false)] {
+        app.set_viewport(Size::new(px(628.0), px(height))).unwrap();
+        let selector = format!("label:{}", protocol::tr!("Next track"));
+        assert_eq!(
+            app.screen().press_target(&selector).unwrap().is_some(),
+            enabled,
+            "one-track station queues must allow Next, finite or switching queues must not"
+        );
+    }
 }
 
 fn exercise() {
@@ -421,6 +483,7 @@ fn exercise() {
     );
     drop(app);
     source_navigation();
+    verified_source_details();
     settings_escape();
     setup_navigation();
     player_entries();

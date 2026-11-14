@@ -92,9 +92,13 @@ impl MenuState {
                 can_toggle: (!starting || status.switching) && (!status.switching || playing),
                 busy: status.switching || starting,
                 can_previous: status.index.is_some_and(|index| index > 0),
-                can_next: status
-                    .index
-                    .is_some_and(|index| index + 1 < status.queue_length),
+                can_next: status.index.is_some_and(|index| {
+                    index + 1 < status.queue_length
+                        || matches!(
+                            status.queue_context.as_ref(),
+                            Some(crate::protocol::QueueContext::Station { .. })
+                        )
+                }),
                 volume: status.volume,
                 page: model.drawer_open.get().then(|| model.page.get()),
                 mini_lyrics: model.show_mini_lyrics.get(),
