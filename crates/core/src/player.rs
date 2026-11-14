@@ -248,8 +248,7 @@ impl<A: AudioOutput> Player<A> {
             State::Playing
         } else if self.pending_seek.is_none()
             && self.requested_play
-            && duration > 0.0
-            && position >= duration - 0.12
+            && (control == AudioState::Ended || (duration > 0.0 && position >= duration - 0.12))
         {
             State::Ended
         } else if control == AudioState::Waiting {
@@ -445,7 +444,9 @@ impl<A: AudioOutput> Player<A> {
                 ensure!(self.index.is_some(), tr!("Choose a track first"));
                 self.audio().prepare_resume()?;
                 let status = self.status();
-                if status.duration > 0.0 && status.position >= status.duration - 0.12 {
+                if self.audio().snapshot().state == AudioState::Ended
+                    || (status.duration > 0.0 && status.position >= status.duration - 0.12)
+                {
                     self.seek(0.0);
                     self.end_handled = false;
                 }

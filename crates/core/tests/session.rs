@@ -25,6 +25,8 @@ static PAUSES: AtomicUsize = AtomicUsize::new(0);
 static FAIL_RESOLVE: AtomicBool = AtomicBool::new(false);
 static FAIL_LOAD: AtomicBool = AtomicBool::new(false);
 static NATIVE_AUDIO_ERROR: AtomicBool = AtomicBool::new(false);
+static NATIVE_AUDIO_ENDED: AtomicBool = AtomicBool::new(false);
+static NATIVE_DURATION: AtomicU64 = AtomicU64::new(180.0_f64.to_bits());
 static PLAYBACK_ELAPSED: AtomicU64 = AtomicU64::new(0);
 
 fn dispatch(message: Message) {
@@ -61,6 +63,8 @@ impl AudioOutput for Audio {
             bail!("audio load failed");
         }
         NATIVE_AUDIO_ERROR.store(false, Ordering::Relaxed);
+        NATIVE_AUDIO_ENDED.store(false, Ordering::Relaxed);
+        NATIVE_DURATION.store(180.0_f64.to_bits(), Ordering::Relaxed);
         PLAYBACK_ELAPSED.store(0, Ordering::Relaxed);
         *output = Some(Self {
             position: Cell::new(0.0),
@@ -73,8 +77,10 @@ impl AudioOutput for Audio {
         AudioSnapshot {
             position: self.position.get()
                 + f64::from_bits(PLAYBACK_ELAPSED.load(Ordering::Relaxed)),
-            duration: Some(180.0),
-            state: if self.playing.get() {
+            duration: Some(f64::from_bits(NATIVE_DURATION.load(Ordering::Relaxed))),
+            state: if NATIVE_AUDIO_ENDED.load(Ordering::Relaxed) {
+                AudioState::Ended
+            } else if self.playing.get() {
                 AudioState::Playing
             } else {
                 AudioState::Paused
@@ -99,6 +105,7 @@ impl AudioOutput for Audio {
         self.volume.set(volume);
     }
     fn seek(&self, seconds: f64, complete: impl Fn(bool) + Send + 'static) {
+        NATIVE_AUDIO_ENDED.store(false, Ordering::Relaxed);
         PLAYBACK_ELAPSED.store(0, Ordering::Relaxed);
         self.position.set(seconds);
         complete(true);
@@ -201,6 +208,30 @@ fn run_scenario(phases: &[&str]) {
         run_worker(&directory, phase);
     }
     std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn native_end_advances_the_queue_even_when_duration_is_inaccurate() {
+    for phase in [
+        "native_end",
+        "native_end_display",
+        "native_end_status",
+        "native_end_unknown",
+    ] {
+        run_scenario(&[phase]);
+    }
+}
+
+#[test]
+fn pause_and_seek_take_priority_over_native_end_and_pending_advance() {
+    for phase in [
+        "native_end_pause",
+        "native_end_seek",
+        "native_end_pending_pause",
+        "native_end_pending_seek",
+    ] {
+        run_scenario(&[phase]);
+    }
 }
 
 #[test]
@@ -405,6 +436,120 @@ fn session_worker() {
     let mut player = Player::<Audio>::new(dispatch, &SOURCE);
     let action = |player: &mut Player<Audio>, action| player.handle(Message::Action(action, None));
     match phase.as_str() {
+        "native_end" | "native_end_display" | "native_end_status" | "native_end_unknown" => {
+            let mut first = track(1);
+            if phase == "native_end_unknown" {
+                first.duration = 0.0;
+            }
+            command(&mut player, Action::Play(media(first))).unwrap();
+            command(&mut player, Action::Enqueue(media(track(2)))).unwrap();
+            if phase == "native_end_unknown" {
+                NATIVE_DURATION.store(f64::NAN.to_bits(), Ordering::Relaxed);
+            }
+            PLAYBACK_ELAPSED.store(1.0_f64.to_bits(), Ordering::Relaxed);
+            player.tick();
+            // A native end signal is authoritative even when the final timestamp
+            // falls short of the duration reported by the media container.
+            PLAYBACK_ELAPSED.store(179.5_f64.to_bits(), Ordering::Relaxed);
+            NATIVE_AUDIO_ENDED.store(true, Ordering::Relaxed);
+            match phase.as_str() {
+                "native_end_display" => {
+                    command(&mut player, Action::DisplayStatus).unwrap();
+                }
+                "native_end_status" => {
+                    command(&mut player, Action::Status).unwrap();
+                }
+                _ => {
+                    player.tick();
+                }
+            }
+            assert!(
+                player.status().switching,
+                "a completed native item must resolve the next queued track"
+            );
+            // Polling again while resolution is pending must not skip a track
+            // or start a second request for the same end notification.
+            player.tick();
+            command(&mut player, Action::DisplayStatus).unwrap();
+            player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+            let status = player.status();
+            assert_eq!(status.index, Some(1));
+            assert_eq!(status.track.as_ref().map(|track| track.id), Some(2));
+            assert!(status.state == State::Playing);
+            let history = musicx_core::history::recent(2).unwrap();
+            assert!(
+                history
+                    .iter()
+                    .find(|entry| entry.track.id == 1)
+                    .unwrap()
+                    .progress
+                    .unwrap()
+                    .completed
+            );
+            // Replacement clears the previous item's end signal. The final
+            // track may end repeatedly without starting another resolution.
+            player.tick();
+            assert!(player.status().state == State::Playing);
+            PLAYBACK_ELAPSED.store(179.5_f64.to_bits(), Ordering::Relaxed);
+            NATIVE_AUDIO_ENDED.store(true, Ordering::Relaxed);
+            player.tick();
+            player.tick();
+            assert!(player.status().state == State::Ended && !player.status().switching);
+            assert!(receive.try_recv().is_err());
+            assert_eq!(RESOLVES.load(Ordering::Relaxed), 1);
+            assert_eq!(LOADS.load(Ordering::Relaxed), 2);
+        }
+        "native_end_pause"
+        | "native_end_seek"
+        | "native_end_pending_pause"
+        | "native_end_pending_seek" => {
+            command(&mut player, Action::Play(media(track(1)))).unwrap();
+            command(&mut player, Action::Enqueue(media(track(2)))).unwrap();
+            PLAYBACK_ELAPSED.store(179.5_f64.to_bits(), Ordering::Relaxed);
+            NATIVE_AUDIO_ENDED.store(true, Ordering::Relaxed);
+            let pending = phase.contains("pending");
+            if pending {
+                player.tick();
+                assert!(player.status().switching);
+            }
+            let pause = phase.ends_with("pause");
+            command(
+                &mut player,
+                if pause {
+                    Action::Pause
+                } else {
+                    Action::Seek {
+                        seconds: 42.0,
+                        track_key: None,
+                    }
+                },
+            )
+            .unwrap();
+            for _ in 0..usize::from(pending) + usize::from(!pause) {
+                player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+            }
+            player.tick();
+            assert_eq!(player.status().index, Some(0));
+            assert!(!player.status().switching);
+            assert_eq!(LOADS.load(Ordering::Relaxed), 1);
+            if pause {
+                assert!(player.status().state == State::Paused);
+                command(&mut player, Action::Resume).unwrap();
+                player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+                assert_eq!(player.status().position, 0.0);
+            } else {
+                assert_eq!(player.status().position, 42.0);
+            }
+            assert!(player.status().state == State::Playing);
+            // Replaying or rewinding must re-arm automatic advancement.
+            PLAYBACK_ELAPSED.store(179.5_f64.to_bits(), Ordering::Relaxed);
+            NATIVE_AUDIO_ENDED.store(true, Ordering::Relaxed);
+            player.tick();
+            assert!(player.status().switching);
+            player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+            assert_eq!(player.status().index, Some(1));
+            assert!(player.status().state == State::Playing);
+        }
         "native_retry_resume" | "native_retry_toggle" | "native_retry_offline" => {
             let lease = Arc::new(());
             let weak = Arc::downgrade(&lease);
