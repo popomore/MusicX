@@ -6,6 +6,7 @@ pub enum AudioState {
     Paused,
     Playing,
     Waiting,
+    Ended,
 }
 
 pub struct AudioSnapshot {
