@@ -324,6 +324,14 @@ fn PlayerEntryScreen() -> impl IntoElement {
         model.status.update(|status| {
             status.track = Some(track);
             status.position = f64::from(height - 500.0);
+            status.index = Some(0);
+            status.queue_length = 1;
+            status.switching = height >= 570.0;
+            status.queue_context = (height >= 560.0).then(|| protocol::QueueContext::Station {
+                source: "mygo:fixture".into(),
+                id: "fm".into(),
+                name: "Fixture radio".into(),
+            });
         });
     });
     view()
@@ -390,6 +398,16 @@ fn player_entry_checks() {
     app.set_viewport(Size::new(px(628.0), px(512.0))).unwrap();
     press_artist(&mut app, "Alpha").unwrap();
     assert!(app.shows("Artist destination: mygo:fixture/alpha-id"));
+
+    for (height, enabled) in [(550.0, false), (560.0, true), (570.0, false)] {
+        app.set_viewport(Size::new(px(628.0), px(height))).unwrap();
+        let selector = format!("label:{}", protocol::tr!("Next track"));
+        assert_eq!(
+            app.screen().press_target(&selector).unwrap().is_some(),
+            enabled,
+            "one-track station queues must allow Next, finite or switching queues must not"
+        );
+    }
 }
 
 fn exercise() {
