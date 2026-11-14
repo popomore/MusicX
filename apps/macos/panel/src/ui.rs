@@ -837,6 +837,7 @@ pub fn App() -> impl IntoElement {
 pub fn Settings() -> impl IntoElement {
     let model = Model::new();
     poll_status(model, false);
+    on_key("escape", |_| nsh_core::element::desktop::close_window());
     crate::sources_ui::settings_view(model)
 }
 

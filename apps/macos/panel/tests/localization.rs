@@ -172,6 +172,43 @@ fn source_navigation() {
     assert!(settings.shows("Settings remains independent"));
 }
 
+fn settings_escape() {
+    use nsh_core::{Command, desktop::DesktopCommand, platform::Os};
+    let start = |root, width| {
+        let mut config = EngineConfig::new(root);
+        config.viewport = Size::new(px(width), px(520.0));
+        config.environment.window = config.viewport;
+        config.environment.os = Os::MacOs;
+        let mut app = Headless::start(config).unwrap();
+        app.first_render().unwrap();
+        app
+    };
+    let player = start(Root::of::<ui::App>(), 320.0);
+    let mut settings = start(Root::of::<ui::Settings>(), 704.0);
+    let close = Command::Desktop(Box::new(DesktopCommand::Close));
+    let close_count = |app: &Headless| {
+        app.screen()
+            .commands()
+            .iter()
+            .filter(|(_, command)| command == &close)
+            .count()
+    };
+    for language in ["English", "简体中文"] {
+        settings.press(language).unwrap();
+        let before = close_count(&settings);
+        settings.press_key("Escape").unwrap();
+        assert_eq!(
+            close_count(&settings),
+            before + 1,
+            "Escape must request closing the settings surface after selecting {language}"
+        );
+        assert!(
+            !player.screen().sent(&close),
+            "closing settings must leave the player surface open"
+        );
+    }
+}
+
 fn exercise() {
     let directory = protocol::data_dir().unwrap();
     assert_eq!(
@@ -243,8 +280,9 @@ fn exercise() {
     );
     drop(app);
     source_navigation();
+    settings_escape();
     println!(
-        "localization: real App layout, settings sidebar, resizing, language refresh, system default, manual switching, Model preservation and reopen passed"
+        "localization: real App layout, settings sidebar, resizing, language refresh, system default, manual switching, Model preservation, reopen and scoped Escape closing passed"
     );
 }
 
