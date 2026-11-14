@@ -197,6 +197,15 @@ impl Drop for PendingFile {
 }
 
 fn save(path: &Path, original: Option<&str>, content: &str) -> Result<()> {
+    save_before_replace(path, original, content, || {})
+}
+
+fn save_before_replace(
+    path: &Path,
+    original: Option<&str>,
+    content: &str,
+    before_replace: impl FnOnce(),
+) -> Result<()> {
     let parent = path.parent().context(invalid_config())?;
     fs::create_dir_all(parent).context(tr!("Could not save the agent configuration."))?;
     let name = path
@@ -236,6 +245,13 @@ fn save(path: &Path, original: Option<&str>, content: &str) -> Result<()> {
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(error) => return Err(error.into()),
         }
+    }
+    before_replace();
+    // Other clients do not coordinate writes; check again after backup I/O.
+    if read(path)?.as_deref() != original {
+        bail!(tr!(
+            "The agent configuration changed during setup. Please try again."
+        ));
     }
     fs::rename(&pending.0, path).context(tr!("Could not save the agent configuration."))?;
     Ok(())
@@ -385,6 +401,22 @@ mod tests {
         assert_eq!(
             config["mcp_servers"]["musicx"]["url"].as_str(),
             Some(ENDPOINT)
+        );
+    }
+
+    #[test]
+    fn an_edit_during_backup_is_not_overwritten() {
+        let directory = Directory::new();
+        let path = directory.0.join("config.toml");
+        fs::write(&path, "original").unwrap();
+        let result = save_before_replace(&path, Some("original"), "musicx update", || {
+            fs::write(&path, "another process update").unwrap();
+        });
+        assert!(result.is_err(), "a late edit must abort the replacement");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "another process update");
+        assert_eq!(
+            fs::read_to_string(path.with_file_name("config.toml.musicx-backup")).unwrap(),
+            "original"
         );
     }
 }
