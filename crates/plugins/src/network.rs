@@ -30,13 +30,13 @@ pub(crate) fn set(
     use musicx_core::{protocol::tr, storage};
     anyhow::ensure!(mygo::valid_id(id), tr!("Invalid plugin ID"));
     let root = mygo::plugin_root()?.join(id);
-    let manifest = mygo::manifest(&root)?;
-    anyhow::ensure!(
-        !enabled || manifest.permissions.network.iter().any(|g| g == "*"),
-        tr!("This source has no unrestricted network permission")
-    );
     let name = format!("mygo-{id}-network-permission.json");
     if enabled {
+        let manifest = mygo::manifest(&root)?;
+        anyhow::ensure!(
+            manifest.permissions.network.iter().any(|g| g == "*"),
+            tr!("This source has no unrestricted network permission")
+        );
         storage::save_private(
             &name,
             &serde_json::to_string(&crate::permissions::reviewed_files(&root, expected, guard)?)?,

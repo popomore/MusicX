@@ -161,7 +161,7 @@ export function serverPid(){return host.storage.get('serverPid')}
     assert_eq!(fs::read(&local_path).unwrap(), b"fixture-file-audio");
     drop(local);
     assert!(!local_path.exists());
-    let mut outside = track;
+    let mut outside = track.clone();
     outside.source.as_mut().unwrap().id = "outside".into();
     assert!(mygo::resolve_with_quality(outside, Quality::Standard).is_err());
     assert_eq!(
@@ -189,4 +189,37 @@ export function serverPid(){return host.storage.get('serverPid')}
             .unwrap()
             .process_granted
     );
+    // Cleanup must still work after a downloaded/installed manifest is damaged.
+    for damage in ["malformed", "missing"] {
+        if !installed.exists() {
+            mygo::install(&fixture).unwrap();
+        }
+        grant(true);
+        let active = mygo::resolve_with_quality(track.clone(), Quality::Standard).unwrap();
+        let active_pid = mygo::invoke("process.fixture", "serverPid", json!({}))
+            .unwrap()
+            .as_i64()
+            .unwrap() as i32;
+        let state = installed.parent().unwrap().parent().unwrap();
+        let network_record = state.join("mygo-process.fixture-network-permission.json");
+        fs::write(&network_record, "{}").unwrap();
+        if damage == "missing" {
+            fs::remove_file(installed.join("plugin.json")).unwrap();
+        } else {
+            fs::write(installed.join("plugin.json"), "not json").unwrap();
+        }
+        music_sources::execute(MusicSourceAction::Uninstall {
+            source: "mygo:process.fixture".into(),
+        })
+        .unwrap();
+        assert!(!installed.exists());
+        assert!(
+            !state
+                .join("mygo-process.fixture-process-permission.json")
+                .exists()
+        );
+        assert!(!network_record.exists());
+        assert_ne!(unsafe { libc::kill(active_pid, 0) }, 0);
+        drop(active);
+    }
 }

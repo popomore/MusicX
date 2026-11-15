@@ -58,17 +58,18 @@ pub(crate) fn set(
 ) -> Result<()> {
     ensure!(mygo::valid_id(id), tr!("Invalid plugin ID"));
     let root = mygo::plugin_root()?.join(id);
-    let manifest = mygo::manifest(&root)?;
-    ensure!(
-        !enabled || (!cfg!(target_os = "ios") && !programs(&manifest).is_empty()),
-        tr!("This source has no external program permission")
-    );
     if enabled {
+        let manifest = mygo::manifest(&root)?;
+        ensure!(
+            !cfg!(target_os = "ios") && !programs(&manifest).is_empty(),
+            tr!("This source has no external program permission")
+        );
         storage::save_private(
             &approval_name(id),
             &serde_json::to_string(&crate::permissions::reviewed_files(&root, expected, guard)?)?,
         )?;
     } else {
+        // Revocation and uninstall must not depend on a readable manifest.
         let path = storage::state_dir()?.join(approval_name(id));
         if let Err(error) = fs::remove_file(path)
             && error.kind() != std::io::ErrorKind::NotFound
