@@ -36,7 +36,6 @@ impl Drop for Bindings {
 impl Bindings {
     pub fn install(
         ctx: &Ctx<'_>,
-        source: &str,
         job: Option<Arc<LoginJob>>,
         grants: Vec<String>,
         deadline: Instant,
@@ -109,16 +108,12 @@ impl Bindings {
                 .to_string()
             })?,
         )?;
-        let source = source.to_owned();
         ctx.globals().set(
             "__openURL",
             Function::new(ctx.clone(), move |address: String| {
                 let open = || -> Result<()> {
                     let job = job.as_ref().context(tr!("Start source sign-in first"))?;
-                    let url = crate::native_audio::authorization_url(
-                        &source,
-                        &url::Url::parse(&address)?,
-                    );
+                    let url = url::Url::parse(&address)?;
                     ensure!(
                         crate::mygo::permitted(&url, &grants),
                         tr!("Sign-in page is outside the source’s network permissions")

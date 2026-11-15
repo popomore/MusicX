@@ -787,7 +787,6 @@ pub(crate) fn fetch(
     input: &str,
     grants: &[String],
     deadline: Instant,
-    audio: Option<&crate::native_audio::Capture>,
 ) -> Result<Value> {
     let input: Fetch = serde_json::from_str(input)?;
     let url = Url::parse(&input.url)?;
@@ -814,8 +813,6 @@ pub(crate) fn fetch(
         ),
         tr!("Unsupported HTTP method")
     );
-    let credential =
-        audio.and_then(|_| crate::native_audio::Capture::candidate(&url, &method, &input.headers));
     let mut request = client
         .request(method, url)
         .timeout(remaining.min(Duration::from_secs(10)));
@@ -856,9 +853,6 @@ pub(crate) fn fetch(
         bytes.len() as u64 <= MAX_FETCH_BODY,
         tr!("Plugin response exceeds 8 MiB")
     );
-    if let Some(audio) = audio {
-        audio.accept(credential, status);
-    }
     use base64::Engine;
     let binary = std::str::from_utf8(&bytes)
         .is_err()
@@ -889,32 +883,10 @@ pub fn invoke(id: &str, export: &str, args: Value) -> Result<Value> {
     invoke_with_playback(id, export, args, None, None)
 }
 
-#[cfg(target_os = "macos")]
-pub(crate) fn audio_account(id: &str, capture: Arc<crate::native_audio::Capture>) -> Result<bool> {
-    let _guard = PLUGIN_CALL
-        .lock()
-        .map_err(|_| anyhow!(tr!("Plugin runtime lock unavailable")))?;
-    ensure!(
-        !crate::music_sources::auth_active(id),
-        tr!("This source is connecting an account; complete or cancel first")
-    );
-    let account = invoke_inner(
-        id,
-        "account",
-        json!({}),
-        Invocation {
-            audio: Some(capture),
-            ..Default::default()
-        },
-    )?;
-    Ok(!account.is_null())
-}
-
 struct Invocation {
     login: Option<Arc<crate::music_sources::LoginJob>>,
     playback: Option<Arc<Mutex<crate::ffmpeg::Playback>>>,
     helpers: Option<Arc<crate::process::Runtime>>,
-    audio: Option<Arc<crate::native_audio::Capture>>,
     timeout: Duration,
 }
 impl Default for Invocation {
@@ -923,7 +895,6 @@ impl Default for Invocation {
             login: None,
             playback: None,
             helpers: None,
-            audio: None,
             timeout: Duration::from_secs(18),
         }
     }
@@ -984,7 +955,6 @@ fn invoke_inner(id: &str, export: &str, args: Value, invocation: Invocation) -> 
         login,
         playback,
         helpers,
-        audio,
         timeout,
     } = invocation;
     ensure!(valid_id(id), tr!("Invalid plugin ID"));
@@ -1048,8 +1018,8 @@ fn invoke_inner(id: &str, export: &str, args: Value, invocation: Invocation) -> 
     let context = JsContext::full(&rt)?;
     context.with(|ctx| {
         let global = ctx.globals();
-        let _requests=crate::requests::Bindings::install(&ctx,client.clone(),grants.clone(),deadline,audio.clone())?;
-        let _oauth = crate::oauth::Bindings::install(&ctx, id, login.clone(), grants.clone(), deadline)?;
+        let _requests=crate::requests::Bindings::install(&ctx,client.clone(),grants.clone(),deadline)?;
+        let _oauth = crate::oauth::Bindings::install(&ctx, login.clone(), grants.clone(), deadline)?;
         let web_job=login.clone();let web_grants=grants.clone();let web_name=manifest.name.clone();
         global.set("__webSignIn",Function::new(ctx.clone(),move|text:String|{
             let result=(||->Result<Value>{
@@ -1155,7 +1125,7 @@ fn invoke_inner(id: &str, export: &str, args: Value, invocation: Invocation) -> 
         global.set(
             "__fetch",
             Function::new(ctx.clone(), move |text: String| {
-                fetch(&client, &text, &grants, deadline, audio.as_deref())
+                fetch(&client, &text, &grants, deadline)
                     .unwrap_or_else(|error| json!({"error":error.to_string()}))
                     .to_string()
             })?,
@@ -1226,9 +1196,7 @@ pub fn resolve_with_quality(mut track: Track, quality: crate::protocol::Quality)
         if let Some(reason) = info.limitation {
             anyhow::bail!(reason);
         }
-        let mut media = crate::native_audio::resolve(track, quality)?;
-        fill_artwork(&mut media.track);
-        return Ok(media);
+        anyhow::bail!(tr!("The source did not provide audio for MusicX playback"));
     }
     let playback = Arc::new(Mutex::new(crate::ffmpeg::Playback::default()));
     let helpers = crate::process::Runtime::new(&manifest(&plugin_root()?.join(&source.plugin))?)?;

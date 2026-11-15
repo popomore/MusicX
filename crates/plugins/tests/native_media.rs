@@ -33,9 +33,9 @@ fn remote_only_sources_cannot_replace_musicx_audio() {
     let root = std::path::PathBuf::from(std::env::var_os("MUSICX_REMOTE_ROOT").unwrap());
     let fixture = root.join("fixture");
     fs::create_dir_all(&fixture).unwrap();
-    let manifest = json!({"id":"remote.fixture","name":"Remote fixture","version":"1.0.0","playback":"remote","permissions":{"network":[]}}).to_string();
     let script = r#"
 function record(){host.storage.set('calls',(host.storage.get('calls')||0)+1)}
+export function account(){record();return {id:'fixture-account'}}
 export function remotePlay(){record()}
 export function remotePause(){record()}
 export function remoteResume(){record()}
@@ -44,34 +44,44 @@ export function remoteDevices(){record();return []}
 export function remoteUse(){record()}
 export function inspect(){return host.storage.get('calls')||0}
 "#;
-    fs::write(fixture.join("plugin.json"), &manifest).unwrap();
-    fs::write(fixture.join("index.js"), script).unwrap();
-    mygo::install(&fixture).unwrap();
-    let track: Track = serde_json::from_value(json!({"id":1,"title":"Fixture","artist":"Artist","duration":60,"source":{"plugin":"remote.fixture","id":"opaque:one"}})).unwrap();
-    let result = MYGO.resolve(track.clone(), Quality::Standard);
-    assert!(
-        result.is_err(),
-        "remote control must never resolve to a playable Media"
-    );
-    let descriptor = music_sources::get_source("mygo:remote.fixture").unwrap();
-    assert!(
-        descriptor
-            .host_capabilities
-            .iter()
-            .all(|c| !c.starts_with("remote"))
-    );
-    assert_eq!(
-        mygo::invoke("remote.fixture", "inspect", json!({})).unwrap(),
-        0
-    );
-    let installed = root.join("state/mygo-plugins/remote.fixture");
-    assert_eq!(
-        fs::read_to_string(installed.join("index.js")).unwrap(),
-        script
-    );
-    let saved: serde_json::Value =
-        serde_json::from_slice(&fs::read(installed.join("plugin.json")).unwrap()).unwrap();
-    assert_eq!(saved["playback"], "remote");
+    let track: Track = serde_json::from_value(json!({"id":1,"title":"Fixture","artist":"Artist","duration":60,"source":{"plugin":"remote.fixture","id":"0123456789012345678901"}})).unwrap();
+    for id in ["remote.fixture", "spotify"] {
+        let manifest = json!({"id":id,"name":"Remote fixture","version":"1.0.0","playback":"remote","permissions":{"network":[]}}).to_string();
+        fs::write(fixture.join("plugin.json"), &manifest).unwrap();
+        fs::write(fixture.join("index.js"), script).unwrap();
+        mygo::install(&fixture).unwrap();
+        let descriptor = music_sources::get_source(&format!("mygo:{id}")).unwrap();
+        assert!(
+            !descriptor.host_capabilities.iter().any(|c| c == "stream"),
+            "a remote-only source must not advertise MusicX audio"
+        );
+        let mut selected = track.clone();
+        selected.source.as_mut().unwrap().plugin = id.into();
+        let result = MYGO.resolve(selected, Quality::Standard);
+        assert!(
+            result.is_err(),
+            "remote control must never resolve to a playable Media"
+        );
+        assert!(
+            descriptor
+                .host_capabilities
+                .iter()
+                .all(|c| !c.starts_with("remote"))
+        );
+        assert_eq!(
+            mygo::invoke(id, "inspect", json!({})).unwrap(),
+            0,
+            "resolving remote-only audio must not read account credentials or control devices"
+        );
+        let installed = root.join("state/mygo-plugins").join(id);
+        assert_eq!(
+            fs::read_to_string(installed.join("index.js")).unwrap(),
+            script
+        );
+        let saved: serde_json::Value =
+            serde_json::from_slice(&fs::read(installed.join("plugin.json")).unwrap()).unwrap();
+        assert_eq!(saved["playback"], "remote");
+    }
 
     // A source that actually exports audio uses the same native Media contract,
     // even if its unchanged MyGo manifest also advertises remote control.

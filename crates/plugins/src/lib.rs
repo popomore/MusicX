@@ -9,7 +9,6 @@ mod installation;
 mod localization;
 pub mod music_sources;
 pub mod mygo;
-mod native_audio;
 mod network;
 mod oauth;
 mod permissions;
@@ -32,8 +31,6 @@ use musicx_plugin_api::{DataSource, Media};
 use protocol::{AlbumPage, LocalLibraryAction, Quality, Track, TrackInfo};
 use serde_json::Value;
 
-#[cfg(target_os = "macos")]
-pub use native_audio::{configure as configure_audio_decoder, worker as decode_audio};
 pub use web_auth::configure as configure_web_auth;
 
 pub struct MyGo;

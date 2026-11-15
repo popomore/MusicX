@@ -49,7 +49,6 @@ fn run() -> Result<ExitCode> {
         None | Some("start") => {
             let runtime = desktop::prepare_runtime(&web_auth_name)?;
             configure_web_auth(runtime.web_auth_executable.clone())?;
-            musicx_plugins::configure_audio_decoder(std::env::current_exe()?)?;
             player::configure(&MYGO)?;
             mcp::start(mcp::Services {
                 submit: player::submit,
@@ -75,11 +74,6 @@ fn run() -> Result<ExitCode> {
 }
 
 fn main() -> ExitCode {
-    // Private decoder IPC: credentials arrive on stdin, PCM goes to an owned
-    // file descriptor. Never print decoder errors or start the UI/MCP runtime.
-    if std::env::args().nth(1).as_deref() == Some("--decode-audio") {
-        return musicx_plugins::decode_audio();
-    }
     match run() {
         Ok(code) => code,
         Err(error) => {

@@ -484,11 +484,7 @@ fn source_descriptor(
         })
         .collect();
     let mut notes = if m.playback == "remote" && !exports.iter().any(|c| c == "stream") {
-        vec![if crate::native_audio::supports(&m.id) {
-            tr!("MusicX acquires the source audio and plays it with the system player").into()
-        } else {
-            tr!("This source provides device controls but no audio for MusicX playback").into()
-        }]
+        vec![tr!("This source provides device controls but no audio for MusicX playback").into()]
     } else {
         Vec::new()
     };
@@ -498,10 +494,7 @@ fn source_descriptor(
     if !process_programs.is_empty() {
         notes.push(tr!("Helpers must run in the foreground without detaching. Detached daemons are not supported or stopped by revoking permission.").into());
     }
-    let mut host_capabilities = crate::capabilities::supported(&exports);
-    if m.playback == "remote" && crate::native_audio::supports(&m.id) {
-        host_capabilities.push("stream".into());
-    }
+    let host_capabilities = crate::capabilities::supported(&exports);
     let verification = if installed {
         crate::trust::installed(&m)
     } else {
