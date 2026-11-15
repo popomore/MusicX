@@ -228,7 +228,11 @@ fn run_scenario(phases: &[&str]) {
 
 #[test]
 fn radio_refills_retry_unavailable_tracks_and_reconcile_enqueued_successors() {
-    for phase in ["radio_refill_retry", "radio_refill_enqueue"] {
+    for phase in [
+        "radio_refill_retry",
+        "radio_refill_enqueue",
+        "radio_refill_seek",
+    ] {
         run_scenario(&[phase]);
     }
 }
@@ -464,7 +468,7 @@ fn session_worker() {
     let mut player = Player::<Audio>::new(dispatch, &SOURCE);
     let action = |player: &mut Player<Audio>, action| player.handle(Message::Action(action, None));
     match phase.as_str() {
-        "radio_refill_retry" | "radio_refill_enqueue" => {
+        "radio_refill_retry" | "radio_refill_enqueue" | "radio_refill_seek" => {
             resolve_command(
                 &mut player,
                 Action::ReplaceQueue {
@@ -496,6 +500,19 @@ fn session_worker() {
                 );
                 player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
                 assert_eq!(player.status().track.unwrap().id, 99);
+            } else if phase == "radio_refill_seek" {
+                player.handle(ready);
+                assert!(player.status().switching);
+                action(
+                    &mut player,
+                    Action::Seek {
+                        seconds: 42.0,
+                        track_key: None,
+                    },
+                );
+                player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+                assert_eq!(player.status().position, 42.0);
+                assert!(player.status().state == State::Playing);
             } else {
                 player.handle(ready);
                 player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());

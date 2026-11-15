@@ -82,6 +82,7 @@ impl Session {
                 Ok(volume_supported)
             };
             let mut started = false;
+            let mut may_be_playing = false;
             let mut playing = false;
             let mut volume = 1.0;
             let mut reported_volume = 1.0;
@@ -99,7 +100,7 @@ impl Session {
                 };
                 if matches!(command, Some(Command::Stop)) {
                     if owns && owned() {
-                        if started {
+                        if may_be_playing {
                             let _ = call("remotePause", json!({}));
                         }
                         let mut owners = owners().lock().unwrap();
@@ -119,12 +120,17 @@ impl Session {
                 let mut completion = None;
                 let mut unsupported = false;
                 let is_command = command.is_some();
+                let changes_playback = matches!(
+                    command,
+                    Some(Command::Start(..) | Command::Play | Command::Pause)
+                );
                 let result = match command {
                     Some(Command::Start(play, value)) => {
                         owns = play;
                         volume = value;
                         playing = play;
                         if play {
+                            may_be_playing = true;
                             let result = begin(desired_position, volume);
                             started = result.is_ok();
                             if let Ok(supported) = result {
@@ -142,6 +148,7 @@ impl Session {
                     Some(Command::Play) => {
                         owns = true;
                         playing = true;
+                        may_be_playing = true;
                         if started {
                             call("remoteResume", json!({})).map(|_| ())
                         } else {
@@ -159,8 +166,10 @@ impl Session {
                     }
                     Some(Command::Pause) => {
                         playing = false;
-                        if started {
-                            call("remotePause", json!({})).map(|_| ())
+                        if may_be_playing {
+                            call("remotePause", json!({})).map(|_| {
+                                may_be_playing = false;
+                            })
                         } else {
                             Ok(())
                         }
@@ -284,7 +293,9 @@ impl Session {
                     done(ok);
                 } else if is_command {
                     cache.advance();
-                    cache.snapshot.playing = playing && ok;
+                    if changes_playback {
+                        cache.snapshot.playing = playing && ok;
+                    }
                     cache.snapshot.volume = volume;
                     if ok {
                         cache.at = Instant::now();
@@ -608,6 +619,75 @@ mod tests {
         session.pause();
         wait(|| !session.snapshot().playing);
         assert!(session.snapshot().position >= before);
+    }
+
+    #[test]
+    fn failed_volume_control_keeps_device_playback_running() {
+        let callback: Call = Arc::new(|method, args, _| {
+            if method == "remoteVolume" && args["percent"] == 20 {
+                anyhow::bail!("volume unavailable");
+            }
+            Ok(Some(Value::Null))
+        });
+        let session = Session::new(
+            format!(
+                "remote-volume-error-{}",
+                musicx_core::storage::random_hex::<8>()
+            ),
+            "selected".into(),
+            60.0,
+            callback,
+        );
+        session.start(true, 0.5).unwrap();
+        wait(|| session.snapshot().playing);
+        session.set_volume(0.2);
+        wait(|| session.snapshot().error.is_some());
+        assert!(session.snapshot().playing, "failed volume is not a pause");
+        session.cache.lock().unwrap().at = Instant::now() - Duration::from_secs(10);
+        wait(|| session.snapshot().error.is_none());
+        assert!(session.snapshot().playing && session.snapshot().position >= 10.0);
+    }
+
+    #[test]
+    fn a_failed_replacement_can_pause_and_stop_existing_device_playback() {
+        for pause in [false, true] {
+            let plugin = format!(
+                "remote-failed-replacement-{}",
+                musicx_core::storage::random_hex::<8>()
+            );
+            let calls = Arc::new(Mutex::new(Vec::new()));
+            let log = calls.clone();
+            let key = plugin.clone();
+            let callback: Call = Arc::new(move |method, args, generation| {
+                ensure_owner(&key, generation)?;
+                log.lock().unwrap().push((method.to_owned(), generation));
+                if method == "remoteVolume" && args["percent"] == 20 {
+                    anyhow::bail!("volume unavailable");
+                }
+                Ok(Some(Value::Null))
+            });
+            let old = Session::new(plugin.clone(), "old".into(), 60.0, callback.clone());
+            old.start(true, 0.5).unwrap();
+            wait(|| old.snapshot().playing);
+            let current = Session::new(plugin, "new".into(), 60.0, callback);
+            let generation = current.generation;
+            current.start(true, 0.2).unwrap();
+            wait(|| current.snapshot().error.is_some());
+            old.pause();
+            drop(old);
+            if pause {
+                current.pause();
+            } else {
+                drop(current);
+            }
+            wait(|| {
+                calls
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|c| c.0 == "remotePause" && c.1 == generation)
+            });
+        }
     }
 
     #[test]

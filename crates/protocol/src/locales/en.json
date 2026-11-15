@@ -761,5 +761,6 @@
   "The source archive is incomplete; the existing installation was kept": "The source archive is incomplete; the existing installation was kept",
   "Helpers must run in the foreground without detaching. Detached daemons are not supported or stopped by revoking permission.": "Helpers must run in the foreground without detaching. Detached daemons are not supported or stopped by revoking permission.",
   "This source cannot control the device volume": "This source cannot control the device volume",
-  "Trust covers the listed functional checks, not a security audit or platform certification": "Trust covers the listed functional checks, not a security audit or platform certification"
+  "Trust covers the listed functional checks, not a security audit or platform certification": "Trust covers the listed functional checks, not a security audit or platform certification",
+  "Source program permissions changed; try playback again": "Source program permissions changed; try playback again"
 }

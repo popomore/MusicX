@@ -988,6 +988,9 @@ fn invoke_inner(
     let settings = settings.to_string();
     let process = manifest.permissions.process.clone();
     let helpers = helpers.or(crate::process::Runtime::new(&manifest)?);
+    if let Some(helpers) = &helpers {
+        helpers.validate_manifest(&manifest)?;
+    }
     let redirect_grants = grants.clone();
     let client = Client::builder()
         .redirect(Policy::custom(move |attempt| {
@@ -1323,4 +1326,68 @@ pub fn resolve_with_quality(mut track: Track, quality: crate::protocol::Quality)
             .filter(|n| n.is_finite() && *n > 0.0 && *n <= 32.0)
             .map(|n| n as f32),
     })
+}
+
+#[cfg(test)]
+mod helper_snapshot_tests {
+    use super::*;
+
+    #[test]
+    fn a_replaced_payload_cannot_reuse_old_helper_program_permissions() {
+        if std::env::var_os("MUSICX_HELPER_SNAPSHOT_CHILD").is_none() {
+            let root = std::env::temp_dir().join(format!(
+                "musicx-helper-snapshot-{}",
+                musicx_core::storage::random_hex::<8>()
+            ));
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "mygo::helper_snapshot_tests::a_replaced_payload_cannot_reuse_old_helper_program_permissions", "--nocapture"])
+                .env("MUSICX_HELPER_SNAPSHOT_CHILD", "1")
+                .env("MUSICX_DATA_DIR", &root)
+                .env("MUSICX_LANGUAGE", "en")
+                .output().unwrap();
+            fs::remove_dir_all(root).unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let root = plugin_root().unwrap().join("helper-race");
+        fs::create_dir(&root).unwrap();
+        fs::write(
+            root.join("plugin.json"),
+            r#"{"id":"helper-race","permissions":{"process":["/bin/cat"]}}"#,
+        )
+        .unwrap();
+        fs::write(root.join("index.js"), r#"export async function probe(){const p=host.spawn('/bin/cat',[]);p.closeStdin();await p.wait();return {escaped:true}}"#).unwrap();
+        let grant = || {
+            crate::music_sources::execute(
+                crate::protocol::MusicSourceAction::SetProcessPermission {
+                    source: "mygo:helper-race".into(),
+                    enabled: true,
+                    expected_fingerprint: crate::music_sources::get_source("mygo:helper-race")
+                        .unwrap()
+                        .permission_fingerprint,
+                },
+            )
+            .unwrap()
+        };
+        grant();
+        let old = crate::process::Runtime::new(&manifest(&root).unwrap())
+            .unwrap()
+            .unwrap();
+        fs::write(
+            root.join("plugin.json"),
+            r#"{"id":"helper-race","permissions":{"process":["/bin/echo"]}}"#,
+        )
+        .unwrap();
+        grant();
+        let result = invoke_with_playback("helper-race", "probe", json!({}), None, Some(old));
+        assert!(
+            result.is_err(),
+            "a new payload must not inherit captured old program declarations: {result:?}"
+        );
+    }
 }

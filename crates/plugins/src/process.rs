@@ -172,6 +172,13 @@ impl Runtime {
         all.push(Arc::downgrade(&runtime));
         Ok(Some(runtime))
     }
+    pub(crate) fn validate_manifest(&self, manifest: &Manifest) -> Result<()> {
+        ensure!(
+            self.id == manifest.id && self.allowed == programs(manifest),
+            tr!("Source program permissions changed; try playback again")
+        );
+        Ok(())
+    }
     fn kill_all(&self) {
         for child in self.children.lock().unwrap().iter() {
             child.kill();
@@ -238,8 +245,10 @@ impl Runtime {
             tr!("Invalid external program arguments")
         );
         // Recheck revocation and on-disk edits before each launch.
+        let manifest = mygo::manifest(&self.root)?;
+        self.validate_manifest(&manifest)?;
         ensure!(
-            granted(&mygo::manifest(&self.root)?),
+            granted(&manifest),
             tr!("Allow external programs in this source's settings first")
         );
         let mut children = self.children.lock().unwrap();

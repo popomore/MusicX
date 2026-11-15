@@ -888,7 +888,15 @@ impl<A: AudioOutput> Player<A> {
                 if !self.requested_play || self.seek_serial != pending.seek_serial {
                     return;
                 }
-                match media.and_then(|media| self.load(&media)) {
+                let position = self.deferred_position.unwrap_or(0.0);
+                match media.and_then(|media| {
+                    self.load_with_play(&media, false)?;
+                    if position > 0.0 {
+                        self.seek(position);
+                    }
+                    self.audio().play();
+                    Ok(())
+                }) {
                     Ok(()) => {
                         self.index = Some(pending.index);
                         self.error = None;
