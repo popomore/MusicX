@@ -82,6 +82,8 @@ impl Session {
                 Ok(volume_supported)
             };
             let mut started = false;
+            // Devices may resume independently after Pause. Keep pause eligibility
+            // until this session loses ownership, including when state is unknown.
             let mut may_be_playing = false;
             let mut playing = false;
             let mut volume = 1.0;
@@ -167,9 +169,7 @@ impl Session {
                     Some(Command::Pause) => {
                         playing = false;
                         if may_be_playing {
-                            call("remotePause", json!({})).map(|_| {
-                                may_be_playing = false;
-                            })
+                            call("remotePause", json!({})).map(|_| ())
                         } else {
                             Ok(())
                         }
@@ -692,6 +692,48 @@ mod tests {
                     .iter()
                     .any(|c| c.0 == "remotePause" && c.1 == generation)
             });
+        }
+    }
+
+    #[test]
+    fn device_resume_after_pause_remains_stoppable() {
+        for pause in [true, false] {
+            let active = Arc::new(std::sync::atomic::AtomicBool::new(true));
+            let pauses = Arc::new(AtomicU64::new(0));
+            let device = active.clone();
+            let stopped = pauses.clone();
+            let callback: Call = Arc::new(move |method, _, _| {
+                if method == "remotePause" {
+                    device.store(false, Ordering::Relaxed);
+                    stopped.fetch_add(1, Ordering::Relaxed);
+                }
+                Ok(Some(if method == "remoteState" {
+                    json!({"playing":device.load(Ordering::Relaxed),"position":1000})
+                } else {
+                    Value::Null
+                }))
+            });
+            let session = Session::new(
+                format!(
+                    "remote-device-resume-{}",
+                    musicx_core::storage::random_hex::<8>()
+                ),
+                "selected".into(),
+                60.0,
+                callback,
+            );
+            session.start(true, 0.5).unwrap();
+            wait(|| session.snapshot().playing);
+            session.pause();
+            wait(|| !session.snapshot().playing && pauses.load(Ordering::Relaxed) == 1);
+            active.store(true, Ordering::Relaxed);
+            wait(|| session.snapshot().playing);
+            if pause {
+                session.pause();
+            } else {
+                drop(session);
+            }
+            wait(|| pauses.load(Ordering::Relaxed) == 2);
         }
     }
 
