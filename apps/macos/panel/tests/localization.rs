@@ -107,9 +107,17 @@ fn verified_source_details() {
         let mut config = EngineConfig::new(Root::of::<VerifiedSourceScreen>());
         config.viewport = Size::new(px(440.0), px(600.0));
         config.environment.window = config.viewport;
+        config.environment.os = nsh_core::platform::Os::MacOs;
         let mut app = Headless::start(config).unwrap();
         app.first_render().unwrap();
-        assert!(app.shows(&protocol::tr!("Trusted version {}", "0.2.4")));
+        let label = protocol::tr!("Trusted version {}", "0.2.4");
+        assert!(
+            !app.shows(&label),
+            "trust uses an icon instead of a text badge"
+        );
+        assert!(app.screen().matches(&format!("label:{label}")).unwrap());
+        app.hover(&format!("label:{label}")).unwrap();
+        app.wait_for(&format!("text:{label}")).unwrap();
         assert!(app.shows(protocol::tr!("Trust covers the listed functional checks, not a security audit or platform certification")));
         assert!(app.shows(protocol::tr!(
             "The tested track returned a 60-second preview"

@@ -560,7 +560,7 @@ fn capabilities(source: &MusicSource) -> String {
     .join(" · ")
 }
 
-pub(crate) fn verification_label(source: &MusicSource) -> String {
+fn verification_label(source: &MusicSource) -> String {
     source
         .verification
         .as_ref()
@@ -571,6 +571,41 @@ pub(crate) fn verification_label(source: &MusicSource) -> String {
                 tr!("Trusted version {}", evidence.version)
             }
         })
+}
+
+pub(crate) fn verification_badge(
+    source: impl Fn() -> Option<MusicSource> + 'static,
+) -> impl IntoElement {
+    const VERIFIED: &str = r#"<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m8 12 2.5 2.5L16 9"/></svg>"#;
+    let source = computed(source);
+    when(
+        move || source.with(|s| s.as_ref().is_some_and(|s| s.verification.is_some())),
+        move || {
+            let label = computed(move || {
+                source.with(|s| s.as_ref().map_or_else(String::new, verification_label))
+            });
+            view()
+                .w(px(14.0))
+                .min_w(px(14.0))
+                .h(px(14.0))
+                .tooltip(
+                    text(move || label.get())
+                        .text_size(px(11.0))
+                        .px(px(6.0))
+                        .py(px(4.0))
+                        .bg(move || theme().primary)
+                        .text_color(move || theme().primary_foreground)
+                        .rounded(px(4.0)),
+                )
+                .child(
+                    svg(|| ImageSrc::svg_markup(VERIFIED))
+                        .w(px(14.0))
+                        .h(px(14.0))
+                        .text_color(move || theme().foreground)
+                        .label(move || SharedString::from(label.get())),
+                )
+        },
+    )
 }
 
 fn verification_details(source: &MusicSource) -> Vec<String> {
@@ -706,7 +741,7 @@ pub fn sources_view(
                         .h(px(70.0)).w_full().justify_center().px(px(8.0)).gap(px(4.0)).rounded(px(6.0)).hover(|s|s.bg(theme().muted))
                         .child(view().flex_row().items_center().gap(px(6.0))
                             .child(text(move||source().map_or_else(String::new,|s|s.name)).number_of_lines(1).text_size(px(14.0)).text_color(move||theme().foreground).flex_1().min_w(px(0.0)))
-                            .child(when(move||source().is_some_and(|s|s.verification.is_some()),move||text(move||source().map_or_else(String::new,|s|verification_label(&s))).number_of_lines(1).text_size(px(11.0)).text_color(move||theme().foreground).px(px(5.0)).py(px(2.0)).rounded(px(4.0)).bg(move||theme().muted))))
+                            .child(verification_badge(source)))
                         .child(caption(move||source().map_or_else(String::new,|s|if s.installed{tr!("Added").into()}else if s.can_install{if s.capabilities.is_empty(){s.description}else{capabilities(&s)}}else{tr!("This type is not supported yet").into()})))
                 }).flex_1().min_h(px(0.0)).estimated_item_size(px(70.0)).label(tr!("Music source list")))
         }))
@@ -714,10 +749,10 @@ pub fn sources_view(
             scroll().flex_1().min_h(px(0.0)).child(view().gap(px(10.0)).pb(px(12.0))
                 .child(view().flex_row().items_center().gap(px(9.0))
                     .child(crate::controls::source_badge(move||this.selected.with(|s|s.as_ref().map_or_else(String::new,|s|s.id.clone()))))
-                    .child(text(move||this.selected.with(|s|s.as_ref().map_or_else(String::new,|s|crate::controls::source_name(&s.id,&s.name)))).number_of_lines(2).text_size(px(19.0)).font_weight(FontWeight::SEMIBOLD).text_color(move||theme().foreground)))
+                    .child(text(move||this.selected.with(|s|s.as_ref().map_or_else(String::new,|s|crate::controls::source_name(&s.id,&s.name)))).number_of_lines(2).min_w(px(0.0)).text_size(px(19.0)).font_weight(FontWeight::SEMIBOLD).text_color(move||theme().foreground))
+                    .child(verification_badge(move||this.selected.get())))
                 .child(when(move||this.managing.get()||this.selected.with(|s|s.as_ref().is_some_and(|s|!s.installed)),move||caption(move||this.selected.with(|s|s.as_ref().map_or_else(String::new,|s|format!("{} · {}",s.version,capabilities(s)))))))
                 .child(view().gap(px(4.0))
-                    .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.verification.is_some())),move||text(move||this.selected.with(|s|s.as_ref().map_or_else(String::new,verification_label))).text_size(px(12.0)).font_weight(FontWeight::SEMIBOLD).text_color(move||theme().foreground)))
                     .child(each(move||this.selected.with(|s|s.as_ref().map_or_else(Vec::new,verification_details)),Clone::clone,move|line,_|caption(move||line.get()))))
                 .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|!s.description.is_empty())),move||caption(move||this.selected.with(|s|s.as_ref().map_or_else(String::new,|s|s.description.clone())))))
                 .child(each(move||this.selected.with(|s|s.as_ref().map_or_else(Vec::new,|s|s.notes.clone())),Clone::clone,move|note,_|caption(move||note.get())))
