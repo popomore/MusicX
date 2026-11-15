@@ -261,7 +261,7 @@ impl Session {
                         cache.at = Instant::now();
                         Ok(())
                     }),
-                    None => Ok(()),
+                    None => continue,
                     Some(Command::Stop) => unreachable!(),
                 };
                 let ok = result.is_ok();
@@ -515,6 +515,11 @@ mod tests {
         );
         session.start(true, 0.0).unwrap();
         wait(|| session.snapshot().error.is_some());
+        std::thread::sleep(Duration::from_millis(2200));
+        assert!(
+            session.snapshot().error.is_some(),
+            "an idle timeout without a provider call cannot recover a failed start"
+        );
         session.play();
         wait(|| session.snapshot().playing && session.snapshot().error.is_none());
         assert_eq!(attempts.load(Ordering::Relaxed), 2);
