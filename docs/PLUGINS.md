@@ -4,7 +4,7 @@ MusicX hosts a subset of the [MyGo Music plugin contract](https://github.com/ego
 
 ## Supported capabilities
 
-Capabilities come from the installed script's exports. A service may require an account, subscription, or configuration even when its plugin exposes the corresponding function.
+MusicX capabilities are defined by the Rust source contract and implemented by the MyGo adapter. Script exports describe available adapter inputs; runtime compatibility does not automatically expose features in the UI or MCP. A service may also require an account, subscription or configuration.
 
 | MyGo exports | MusicX behavior |
 | --- | --- |
@@ -107,9 +107,9 @@ Normal calls use a fresh 64 MiB QuickJS runtime with an 18-second deadline; sign
 
 `host_capabilities` is the supported subset of declared exports. `action=page` returns normalized native `SourcePage` results for `home`, `browse`, `stations`, `stationNext` and `playlist`; nested playlist envelopes and both radio response shapes preserve track identity and second-based timing. `SourcePage.station` starts a radio queue that refills automatically, retries unavailable candidates, and cancels stale requests after user controls or queue changes.
 
-`action=invoke` accepts a public `method` and a `params` object. It supports suggestions, likes, collections, subscriptions, played reporting, comments, playlist edits and remote device selection. Internal helper exports are denied. Cloud writes and reporting are explicit; local hearts, local history and local playlists do not automatically write back. Comments and cloud edits currently use MCP rather than a dedicated native editor.
+The generic `action=invoke` bridge has been removed. Native recommendations, browsing and radio use normalized Rust pages; the existing MCP source-management and import actions are selected independently. Cloud writes, comments, device control, arbitrary script exports and helper/network authorization are not added as MCP actions. Personal music information is viewed independently and imported on demand; current imports cover playlists, liked tracks and recent tracks. Local album, artist-follow and subscription models remain future work.
 
-Remote playback controls the source's selected device through background RPC. Initial volume is applied before playback when the source supports it. Unsupported optional seek/volume controls preserve playback; failed startup retries the selected track. The device and provider still determine account, subscription and playback availability.
+All MusicX playback follows `DataSource -> Media -> Rust player -> AVPlayer`. A source that only controls another device does not provide playable media. When a MyGo source exports `stream`, the adapter uses that audio even if its manifest also declares remote control. On macOS, Spotify's native Rust acquisition adapter can reuse the authorization from a successful account read, decode through a PCM-only librespot sink, and return an owned WAV to AVPlayer. It never invokes plugin `remotePlay` or writes a cloud queue. Third-party scripts and manifests remain unchanged. The built-in decoder enables no audio-device backend, sends credentials through private stdin, uses no disk token cache, and bounds acquisition to 120 seconds and 256 MiB with two concurrent tasks. Acquisition completes before native playback; incremental playback is not implemented. Real Spotify account acquisition remains unverified and does not grant a trust badge.
 
 Sources with wildcard network declarations default to declared public domains plus exact HTTP(S) origins explicitly saved as server settings. Defaults shipped in a package do not grant server access. Explicit unrestricted-network and external-program permissions require `expected_fingerprint` from the descriptor's current `permission_fingerprint`; stale approval is rejected. Installation swaps, helper launch and revocation use the same permission lock. Content or version changes invalidate permission. Trust never grants it.
 
@@ -120,7 +120,7 @@ Packages are limited to 32 MiB and 4,096 ZIP entries, with 64 MiB per asset and 
 | Remaining difference | Boundary |
 | --- | --- |
 | Plugin custom account/sidebar renderer | Native shared pages cover navigation, tracks, collections and radio, rather than arbitrary provider UI. |
-| Suggestions and cloud editing UI | Public MCP methods are available; native autocomplete/comment/playlist editors are not added. |
+| Cloud editing and device control | Runtime compatibility does not expose these as MusicX UI or MCP features. |
 | Background hooks, detached services and persistent module globals | Fresh VM per call; foreground helpers may live through a media lease. |
 | npm/Node/external modules | Single-file JavaScript/TypeScript entries only. |
 | Local ZIP picker and install URL scheme | GitHub packages and local-directory CLI remain the installation paths. |

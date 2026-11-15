@@ -164,8 +164,14 @@ pub(crate) fn owned_file(plugin: &str, url: &url::Url) -> Option<std::path::Path
 /// A helper can reuse its cache filename on the next call; each loaded item gets a copy.
 pub(crate) struct AudioFile(std::path::PathBuf);
 impl AudioFile {
-    pub(crate) fn copy(path: &Path) -> Result<std::sync::Arc<Self>> {
+    pub(crate) fn create(extension: &str) -> Result<(std::sync::Arc<Self>, fs::File)> {
         use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+        ensure!(
+            !extension.is_empty()
+                && extension.len() <= 16
+                && extension.bytes().all(|b| b.is_ascii_alphanumeric()),
+            tr!("Invalid audio URL")
+        );
         let dir = musicx_core::storage::state_dir()?.join("generated-audio");
         std::fs::DirBuilder::new()
             .recursive(true)
@@ -178,17 +184,25 @@ impl AudioFile {
         let target = dir.join(format!(
             "{}.{}",
             musicx_core::storage::random_hex::<16>(),
-            path.extension()
-                .and_then(|p| p.to_str())
-                .filter(|s| s.len() <= 16 && s.bytes().all(|b| b.is_ascii_alphanumeric()))
-                .unwrap_or("audio")
+            extension
         ));
         let file = std::sync::Arc::new(Self(target));
-        let mut output = fs::OpenOptions::new()
+        let output = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .mode(0o600)
             .open(&file.0)?;
+        Ok((file, output))
+    }
+    pub(crate) fn copy(path: &Path) -> Result<std::sync::Arc<Self>> {
+        let extension = path
+            .extension()
+            .and_then(|p| p.to_str())
+            .filter(|s| {
+                !s.is_empty() && s.len() <= 16 && s.bytes().all(|b| b.is_ascii_alphanumeric())
+            })
+            .unwrap_or("audio");
+        let (file, mut output) = Self::create(extension)?;
         let mut input = fs::File::open(path)?.take(256 * 1024 * 1024 + 1);
         let size = std::io::copy(&mut input, &mut output)?;
         ensure!(

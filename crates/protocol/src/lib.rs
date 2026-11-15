@@ -689,12 +689,6 @@ pub enum MusicSourceAction {
         #[serde(default)]
         expected_fingerprint: Option<String>,
     },
-    Invoke {
-        source: String,
-        method: String,
-        #[serde(default)]
-        params: serde_json::Value,
-    },
     List,
     AutoUpdateSettings,
     SetAutoUpdate {

@@ -483,11 +483,12 @@ fn source_descriptor(
             })
         })
         .collect();
-    let mut notes = if m.playback == "remote" {
-        vec![
-            tr!("Audio plays on the source's selected device").into(),
-            tr!("Open the music app on the device you want to control").into(),
-        ]
+    let mut notes = if m.playback == "remote" && !exports.iter().any(|c| c == "stream") {
+        vec![if crate::native_audio::supports(&m.id) {
+            tr!("MusicX acquires the source audio and plays it with the system player").into()
+        } else {
+            tr!("This source provides device controls but no audio for MusicX playback").into()
+        }]
     } else {
         Vec::new()
     };
@@ -497,8 +498,9 @@ fn source_descriptor(
     if !process_programs.is_empty() {
         notes.push(tr!("Helpers must run in the foreground without detaching. Detached daemons are not supported or stopped by revoking permission.").into());
     }
-    if m.playback == "remote" && !exports.iter().any(|c| c == "remoteVolume") {
-        notes.push(tr!("This source cannot control the device volume").into());
+    let mut host_capabilities = crate::capabilities::supported(&exports);
+    if m.playback == "remote" && crate::native_audio::supports(&m.id) {
+        host_capabilities.push("stream".into());
     }
     let verification = if installed {
         crate::trust::installed(&m)
@@ -559,7 +561,7 @@ fn source_descriptor(
         installed,
         can_install: !installed && limit.is_none(),
         limitation: limit,
-        host_capabilities: crate::capabilities::supported(&exports),
+        host_capabilities,
         process_programs,
         process_granted,
         network_unrestricted,
@@ -1287,11 +1289,6 @@ pub fn execute(input: MusicSourceAction) -> Result<Value> {
             drop(guard);
             serde_json::to_value(get_source(&source)?)?
         }
-        MusicSourceAction::Invoke {
-            source,
-            method,
-            params,
-        } => crate::capabilities::invoke(&source, &method, params)?,
         MusicSourceAction::List => serde_json::to_value(list()?)?,
         MusicSourceAction::AutoUpdateSettings => {
             serde_json::to_value(crate::plugin_updates::settings()?)?

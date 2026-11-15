@@ -9,6 +9,7 @@ mod installation;
 mod localization;
 pub mod music_sources;
 pub mod mygo;
+mod native_audio;
 mod network;
 mod oauth;
 mod permissions;
@@ -16,7 +17,6 @@ mod plugin_files;
 pub mod plugin_updates;
 mod process;
 mod quality;
-mod remote_playback;
 mod repository;
 mod requests;
 mod script;
@@ -32,6 +32,8 @@ use musicx_plugin_api::{DataSource, Media};
 use protocol::{AlbumPage, LocalLibraryAction, Quality, Track, TrackInfo};
 use serde_json::Value;
 
+#[cfg(target_os = "macos")]
+pub use native_audio::{configure as configure_audio_decoder, worker as decode_audio};
 pub use web_auth::configure as configure_web_auth;
 
 pub struct MyGo;
@@ -40,12 +42,6 @@ pub static MYGO: MyGo = MyGo;
 impl DataSource for MyGo {
     fn station_next(&self, source: &str, id: &str) -> Result<Vec<Track>> {
         Ok(discovery::page(source, "stationNext", serde_json::json!({"id":id}))?.tracks)
-    }
-    fn remote(
-        &self,
-        track: &Track,
-    ) -> Option<std::sync::Arc<dyn musicx_plugin_api::RemotePlayback>> {
-        remote_playback::for_track(track)
     }
     fn artwork(&self, value: &str) -> Option<Vec<u8>> {
         let url = url::Url::parse(value).ok()?;

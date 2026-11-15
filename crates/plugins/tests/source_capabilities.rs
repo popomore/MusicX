@@ -4,7 +4,7 @@ use serde_json::json;
 use std::{fs, process::Command};
 
 #[test]
-fn public_source_actions_preserve_identity_and_require_explicit_writes() {
+fn native_pages_preserve_identity_without_exposing_script_exports() {
     if std::env::var_os("MUSICX_CAPABILITY_CHILD").is_none() {
         let root = std::env::temp_dir().join(format!(
             "musicx-capability-{}-{}",
@@ -17,7 +17,7 @@ fn public_source_actions_preserve_identity_and_require_explicit_writes() {
         let output = Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
-                "public_source_actions_preserve_identity_and_require_explicit_writes",
+                "native_pages_preserve_identity_without_exposing_script_exports",
                 "--nocapture",
             ])
             .env("MUSICX_CAPABILITY_CHILD", "1")
@@ -54,7 +54,7 @@ export function stream(){return {url:'https://example.com/song.mp3'}}
 "#).unwrap();
     mygo::install(&fixture).unwrap();
     let call = |method: &str, params| {
-        music_sources::execute(MusicSourceAction::Invoke {
+        music_sources::execute(MusicSourceAction::Page {
             source: "mygo:capability.fixture".into(),
             method: method.into(),
             params,
@@ -99,51 +99,34 @@ export function stream(){return {url:'https://example.com/song.mp3'}}
         "capability.fixture"
     );
     let page = call("home", json!({})).unwrap();
-    let track = &page["sections"][0]["tracks"][0];
+    let track = &page["tracks"][0];
     assert_eq!(
         track["source"],
         json!({"plugin":"capability.fixture","id":"opaque:one"})
     );
     assert_eq!(track["duration"], 42.0);
-    assert_eq!(track["unavailable"], true);
-    assert_eq!(
-        page["sections"][1]["playlists"][0]["tracks"][0]["source"],
-        track["source"]
-    );
+    // Pages expose the Rust Track contract, not arbitrary script properties.
+    assert!(track.get("unavailable").is_none());
+    for method in ["qqReadSession", "createPlaylist", "remoteUse", "comments"] {
+        assert!(
+            call(
+                method,
+                json!({"name":"No cloud writes", "deviceId":"device"})
+            )
+            .is_err()
+        );
+        assert!(serde_json::from_value::<MusicSourceAction>(json!({"action":"invoke","source":"mygo:capability.fixture","method":method,"params":{}})).is_err());
+    }
     assert_eq!(
         mygo::invoke("capability.fixture", "inspect", json!({})).unwrap(),
         0
-    );
-    assert!(call("qqReadSession", json!({})).is_err());
-    assert!(call("createPlaylist", json!({})).is_err());
-    assert_eq!(
-        mygo::invoke("capability.fixture", "inspect", json!({})).unwrap(),
-        0
-    );
-    let created = call("createPlaylist", json!({"name":"Explicit cloud action"})).unwrap();
-    assert_eq!(created["id"], "created");
-    assert_eq!(created["tracks"][0]["source"], track["source"]);
-    assert_eq!(
-        mygo::invoke("capability.fixture", "inspect", json!({})).unwrap(),
-        1
-    );
-    assert_eq!(
-        call("stationNext", json!({"id":"fm"})).unwrap()[0]["source"],
-        track["source"]
     );
     assert!(call("browse", json!({"page":""})).is_err());
-    assert!(call("comments", json!({"trackId":"id","offset":-1})).is_err());
-    assert_eq!(
-        call("comments", json!({"trackId":"id","offset":0})).unwrap()["comments"][0]["text"],
-        "hello"
-    );
-    assert!(
-        !music_sources::get_source("mygo:capability.fixture")
-            .unwrap()
-            .host_capabilities
-            .iter()
-            .any(|c| c == "qqReadSession")
-    );
+    let source = music_sources::get_source("mygo:capability.fixture").unwrap();
+    assert!(!source.host_capabilities.iter().any(|c| matches!(
+        c.as_str(),
+        "qqReadSession" | "createPlaylist" | "remoteUse" | "comments"
+    )));
     let manifest_path = root.join("state/mygo-plugins/capability.fixture/plugin.json");
     let mut manifest: serde_json::Value =
         serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();

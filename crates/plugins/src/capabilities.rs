@@ -1,36 +1,10 @@
-//! Explicit public MyGo actions. Internal helper exports are never RPC endpoints.
+//! Internal MyGo adapter operations for native MusicX pages, never raw RPC endpoints.
 use crate::{music_sources, mygo};
 use anyhow::{Context, Result, ensure};
 use musicx_core::protocol::tr;
 use serde_json::{Value, json};
 
-pub(crate) const ACTIONS: &[&str] = &[
-    "home",
-    "browse",
-    "suggest",
-    "isLiked",
-    "like",
-    "likeEpisode",
-    "played",
-    "savedAlbums",
-    "saveAlbum",
-    "followArtist",
-    "savePlaylist",
-    "subscribeShow",
-    "stations",
-    "stationNext",
-    "comments",
-    "likeComment",
-    "postComment",
-    "createPlaylist",
-    "renamePlaylist",
-    "deletePlaylist",
-    "addToPlaylist",
-    "removeFromPlaylist",
-    "movePlaylistTrack",
-    "remoteDevices",
-    "remoteUse",
-];
+const ACTIONS: &[&str] = &["home", "browse", "stations", "stationNext"];
 
 pub(crate) fn supported(exports: &[String]) -> Vec<String> {
     let mut result: Vec<_> = exports
@@ -54,12 +28,6 @@ pub(crate) fn supported(exports: &[String]) -> Vec<String> {
                         | "recent"
                         | "shows"
                         | "show"
-                        | "remotePlay"
-                        | "remotePause"
-                        | "remoteResume"
-                        | "remoteSeek"
-                        | "remoteVolume"
-                        | "remoteState"
                 )
         })
         .cloned()
@@ -79,20 +47,6 @@ fn text<'a>(params: &'a Value, key: &str, limit: usize) -> Result<&'a str> {
     );
     Ok(value)
 }
-fn list(params: &Value, key: &str) -> Result<()> {
-    let rows = params[key]
-        .as_array()
-        .context(tr!("Invalid source capability parameters"))?;
-    ensure!(
-        !rows.is_empty()
-            && rows.len() <= 1000
-            && rows
-                .iter()
-                .all(|v| v.as_str().is_some_and(|s| !s.is_empty() && s.len() <= 512)),
-        tr!("Invalid source capability parameters")
-    );
-    Ok(())
-}
 fn validate(method: &str, params: &Value) -> Result<()> {
     ensure!(
         params.is_object() && serde_json::to_vec(params)?.len() <= 256 * 1024,
@@ -102,58 +56,8 @@ fn validate(method: &str, params: &Value) -> Result<()> {
         "browse" => {
             text(params, "page", 1024)?;
         }
-        "remoteUse" => {
-            text(params, "deviceId", 512)?;
-        }
-        "suggest" => {
-            text(params, "query", 120)?;
-        }
-        "isLiked" => list(params, "ids")?,
-        "like" | "likeEpisode" | "saveAlbum" | "followArtist" | "savePlaylist"
-        | "subscribeShow" => {
+        "stationNext" => {
             text(params, "id", 512)?;
-            ensure!(
-                params["on"].is_boolean(),
-                tr!("Invalid source capability parameters")
-            );
-        }
-        "stationNext" | "played" | "deletePlaylist" => {
-            text(params, "id", 512)?;
-        }
-        "createPlaylist" => {
-            text(params, "name", 512)?;
-        }
-        "renamePlaylist" => {
-            text(params, "id", 512)?;
-            text(params, "name", 512)?;
-        }
-        "addToPlaylist" | "removeFromPlaylist" => {
-            text(params, "id", 512)?;
-            list(params, "trackIds")?;
-        }
-        "movePlaylistTrack" => {
-            text(params, "id", 512)?;
-            for key in ["from", "to"] {
-                ensure!(
-                    params[key].as_u64().is_some_and(|v| v < 10000),
-                    tr!("Invalid source capability parameters")
-                );
-            }
-        }
-        "comments" => {
-            text(params, "trackId", 512)?;
-        }
-        "likeComment" => {
-            text(params, "trackId", 512)?;
-            text(params, "commentId", 512)?;
-            ensure!(
-                params["on"].is_boolean(),
-                tr!("Invalid source capability parameters")
-            );
-        }
-        "postComment" => {
-            text(params, "trackId", 512)?;
-            text(params, "text", 20000)?;
         }
         _ => {}
     }

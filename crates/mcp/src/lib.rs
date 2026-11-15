@@ -432,8 +432,6 @@ struct SourceInput {
     #[serde(skip_serializing_if = "Option::is_none")]
     enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    expected_fingerprint: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     repository: Option<String>,
@@ -445,8 +443,6 @@ struct SourceInput {
     playlist_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     method: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    params: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -508,7 +504,7 @@ impl PlayerTools {
 #[tool_router]
 impl PlayerTools {
     #[tool(
-        description = "Manage music sources: list/catalog/catalog_view/refresh_catalog/get/install/check_update/update/uninstall/configure/account/sign_in/poll/cancel/sign_out/playlists/import_playlist/import_liked/import_recent/artist/album/shows/show/auto_update_settings/set_auto_update. Sources use mygo:ID; install accepts owner/repo or a GitHub URL. Source descriptors include host_capabilities and version-bound verification. action=page returns a normalized native page for home, browse, stations, stationNext or playlist; invoke returns the original public structure. set_process_permission and set_network_permission require enabled, the current descriptor permission_fingerprint as expected_fingerprint when enabling, and explicit user authorization for the named source and version; verified trust never grants these permissions. action=invoke calls a public MyGo method with method and a params object: home, browse, suggest, stations, stationNext, comments, isLiked, savedAlbums, remoteDevices, remoteUse; explicit cloud edits include like, likeEpisode, saveAlbum, followArtist, savePlaylist, subscribeShow, likeComment, postComment, createPlaylist, renamePlaylist, deletePlaylist, addToPlaylist, removeFromPlaylist, movePlaylistTrack, played. Use the exact source-provided IDs and camelCase MyGo parameter names. Returned tracks retain source identity and use seconds. Perform cloud writes only when the user requests them; local hearts and local playlist edits remain local. QR/web/OAuth login uses sign_in and job polling. Imports create local snapshots."
+        description = "Manage MusicX sources: list/catalog/catalog_view/refresh_catalog/get/install/check_update/update/uninstall/configure/account/sign_in/poll/cancel/sign_out/playlists/import_playlist/import_liked/import_recent/artist/album/shows/show/auto_update_settings/set_auto_update. Sources use mygo:ID; install accepts owner/repo or a GitHub URL. Imports create independent local snapshots. Source descriptors include MusicX host capabilities and version-bound functional verification. method is only a sign-in choice: qr, web or oauth. Login uses sign_in and job polling. Runtime compatibility does not expose arbitrary plugin exports, cloud edits, device control or helper permissions through this tool."
     )]
     async fn manage_music_sources(
         &self,
@@ -517,6 +513,14 @@ impl PlayerTools {
         let action: protocol::MusicSourceAction =
             serde_json::from_value(serde_json::to_value(input).map_err(tool_error)?)
                 .map_err(|_| tool_error(tr!("Invalid source action parameters")))?;
+        if matches!(
+            action,
+            protocol::MusicSourceAction::Page { .. }
+                | protocol::MusicSourceAction::SetProcessPermission { .. }
+                | protocol::MusicSourceAction::SetNetworkPermission { .. }
+        ) {
+            return Err(tool_error(tr!("Invalid source action parameters")));
+        }
         blocking(move || music_sources::execute(action))
             .await
             .and_then(output)
@@ -902,6 +906,28 @@ mod tests {
             },
             source,
         )
+    }
+
+    #[tokio::test]
+    async fn runtime_exports_and_host_permissions_are_not_mcp_actions() {
+        let (tools, _) = fixture(no_submit, true);
+        for value in [
+            serde_json::json!({"action":"invoke","source":"mygo:fixture","method":"remoteUse","params":{"deviceId":"device"}}),
+            serde_json::json!({"action":"invoke","source":"mygo:fixture","method":"createPlaylist","params":{"name":"No cloud writes"}}),
+            serde_json::json!({"action":"page","source":"mygo:fixture","method":"home"}),
+            serde_json::json!({"action":"set_process_permission","source":"mygo:fixture","enabled":true}),
+            serde_json::json!({"action":"set_network_permission","source":"mygo:fixture","enabled":true}),
+        ] {
+            let input: SourceInput = serde_json::from_value(value).unwrap();
+            assert!(
+                tools
+                    .manage_music_sources(Parameters(input))
+                    .await
+                    .unwrap_err()
+                    .message
+                    .contains("Invalid source action parameters")
+            );
+        }
     }
 
     #[tokio::test]

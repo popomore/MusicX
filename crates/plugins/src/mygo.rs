@@ -233,10 +233,10 @@ pub(crate) fn fill_artwork(track: &mut Track) {
         &source.plugin,
         "search",
         json!({"query":query,"kind":"tracks","offset":0}),
-        None,
-        None,
-        None,
-        METADATA_TIMEOUT,
+        Invocation {
+            timeout: METADATA_TIMEOUT,
+            ..Default::default()
+        },
     ) else {
         return;
     };
@@ -787,6 +787,7 @@ pub(crate) fn fetch(
     input: &str,
     grants: &[String],
     deadline: Instant,
+    audio: Option<&crate::native_audio::Capture>,
 ) -> Result<Value> {
     let input: Fetch = serde_json::from_str(input)?;
     let url = Url::parse(&input.url)?;
@@ -813,6 +814,8 @@ pub(crate) fn fetch(
         ),
         tr!("Unsupported HTTP method")
     );
+    let credential =
+        audio.and_then(|_| crate::native_audio::Capture::candidate(&url, &method, &input.headers));
     let mut request = client
         .request(method, url)
         .timeout(remaining.min(Duration::from_secs(10)));
@@ -853,6 +856,9 @@ pub(crate) fn fetch(
         bytes.len() as u64 <= MAX_FETCH_BODY,
         tr!("Plugin response exceeds 8 MiB")
     );
+    if let Some(audio) = audio {
+        audio.accept(credential, status);
+    }
     use base64::Engine;
     let binary = std::str::from_utf8(&bytes)
         .is_err()
@@ -883,21 +889,44 @@ pub fn invoke(id: &str, export: &str, args: Value) -> Result<Value> {
     invoke_with_playback(id, export, args, None, None)
 }
 
-pub(crate) fn invoke_guarded(
-    id: &str,
-    export: &str,
-    args: Value,
-    current: impl FnOnce() -> bool,
-) -> Result<Value> {
+#[cfg(target_os = "macos")]
+pub(crate) fn audio_account(id: &str, capture: Arc<crate::native_audio::Capture>) -> Result<bool> {
     let _guard = PLUGIN_CALL
         .lock()
         .map_err(|_| anyhow!(tr!("Plugin runtime lock unavailable")))?;
-    ensure!(current(), tr!("This remote playback session has ended"));
     ensure!(
         !crate::music_sources::auth_active(id),
         tr!("This source is connecting an account; complete or cancel first")
     );
-    invoke_inner(id, export, args, None, None, None, Duration::from_secs(18))
+    let account = invoke_inner(
+        id,
+        "account",
+        json!({}),
+        Invocation {
+            audio: Some(capture),
+            ..Default::default()
+        },
+    )?;
+    Ok(!account.is_null())
+}
+
+struct Invocation {
+    login: Option<Arc<crate::music_sources::LoginJob>>,
+    playback: Option<Arc<Mutex<crate::ffmpeg::Playback>>>,
+    helpers: Option<Arc<crate::process::Runtime>>,
+    audio: Option<Arc<crate::native_audio::Capture>>,
+    timeout: Duration,
+}
+impl Default for Invocation {
+    fn default() -> Self {
+        Self {
+            login: None,
+            playback: None,
+            helpers: None,
+            audio: None,
+            timeout: Duration::from_secs(18),
+        }
+    }
 }
 
 fn invoke_with_playback(
@@ -918,10 +947,11 @@ fn invoke_with_playback(
         id,
         export,
         args,
-        None,
-        playback,
-        helpers,
-        Duration::from_secs(18),
+        Invocation {
+            playback,
+            helpers,
+            ..Default::default()
+        },
     )
 }
 
@@ -941,22 +971,22 @@ pub(crate) fn invoke_sign_in(
         id,
         "signIn",
         json!({"method":method}),
-        Some(job),
-        None,
-        None,
-        Duration::from_secs(300),
+        Invocation {
+            login: Some(job),
+            timeout: Duration::from_secs(300),
+            ..Default::default()
+        },
     )
 }
 
-fn invoke_inner(
-    id: &str,
-    export: &str,
-    args: Value,
-    login: Option<std::sync::Arc<crate::music_sources::LoginJob>>,
-    playback: Option<Arc<Mutex<crate::ffmpeg::Playback>>>,
-    helpers: Option<Arc<crate::process::Runtime>>,
-    timeout: Duration,
-) -> Result<Value> {
+fn invoke_inner(id: &str, export: &str, args: Value, invocation: Invocation) -> Result<Value> {
+    let Invocation {
+        login,
+        playback,
+        helpers,
+        audio,
+        timeout,
+    } = invocation;
     ensure!(valid_id(id), tr!("Invalid plugin ID"));
     let dir = plugin_root()?.join(id);
     let manifest = manifest(&dir).context(tr!("This MyGo plugin is not installed"))?;
@@ -1018,7 +1048,7 @@ fn invoke_inner(
     let context = JsContext::full(&rt)?;
     context.with(|ctx| {
         let global = ctx.globals();
-        let _requests=crate::requests::Bindings::install(&ctx,client.clone(),grants.clone(),deadline)?;
+        let _requests=crate::requests::Bindings::install(&ctx,client.clone(),grants.clone(),deadline,audio.clone())?;
         let _oauth = crate::oauth::Bindings::install(&ctx, login.clone(), grants.clone(), deadline)?;
         let web_job=login.clone();let web_grants=grants.clone();let web_name=manifest.name.clone();
         global.set("__webSignIn",Function::new(ctx.clone(),move|text:String|{
@@ -1125,7 +1155,7 @@ fn invoke_inner(
         global.set(
             "__fetch",
             Function::new(ctx.clone(), move |text: String| {
-                fetch(&client, &text, &grants, deadline)
+                fetch(&client, &text, &grants, deadline, audio.as_deref())
                     .unwrap_or_else(|error| json!({"error":error.to_string()}))
                     .to_string()
             })?,
@@ -1192,29 +1222,13 @@ pub fn resolve_with_quality(mut track: Track, quality: crate::protocol::Quality)
         .as_ref()
         .context(tr!("Plugin track identifier missing"))?;
     let info = crate::music_sources::get_source(&format!("mygo:{}", source.plugin))?;
-    if info.playback == "remote" {
+    if info.playback == "remote" && !info.capabilities.iter().any(|c| c == "stream") {
         if let Some(reason) = info.limitation {
             anyhow::bail!(reason);
         }
-        ensure!(
-            ["remotePlay", "remotePause", "remoteResume", "remoteState"]
-                .iter()
-                .all(|name| info.capabilities.iter().any(|c| c == name)),
-            tr!("This source does not provide remote playback controls")
-        );
-        return Ok(Media {
-            track,
-            url: Url::parse(&format!("{}://device", musicx_plugin_api::REMOTE_SCHEME))?,
-            uses_http: false,
-            user_agent: None,
-            quality: crate::protocol::AudioQuality {
-                requested: quality,
-                ..Default::default()
-            },
-            gain_db: None,
-            peak: None,
-            lease: None,
-        });
+        let mut media = crate::native_audio::resolve(track, quality)?;
+        fill_artwork(&mut media.track);
+        return Ok(media);
     }
     let playback = Arc::new(Mutex::new(crate::ffmpeg::Playback::default()));
     let helpers = crate::process::Runtime::new(&manifest(&plugin_root()?.join(&source.plugin))?)?;

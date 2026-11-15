@@ -72,6 +72,7 @@ impl Bindings {
         client: reqwest::blocking::Client,
         grants: Vec<String>,
         deadline: Instant,
+        audio: Option<Arc<crate::native_audio::Capture>>,
     ) -> rquickjs::Result<Self> {
         let cancelled = Arc::new(AtomicBool::new(false));
         let slots = Arc::new(Mutex::new((0u32, BTreeMap::<u32, Pending>::new())));
@@ -93,12 +94,13 @@ impl Bindings {
                 let aborted = Arc::new(AtomicBool::new(false));
                 let client = client.clone();
                 let grants = grants.clone();
+                let audio = audio.clone();
                 let task = Task {
                     slot: slot.clone(),
                     cancelled: cancellation.clone(),
                     aborted: aborted.clone(),
                     work: Box::new(move || {
-                        crate::mygo::fetch(&client, &input, &grants, deadline)
+                        crate::mygo::fetch(&client, &input, &grants, deadline, audio.as_deref())
                             .unwrap_or_else(|error| json!({"error":error.to_string()}))
                             .to_string()
                     }),

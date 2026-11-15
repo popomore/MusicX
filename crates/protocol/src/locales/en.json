@@ -762,5 +762,17 @@
   "Helpers must run in the foreground without detaching. Detached daemons are not supported or stopped by revoking permission.": "Helpers must run in the foreground without detaching. Detached daemons are not supported or stopped by revoking permission.",
   "This source cannot control the device volume": "This source cannot control the device volume",
   "Trust covers the listed functional checks, not a security audit or platform certification": "Trust covers the listed functional checks, not a security audit or platform certification",
-  "Source program permissions changed; try playback again": "Source program permissions changed; try playback again"
+  "Source program permissions changed; try playback again": "Source program permissions changed; try playback again",
+  "The source did not provide audio for MusicX playback": "The source did not provide audio for MusicX playback",
+  "The source could not provide audio for MusicX playback": "The source could not provide audio for MusicX playback",
+  "Connect this source account before playing": "Connect this source account before playing",
+  "The MusicX audio decoder is unavailable": "The MusicX audio decoder is unavailable",
+  "The MusicX audio decoder is already configured": "The MusicX audio decoder is already configured",
+  "This source track cannot be decoded by MusicX": "This source track cannot be decoded by MusicX",
+  "Too many audio requests; try again": "Too many audio requests; try again",
+  "Audio acquisition timed out": "Audio acquisition timed out",
+  "The source returned incomplete audio": "The source returned incomplete audio",
+  "MusicX acquires the source audio and plays it with the system player": "MusicX acquires the source audio and plays it with the system player",
+  "This source provides device controls but no audio for MusicX playback": "This source provides device controls but no audio for MusicX playback",
+  "This source account does not provide native audio access": "This source account does not provide native audio access"
 }

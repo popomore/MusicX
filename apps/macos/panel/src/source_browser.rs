@@ -539,7 +539,6 @@ fn capabilities(source: &MusicSource) -> String {
     [
         ("search", tr!("Search")),
         ("stream", tr!("Play")),
-        ("remotePlay", tr!("Remote playback")),
         ("home", tr!("Recommendations")),
         ("browse", tr!("Browse")),
         ("stations", tr!("Radio")),
