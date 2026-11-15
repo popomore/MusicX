@@ -36,6 +36,15 @@ struct PcmSink {
     output: Arc<Output>,
 }
 
+#[derive(Debug)]
+struct AudioAuthorization;
+impl std::fmt::Display for AudioAuthorization {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Audio authorization failed")
+    }
+}
+impl std::error::Error for AudioAuthorization {}
+
 fn complete_audio(bytes: u64, duration_ms: u32) -> bool {
     let expected = u64::from(duration_ms);
     let decoded = bytes * 1000 / 176_400;
@@ -83,7 +92,17 @@ async fn decode(request: &Request, file: File) -> Result<()> {
     // No disk token/audio cache and no credential-saving flag.
     session
         .connect(Credentials::with_access_token(&request.access), false)
-        .await?;
+        .await
+        .map_err(|error| -> anyhow::Error {
+            if matches!(
+                error.kind,
+                librespot_core::error::ErrorKind::Unauthenticated
+            ) {
+                AudioAuthorization.into()
+            } else {
+                error.into()
+            }
+        })?;
     let output = Arc::new(Output::default());
     let sink_output = output.clone();
     let player = Player::new(
@@ -163,10 +182,10 @@ pub fn worker() -> ExitCode {
         })?;
         Ok(())
     })();
-    if result.is_ok() {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::FAILURE
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) if error.downcast_ref::<AudioAuthorization>().is_some() => ExitCode::from(2),
+        Err(_) => ExitCode::FAILURE,
     }
 }
 

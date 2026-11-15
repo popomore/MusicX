@@ -513,11 +513,35 @@ impl PlayerTools {
         let action: protocol::MusicSourceAction =
             serde_json::from_value(serde_json::to_value(input).map_err(tool_error)?)
                 .map_err(|_| tool_error(tr!("Invalid source action parameters")))?;
-        if matches!(
+        // Product selection is explicit: future Rust/adapter operations do not
+        // automatically become MCP tools merely by being added to the protocol.
+        if !matches!(
             action,
-            protocol::MusicSourceAction::Page { .. }
-                | protocol::MusicSourceAction::SetProcessPermission { .. }
-                | protocol::MusicSourceAction::SetNetworkPermission { .. }
+            protocol::MusicSourceAction::List
+                | protocol::MusicSourceAction::AutoUpdateSettings
+                | protocol::MusicSourceAction::SetAutoUpdate { .. }
+                | protocol::MusicSourceAction::Catalog
+                | protocol::MusicSourceAction::CatalogView
+                | protocol::MusicSourceAction::RefreshCatalog
+                | protocol::MusicSourceAction::Get { .. }
+                | protocol::MusicSourceAction::Install { .. }
+                | protocol::MusicSourceAction::CheckUpdate { .. }
+                | protocol::MusicSourceAction::Update { .. }
+                | protocol::MusicSourceAction::Uninstall { .. }
+                | protocol::MusicSourceAction::Configure { .. }
+                | protocol::MusicSourceAction::Account { .. }
+                | protocol::MusicSourceAction::SignIn { .. }
+                | protocol::MusicSourceAction::Poll { .. }
+                | protocol::MusicSourceAction::Cancel { .. }
+                | protocol::MusicSourceAction::SignOut { .. }
+                | protocol::MusicSourceAction::Playlists { .. }
+                | protocol::MusicSourceAction::ImportLiked { .. }
+                | protocol::MusicSourceAction::ImportRecent { .. }
+                | protocol::MusicSourceAction::ImportPlaylist { .. }
+                | protocol::MusicSourceAction::Artist { .. }
+                | protocol::MusicSourceAction::Album { .. }
+                | protocol::MusicSourceAction::Shows { .. }
+                | protocol::MusicSourceAction::Show { .. }
         ) {
             return Err(tool_error(tr!("Invalid source action parameters")));
         }

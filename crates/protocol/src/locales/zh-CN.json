@@ -774,5 +774,6 @@
   "The source returned incomplete audio": "来源返回的音频不完整",
   "MusicX acquires the source audio and plays it with the system player": "MusicX 获取来源音频并交给系统播放器播放",
   "This source provides device controls but no audio for MusicX playback": "此来源提供设备遥控，但未提供可由 MusicX 播放的音频",
-  "This source account does not provide native audio access": "此来源账号未提供本机播放所需的音频授权"
+  "This source account does not provide native audio access": "此来源账号未提供本机播放所需的音频授权",
+  "Reconnect this source and approve audio playback access": "请重新连接此来源并允许音频播放授权"
 }

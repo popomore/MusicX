@@ -774,5 +774,6 @@
   "The source returned incomplete audio": "The source returned incomplete audio",
   "MusicX acquires the source audio and plays it with the system player": "MusicX acquires the source audio and plays it with the system player",
   "This source provides device controls but no audio for MusicX playback": "This source provides device controls but no audio for MusicX playback",
-  "This source account does not provide native audio access": "This source account does not provide native audio access"
+  "This source account does not provide native audio access": "This source account does not provide native audio access",
+  "Reconnect this source and approve audio playback access": "Reconnect this source and approve audio playback access"
 }

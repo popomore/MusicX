@@ -1049,7 +1049,7 @@ fn invoke_inner(id: &str, export: &str, args: Value, invocation: Invocation) -> 
     context.with(|ctx| {
         let global = ctx.globals();
         let _requests=crate::requests::Bindings::install(&ctx,client.clone(),grants.clone(),deadline,audio.clone())?;
-        let _oauth = crate::oauth::Bindings::install(&ctx, login.clone(), grants.clone(), deadline)?;
+        let _oauth = crate::oauth::Bindings::install(&ctx, id, login.clone(), grants.clone(), deadline)?;
         let web_job=login.clone();let web_grants=grants.clone();let web_name=manifest.name.clone();
         global.set("__webSignIn",Function::new(ctx.clone(),move|text:String|{
             let result=(||->Result<Value>{

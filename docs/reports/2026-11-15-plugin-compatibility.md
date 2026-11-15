@@ -8,11 +8,11 @@
 
 按用户确认，MusicX 的功能由 Rust 插件契约定义，MyGo 适配器实现；注入 `host.*` 和公共 Web API 只表示运行时兼容。下方 74/75 的数字是安装与脚本检查结果，不表示 74 个来源均可由 MusicX 播放，也不自动授予 UI/MCP 能力。
 
-播放器统一使用 `DataSource -> Media -> Rust player -> AVPlayer`。已移除 `musicx-remote` 标记及来源托管播放器的旁路。只有设备控制、没有音频的来源不能冒充本机音源。Spotify 在 macOS 的 Rust 适配层复用插件成功账号读取时的授权，以禁用声卡后端的 librespot 库获取 PCM，生成私有有界 WAV，再交给现有 AVPlayer。此路径不调用插件 `remotePlay`、不创建云端临时歌单，不修改第三方脚本或 manifest。先完成有界音频获取再开始播放，单项上限 256 MiB、获取期限 120 秒；尚未实现增量播放。
+播放器统一使用 `DataSource -> Media -> Rust player -> AVPlayer`。已移除 `musicx-remote` 标记及来源托管播放器的旁路。只有设备控制、没有音频的来源不能冒充本机音源。Spotify 在 macOS 的 Rust 适配层复用插件成功账号读取时的授权，以禁用声卡后端的 librespot 库获取 PCM，生成私有有界 WAV，再交给现有 AVPlayer。此路径不调用插件 `remotePlay`、不创建云端临时歌单，不修改第三方脚本或 manifest。原插件的 OAuth scopes 不含取流要求的 `streaming`；Rust 宿主打开 Spotify 授权页时补充该 scope，保留原客户端、回调、state 和 PKCE，由 Spotify 展示并确认授权。已有账号需重新连接授权，账号读取成功不代表可取流（[上游要求](https://github.com/librespot-org/librespot/wiki/Options#access-token)）。先完成有界音频获取再开始播放，单项上限 256 MiB、获取期限 120 秒；尚未实现增量播放。
 
 通用 `invoke` 产品接口已移除。原生推荐/浏览/电台使用规范化的 Rust 页面；MCP 保留已有来源管理、账号和导入接口，不新增原始脚本方法、设备控制、云端写入或辅助程序授权入口。个人音乐信息按独立查看、按需导入的方向设计；当前已有歌单、喜欢歌曲和历史导入，收藏专辑、关注和订阅的独立本地模型仍需后续实现。
 
-本次交接回归：工作区 164 项测试与自定义原生组件检查通过（另 2 项显式开启测试未运行），严格 Clippy、格式、iOS locked metadata 和 47 项发布脚本测试通过。交接测试生成的三秒 PCM/WAV 已用真实静音 AVPlayer 验证 ready、进度、暂停、1.5 秒精确定位和结束通知；这不是 Spotify 服务取流或有声验收。第三方 Spotify QA 包的 4 个文件 SHA256 前后一致。另修复 manifest 损坏或丢失时的卸载/撤权清理，回归先失败后通过，保留的辅助程序被终止、两类授权文件被清理。
+本次交接回归：工作区 165 项测试与自定义原生组件检查通过（另 2 项显式开启测试未运行），严格 Clippy、格式、iOS locked metadata 和 47 项发布脚本测试通过。交接测试生成的三秒 PCM/WAV 已用真实静音 AVPlayer 验证 ready、进度、暂停、1.5 秒精确定位和结束通知；这不是 Spotify 服务取流或有声验收。第三方 Spotify QA 包的 4 个文件 SHA256 前后一致。另修复 manifest 损坏或丢失时的卸载/撤权清理，回归先失败后通过，保留的辅助程序被终止、两类授权文件被清理。
 
 新增原生音频交接的验证与真实账号验证分别记录；Spotify 尚无真实账号取流证据，保持未验证，不增加可信标识。原先记录的设备播放和远程控制测试是历史实现证据，已被此产品边界取代。
 

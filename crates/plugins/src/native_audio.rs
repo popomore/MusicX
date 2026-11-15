@@ -57,6 +57,42 @@ pub(crate) fn supports(id: &str) -> bool {
     cfg!(target_os = "macos") && id == "spotify"
 }
 
+/// Native acquisition needs streaming consent in addition to the unmodified
+/// plugin's Web API scopes. Spotify presents consent; identity and PKCE stay intact.
+pub(crate) fn authorization_url(id: &str, address: &url::Url) -> url::Url {
+    if !supports(id)
+        || address.scheme() != "https"
+        || address.host_str() != Some("accounts.spotify.com")
+        || address.port_or_known_default() != Some(443)
+        || !address.username().is_empty()
+        || address.password().is_some()
+        || address.path() != "/authorize"
+        || !address
+            .query_pairs()
+            .any(|(key, value)| key == "response_type" && value == "code")
+    {
+        return address.clone();
+    }
+    let mut pairs: Vec<(String, String)> = address
+        .query_pairs()
+        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+        .collect();
+    let mut scopes: Vec<String> = pairs
+        .iter()
+        .filter(|(key, _)| key == "scope")
+        .flat_map(|(_, value)| value.split_whitespace().map(str::to_owned))
+        .collect();
+    if scopes.iter().any(|s| s == "streaming") {
+        return address.clone();
+    }
+    scopes.push("streaming".into());
+    pairs.retain(|(key, _)| key != "scope");
+    pairs.push(("scope".into(), scopes.join(" ")));
+    let mut address = address.clone();
+    address.query_pairs_mut().clear().extend_pairs(pairs);
+    address
+}
+
 pub(crate) fn resolve(track: Track, quality: Quality) -> Result<Media> {
     let source = track
         .source
@@ -242,6 +278,10 @@ fn acquire(
         );
         if let Some(status) = child.0.try_wait()? {
             ensure!(
+                status.code() != Some(2),
+                tr!("Reconnect this source and approve audio playback access")
+            );
+            ensure!(
                 status.success(),
                 tr!("The source could not provide audio for MusicX playback")
             );
@@ -267,6 +307,39 @@ fn acquire(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn native_playback_scope_preserves_plugin_oauth_identity_and_pkce() {
+        let original: url::Url = "https://accounts.spotify.com/authorize?client_id=fixture&response_type=code&redirect_uri=http%3A%2F%2F127.0.0.1%3A43110%2Fcallback&state=a%2Bb&code_challenge=challenge&code_challenge_method=S256&scope=user-read-playback-state%20user-library-read".parse().unwrap();
+        let authorized = authorization_url("spotify", &original);
+        for (key, value) in original.query_pairs().filter(|(k, _)| k != "scope") {
+            assert_eq!(
+                authorized.query_pairs().find(|(k, _)| k == &key).unwrap().1,
+                value
+            );
+        }
+        let scope = authorized
+            .query_pairs()
+            .find(|(k, _)| k == "scope")
+            .unwrap()
+            .1
+            .into_owned();
+        assert_eq!(
+            scope,
+            "user-read-playback-state user-library-read streaming"
+        );
+        assert_eq!(authorization_url("spotify", &authorized), authorized);
+        assert_eq!(authorization_url("another-source", &original), original);
+        for address in [
+            "http://accounts.spotify.com/authorize?response_type=code",
+            "https://accounts.spotify.com.evil.test/authorize?response_type=code",
+            "https://accounts.spotify.com/api/token",
+            "https://accounts.spotify.com/authorize?response_type=token",
+        ] {
+            let address: url::Url = address.parse().unwrap();
+            assert_eq!(authorization_url("spotify", &address), address);
+        }
+    }
     #[test]
     fn credentials_are_scoped_to_a_successful_spotify_account_read() {
         let headers = std::collections::HashMap::from([(
@@ -372,10 +445,16 @@ mod tests {
             "sys.stdout.buffer.write(b'x')",
             "sys.stdout.buffer.write(b'x'*2048)",
             "time.sleep(10)",
+            "sys.exit(2)",
         ] {
             script(body);
             let started = std::time::Instant::now();
-            assert!(acquire(&program, &request, Duration::from_millis(150), 1024).is_err());
+            let error = acquire(&program, &request, Duration::from_millis(150), 1024)
+                .err()
+                .expect("failed acquisition");
+            if body == "sys.exit(2)" {
+                assert!(error.to_string().contains("Reconnect this source"));
+            }
             assert!(started.elapsed() < Duration::from_secs(2));
             assert_eq!(
                 fs::read_dir(root.join("generated-audio")).unwrap().count(),
