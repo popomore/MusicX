@@ -497,11 +497,18 @@ impl Model {
         self.play_action(Action::PlayList {
             tracks: page.tracks,
             index,
-            context: crate::protocol::QueueContext::SourceCollection {
-                source,
-                id: page.id,
-                name: page.title,
-            },
+            context: page
+                .station
+                .map(|station| crate::protocol::QueueContext::Station {
+                    source: station.source,
+                    id: station.id,
+                    name: station.name,
+                })
+                .unwrap_or_else(|| crate::protocol::QueueContext::SourceCollection {
+                    source,
+                    id: page.id,
+                    name: page.title,
+                }),
         });
     }
     #[cfg(target_os = "macos")]

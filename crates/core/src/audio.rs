@@ -1,5 +1,5 @@
 use anyhow::Result;
-use musicx_plugin_api::Media;
+use musicx_plugin::Media;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum AudioState {

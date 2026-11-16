@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 pub mod i18n;
+mod sources;
+pub use sources::*;
 mod update_channel;
 pub use update_channel::UpdateChannel;
 
@@ -172,22 +174,15 @@ impl Quality {
         match self {
             Self::Standard => "standard",
             Self::High => "high",
-            Self::Lossless | Self::Hires => "lossless",
+            Self::Lossless => "lossless",
+            Self::Hires => "hires",
         }
     }
     pub fn for_plugin(self) -> Self {
-        if self == Self::Hires {
-            Self::Lossless
-        } else {
-            self
-        }
+        self
     }
-    pub fn choices(plugin: bool) -> &'static [Self] {
-        if plugin {
-            &[Self::Standard, Self::High, Self::Lossless]
-        } else {
-            &[Self::Standard, Self::High, Self::Lossless, Self::Hires]
-        }
+    pub fn choices(_plugin: bool) -> &'static [Self] {
+        &[Self::Standard, Self::High, Self::Lossless, Self::Hires]
     }
 }
 impl std::str::FromStr for Quality {
@@ -342,6 +337,11 @@ pub enum UiAction {
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum QueueContext {
+    Station {
+        source: String,
+        id: String,
+        name: String,
+    },
     Album {
         id: String,
         name: String,
@@ -558,17 +558,59 @@ pub struct MusicSource {
     #[serde(default)]
     pub description: String,
     pub version: String,
+    #[serde(default)]
+    pub playback: String,
+    #[serde(default)]
+    pub notes: Vec<String>,
     pub repository: Option<String>,
     pub installed: bool,
     pub can_install: bool,
     pub limitation: Option<String>,
-    pub capabilities: Vec<String>,
+    #[serde(default, rename = "capabilities")]
+    pub adapter_exports: Vec<String>,
+    #[serde(default)]
+    pub host_capabilities: Vec<SourceCapability>,
+    #[serde(default)]
+    pub process_programs: Vec<String>,
+    #[serde(default)]
+    pub process_granted: bool,
+    #[serde(default)]
+    pub network_unrestricted: bool,
+    #[serde(default)]
+    pub network_granted: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_fingerprint: Option<String>,
+    #[serde(default)]
+    pub pages: Vec<SourceNavigation>,
     pub settings: Vec<SourceSetting>,
     pub qr_sign_in: bool,
     #[serde(default)]
     pub web_sign_in: bool,
     #[serde(default)]
     pub oauth_sign_in: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification: Option<SourceVerification>,
+}
+impl MusicSource {
+    pub fn supports(&self, capability: SourceCapability) -> bool {
+        self.host_capabilities.contains(&capability)
+    }
+}
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SourceNavigation {
+    pub title: String,
+    pub page: String,
+}
+/// Historical functional evidence for one exact plugin payload, not a security audit.
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SourceVerification {
+    pub version: String,
+    pub verified_at: String,
+    pub platform: String,
+    pub checks: Vec<String>,
+    pub limitations: Vec<String>,
+    #[serde(default)]
+    pub installed_payload_matches: bool,
 }
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct MusicSourceCatalog {
@@ -602,7 +644,7 @@ pub struct SourcePlaylist {
 
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SourceCollection {
-    pub kind: String,
+    pub kind: SourceCollectionKind,
     pub id: String,
     pub name: String,
     pub description: String,
@@ -616,9 +658,20 @@ pub struct SourcePage {
     pub description: String,
     pub cover_url: Option<String>,
     pub tracks: Vec<Track>,
+    /// The adapter confirms this page's source supports MusicX audio playback.
+    #[serde(default)]
+    pub playable: bool,
     pub collections: Vec<SourceCollection>,
     pub more: bool,
     pub next_offset: u64,
+    #[serde(default)]
+    pub station: Option<SourceStation>,
+}
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SourceStation {
+    pub source: String,
+    pub id: String,
+    pub name: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -629,6 +682,23 @@ pub struct PluginUpdateSettings {
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum MusicSourceAction {
+    Page {
+        source: String,
+        #[serde(flatten)]
+        request: SourcePageRequest,
+    },
+    SetProcessPermission {
+        source: String,
+        enabled: bool,
+        #[serde(default)]
+        expected_fingerprint: Option<String>,
+    },
+    SetNetworkPermission {
+        source: String,
+        enabled: bool,
+        #[serde(default)]
+        expected_fingerprint: Option<String>,
+    },
     List,
     AutoUpdateSettings,
     SetAutoUpdate {

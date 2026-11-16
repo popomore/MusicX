@@ -230,6 +230,10 @@ fn transport(model: Model, previous: bool) -> impl IntoElement {
                                 i == 0
                             } else {
                                 i + 1 >= s.queue_length
+                                    && !matches!(
+                                        s.queue_context.as_ref(),
+                                        Some(crate::protocol::QueueContext::Station { .. })
+                                    )
                             }
                         })
                 })

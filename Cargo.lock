@@ -1844,8 +1844,8 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "musicx-mcp",
+ "musicx-mygo-plugin",
  "musicx-platform-apple",
- "musicx-plugins",
  "musicx-protocol",
 ]
 
@@ -1854,8 +1854,9 @@ name = "musicx-core"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "hex",
- "musicx-plugin-api",
+ "musicx-plugin",
  "musicx-protocol",
  "rand 0.8.8",
  "serde",
@@ -1871,13 +1872,37 @@ dependencies = [
  "anyhow",
  "axum",
  "musicx-core",
- "musicx-plugin-api",
- "musicx-plugins",
+ "musicx-plugin",
  "musicx-protocol",
  "rmcp",
  "serde",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "musicx-mygo-plugin"
+version = "0.2.0"
+dependencies = [
+ "aes",
+ "anyhow",
+ "base64 0.22.1",
+ "hex",
+ "libc",
+ "md-5",
+ "musicx-core",
+ "musicx-mcp",
+ "musicx-plugin",
+ "oxc",
+ "qrcode",
+ "reqwest",
+ "rquickjs",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2",
+ "url",
+ "zip",
 ]
 
 [[package]]
@@ -1912,7 +1937,7 @@ dependencies = [
  "block2",
  "dispatch2",
  "musicx-core",
- "musicx-plugin-api",
+ "musicx-plugin",
  "objc2",
  "objc2-app-kit",
  "objc2-av-foundation",
@@ -1927,35 +1952,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "musicx-plugin-api"
+name = "musicx-plugin"
 version = "0.2.0"
 dependencies = [
  "anyhow",
  "musicx-protocol",
  "url",
-]
-
-[[package]]
-name = "musicx-plugins"
-version = "0.2.0"
-dependencies = [
- "aes",
- "anyhow",
- "base64 0.22.1",
- "hex",
- "md-5",
- "musicx-core",
- "musicx-plugin-api",
- "oxc",
- "qrcode",
- "reqwest",
- "rquickjs",
- "semver",
- "serde",
- "serde_json",
- "sha2",
- "url",
- "zip",
 ]
 
 [[package]]

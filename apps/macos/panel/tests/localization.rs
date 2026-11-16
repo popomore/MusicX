@@ -76,6 +76,90 @@ fn start() -> Headless {
     app
 }
 
+#[component]
+fn VerifiedSourceScreen() -> impl IntoElement {
+    source_browser::sources_view(
+        |_| {},
+        || {},
+        || {},
+        Some(protocol::MusicSource {
+            id: "mygo:qq-fixture".into(),
+            name: "Fixture source".into(),
+            version: "0.2.4".into(),
+            can_install: true,
+            verification: Some(protocol::SourceVerification {
+                version: "0.2.4".into(),
+                verified_at: "2026-11-15".into(),
+                platform: "macos-aarch64".into(),
+                checks: vec!["search".into(), "playback_sample".into()],
+                limitations: vec!["preview_only".into()],
+                installed_payload_matches: false,
+            }),
+            ..Default::default()
+        }),
+        source_browser::Start::Detail,
+    )
+}
+fn verified_source_details() {
+    for language in ["en", "zh-CN"] {
+        std::fs::write(protocol::data_dir().unwrap().join("language"), language).unwrap();
+        protocol::i18n::refresh();
+        let mut config = EngineConfig::new(Root::of::<VerifiedSourceScreen>());
+        config.viewport = Size::new(px(440.0), px(600.0));
+        config.environment.window = config.viewport;
+        config.environment.os = nsh_core::platform::Os::MacOs;
+        let mut app = Headless::start(config).unwrap();
+        app.first_render().unwrap();
+        let label = protocol::tr!("Trusted version {}", "0.2.4");
+        assert!(
+            !app.shows(&label),
+            "trust uses an icon instead of a text badge"
+        );
+        assert!(app.screen().matches(&format!("label:{label}")).unwrap());
+        app.hover(&format!("label:{label}")).unwrap();
+        app.wait_for(&format!("text:{label}")).unwrap();
+        assert!(app.shows(protocol::tr!("Trust covers the listed functional checks, not a security audit or platform certification")));
+        assert!(app.shows(protocol::tr!(
+            "The tested track returned a 60-second preview"
+        )));
+        assert!(app.shows(protocol::tr!(
+            "Full-track playback and account access still depend on the service"
+        )));
+    }
+}
+
+static SOURCE_PLAYABLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+#[component]
+fn SourcePageScreen() -> impl IntoElement {
+    discovery_ui::preview_page(model::Model::new(), protocol::SourcePage {
+        playable: SOURCE_PLAYABLE.load(std::sync::atomic::Ordering::Relaxed),
+        tracks: vec![serde_json::from_value(serde_json::json!({"id":1,"title":"Fixture track","artist":"Fixture artist","duration":42})).unwrap()],
+        ..Default::default()
+    })
+}
+fn source_playback_capability() {
+    for playable in [false, true] {
+        SOURCE_PLAYABLE.store(playable, std::sync::atomic::Ordering::Relaxed);
+        let mut config = EngineConfig::new(Root::of::<SourcePageScreen>());
+        config.viewport = Size::new(px(440.0), px(600.0));
+        config.environment.window = config.viewport;
+        let mut app = Headless::start(config).unwrap();
+        app.first_render().unwrap();
+        let play = protocol::tr!("Play {}", "Fixture track");
+        assert_eq!(
+            app.screen().matches(&format!("label:{play}")).unwrap(),
+            playable
+        );
+        if !playable {
+            assert!(app.screen().matches("label:Fixture track").unwrap());
+            assert!(
+                app.press("label:Fixture track").is_err(),
+                "metadata-only track must be disabled"
+            );
+        }
+    }
+}
+
 fn player_layout() {
     let mut config = EngineConfig::new(Root::of::<ui::App>());
     config.viewport = Size::new(px(320.0), px(512.0));
@@ -280,6 +364,14 @@ fn PlayerEntryScreen() -> impl IntoElement {
         model.status.update(|status| {
             status.track = Some(track);
             status.position = f64::from(height - 500.0);
+            status.index = Some(0);
+            status.queue_length = 1;
+            status.switching = height >= 570.0;
+            status.queue_context = (height >= 560.0).then(|| protocol::QueueContext::Station {
+                source: "mygo:fixture".into(),
+                id: "fm".into(),
+                name: "Fixture radio".into(),
+            });
         });
     });
     view()
@@ -346,6 +438,16 @@ fn player_entry_checks() {
     app.set_viewport(Size::new(px(628.0), px(512.0))).unwrap();
     press_artist(&mut app, "Alpha").unwrap();
     assert!(app.shows("Artist destination: mygo:fixture/alpha-id"));
+
+    for (height, enabled) in [(550.0, false), (560.0, true), (570.0, false)] {
+        app.set_viewport(Size::new(px(628.0), px(height))).unwrap();
+        let selector = format!("label:{}", protocol::tr!("Next track"));
+        assert_eq!(
+            app.screen().press_target(&selector).unwrap().is_some(),
+            enabled,
+            "one-track station queues must allow Next, finite or switching queues must not"
+        );
+    }
 }
 
 fn exercise() {
@@ -421,6 +523,8 @@ fn exercise() {
     );
     drop(app);
     source_navigation();
+    verified_source_details();
+    source_playback_capability();
     settings_escape();
     setup_navigation();
     player_entries();

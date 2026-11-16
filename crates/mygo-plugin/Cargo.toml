@@ -1,0 +1,32 @@
+[package]
+name = "musicx-mygo-plugin"
+version = "0.2.0"
+edition = "2024"
+license = "MIT"
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+musicx-core = { path = "../core" }
+musicx-plugin = { path = "../plugin" }
+anyhow = "1"
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = "1"
+semver = "1"
+reqwest = { version = "0.13", features = ["blocking", "form", "json", "query"] }
+aes = "0.8"
+base64 = "0.22"
+hex = "0.4"
+libc = "0.2"
+md-5 = "0.10"
+sha2 = "0.10"
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+rquickjs = "=0.14.0"
+oxc = { version = "0.158", default-features = false, features = ["semantic", "transformer", "codegen"] }
+url = "2"
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+[target.'cfg(target_os = "ios")'.dependencies]
+rquickjs = { version = "=0.14.0", features = ["bindgen"] }
+
+[dev-dependencies]
+musicx-mcp = { path = "../mcp" }

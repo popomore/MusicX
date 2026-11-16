@@ -1,4 +1,5 @@
 //! Every music source uses the same MyGo configuration, account and import flow.
+use crate::protocol::SourceCapability as Capability;
 use crate::protocol::tr;
 #[cfg(target_os = "ios")]
 use crate::{controls::section, model::Page};
@@ -826,9 +827,7 @@ fn source_settings(this: Sources, importing: bool) -> impl IntoElement {
                     rows.iter()
                         .filter(|s| {
                             !importing
-                                || s.capabilities
-                                    .iter()
-                                    .any(|v| matches!(v.as_str(), "playlist" | "liked" | "recent"))
+                                || s.host_capabilities.iter().any(|v| matches!(v, Capability::Playlist | Capability::LikedTracks | Capability::RecentTracks))
                         })
                         .cloned()
                         .collect::<Vec<_>>()
@@ -863,12 +862,9 @@ fn source_settings(this: Sources, importing: bool) -> impl IntoElement {
                             .min_w(px(0.0))
                             .gap(px(2.0))
                             .child(
-                                text(move || {
-                                    row.with(|s| crate::controls::source_name(&s.id, &s.name))
-                                })
-                                .number_of_lines(1)
-                                .text_size(px(13.0))
-                                .text_color(move || theme().foreground),
+                                view().flex_row().items_center().gap(px(6.0))
+                                .child(text(move || row.with(|s|crate::controls::source_name(&s.id,&s.name))).number_of_lines(1).text_size(px(13.0)).text_color(move||theme().foreground))
+                                .child(crate::source_browser::verification_badge(move||Some(row.get()))),
                             )
                             .child(caption(move || {
                                 row.with(|source| {
@@ -876,7 +872,7 @@ fn source_settings(this: Sources, importing: bool) -> impl IntoElement {
                                         || source.qr_sign_in
                                         || source.oauth_sign_in;
                                     let playlist =
-                                        source.capabilities.iter().any(|v| v == "playlist");
+                                        source.supports(Capability::Playlist);
                                     match (importing, sign_in, playlist) {
                                         (true, _, _) => tr!("Import playlists from this source"),
                                         (_, true, true) => tr!("Sign-in · Playlist import"),

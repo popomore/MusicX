@@ -1,5 +1,5 @@
 //! The source-management page is disposable. Only a live sign-in owns a temporary VM.
-use crate::protocol::tr;
+use crate::protocol::{SourceCapability as Capability, SourcePageRequest as PageRequest, tr};
 use crate::{
     protocol::{
         MusicSource, MusicSourceAction as Action, MusicSourceCatalog, SignInMethod, SourceAccount,
@@ -106,6 +106,42 @@ fn request<T: serde::de::DeserializeOwned>(action: Action) -> anyhow::Result<T> 
     remote::post_json("/ui/music-sources", &action)
 }
 impl Browser {
+    fn network_permission(self, enabled: bool) {
+        let Some((source, expected_fingerprint)) = self.selected.with(|s| {
+            s.as_ref()
+                .map(|s| (s.id.clone(), s.permission_fingerprint.clone()))
+        }) else {
+            return;
+        };
+        self.work(
+            move || {
+                request::<Option<MusicSource>>(Action::SetNetworkPermission {
+                    source,
+                    enabled,
+                    expected_fingerprint,
+                })
+            },
+            |this, source| this.selected.set(source),
+        );
+    }
+    fn process_permission(self, enabled: bool) {
+        let Some((source, expected_fingerprint)) = self.selected.with(|s| {
+            s.as_ref()
+                .map(|s| (s.id.clone(), s.permission_fingerprint.clone()))
+        }) else {
+            return;
+        };
+        self.work(
+            move || {
+                request::<Option<MusicSource>>(Action::SetProcessPermission {
+                    source,
+                    enabled,
+                    expected_fingerprint,
+                })
+            },
+            |this, source| this.selected.set(source),
+        );
+    }
     fn work<T: Send + 'static>(
         self,
         run: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
@@ -228,7 +264,7 @@ impl Browser {
         let Some(source) = self.selected.get() else {
             return;
         };
-        if !source.installed || !source.capabilities.iter().any(|v| v == "account") {
+        if !source.installed || !source.supports(Capability::Account) {
             return;
         }
         self.work(
@@ -375,7 +411,7 @@ impl Browser {
         self.page.set(Page::Playlists);
         self.playlists.set(Vec::new());
         self.message.set(String::new());
-        if source.capabilities.iter().any(|v| v == "playlists") {
+        if source.supports(Capability::Playlists) {
             self.work(
                 move || request::<Vec<SourcePlaylist>>(Action::Playlists { source: source.id }),
                 |this, rows| this.playlists.set(rows),
@@ -501,22 +537,124 @@ fn caption(value: impl IntoReactive<SharedString>) -> impl IntoElement {
 }
 fn capabilities(source: &MusicSource) -> String {
     [
-        ("search", tr!("Search")),
-        ("stream", tr!("Play")),
-        ("lyrics", tr!("Lyrics")),
-        ("album", tr!("Album")),
-        ("artist", tr!("Artist")),
-        ("liked", tr!("Liked tracks import")),
-        ("recent", tr!("History import")),
-        ("shows", tr!("Podcasts")),
-        ("playlists", tr!("Playlists")),
-        ("signIn", tr!("Account")),
+        (Capability::Search, tr!("Search")),
+        (Capability::Playback, tr!("Play")),
+        (Capability::Recommendations, tr!("Recommendations")),
+        (Capability::Browse, tr!("Browse")),
+        (Capability::Stations, tr!("Radio")),
+        (Capability::Lyrics, tr!("Lyrics")),
+        (Capability::Album, tr!("Album")),
+        (Capability::Artist, tr!("Artist")),
+        (Capability::LikedTracks, tr!("Liked tracks import")),
+        (Capability::RecentTracks, tr!("History import")),
+        (Capability::Podcasts, tr!("Podcasts")),
+        (Capability::Playlists, tr!("Playlists")),
+        (Capability::SignIn, tr!("Account")),
     ]
     .iter()
-    .filter(|(key, _)| source.capabilities.iter().any(|v| v == key))
+    .filter(|(key, _)| source.host_capabilities.contains(key))
     .map(|(_, label)| *label)
     .collect::<Vec<_>>()
     .join(" · ")
+}
+
+fn verification_label(source: &MusicSource) -> String {
+    source
+        .verification
+        .as_ref()
+        .map_or_else(String::new, |evidence| {
+            if evidence.installed_payload_matches {
+                tr!("Trusted").into()
+            } else {
+                tr!("Trusted version {}", evidence.version)
+            }
+        })
+}
+
+pub(crate) fn verification_badge(
+    source: impl Fn() -> Option<MusicSource> + 'static,
+) -> impl IntoElement {
+    const VERIFIED: &str = r#"<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m8 12 2.5 2.5L16 9"/></svg>"#;
+    let source = computed(source);
+    when(
+        move || source.with(|s| s.as_ref().is_some_and(|s| s.verification.is_some())),
+        move || {
+            let label = computed(move || {
+                source.with(|s| s.as_ref().map_or_else(String::new, verification_label))
+            });
+            view()
+                .w(px(14.0))
+                .min_w(px(14.0))
+                .h(px(14.0))
+                .tooltip(
+                    text(move || label.get())
+                        .text_size(px(11.0))
+                        .px(px(6.0))
+                        .py(px(4.0))
+                        .bg(move || theme().primary)
+                        .text_color(move || theme().primary_foreground)
+                        .rounded(px(4.0)),
+                )
+                .child(
+                    svg(|| ImageSrc::svg_markup(VERIFIED))
+                        .w(px(14.0))
+                        .h(px(14.0))
+                        .text_color(move || theme().foreground)
+                        .label(move || SharedString::from(label.get())),
+                )
+        },
+    )
+}
+
+fn verification_details(source: &MusicSource) -> Vec<String> {
+    let Some(evidence) = &source.verification else {
+        return vec![tr!("This source has not been verified").into()];
+    };
+    let checks: Vec<_> = evidence
+        .checks
+        .iter()
+        .filter_map(|check| match check.as_str() {
+            "search" => Some(tr!("Search")),
+            "playback_sample" => Some(tr!("Short audio sample")),
+            "lyrics" => Some(tr!("Lyrics")),
+            "album" => Some(tr!("Albums")),
+            "artist" => Some(tr!("Artists")),
+            "playlist" => Some(tr!("Playlists")),
+            "show" => Some(tr!("Podcasts")),
+            _ => None,
+        })
+        .collect();
+    let mut lines = vec![
+        tr!(
+            "Version {} · Verified {}",
+            evidence.version,
+            evidence.verified_at
+        ),
+        tr!("Verified features: {}", checks.join(" · ")),
+        tr!("Trust covers the listed functional checks, not a security audit or platform certification").into(),
+        tr!("Full-track playback and account access still depend on the service").into(),
+    ];
+    for limitation in &evidence.limitations {
+        match limitation.as_str() {
+            "preview_only" => {
+                lines.push(tr!("The tested track returned a 60-second preview").into())
+            }
+            "segmented_duration" => lines
+                .push(tr!("The tested audio segment was shorter than the catalog total").into()),
+            other => {
+                if let Some(seconds) = other
+                    .strip_prefix("preview_seconds:")
+                    .and_then(|s| s.parse::<u32>().ok())
+                {
+                    lines.push(tr!(
+                        "The tested track returned a {}-second preview",
+                        seconds
+                    ));
+                }
+            }
+        }
+    }
+    lines
 }
 #[derive(Clone, Copy)]
 pub enum Start {
@@ -599,17 +737,23 @@ pub fn sources_view(
                     button().accessibility_label(move||Some(SharedString::from(tr!("Configure source {}", source().map_or_else(String::new,|s|s.name)))))
                         .disabled(move||this.busy.get()).on_press(move||{if let Some(source)=source(){this.select(source);}})
                         .h(px(70.0)).w_full().justify_center().px(px(8.0)).gap(px(4.0)).rounded(px(6.0)).hover(|s|s.bg(theme().muted))
-                        .child(text(move||source().map_or_else(String::new,|s|s.name)).number_of_lines(1).text_size(px(14.0)).text_color(move||theme().foreground))
-                        .child(caption(move||source().map_or_else(String::new,|s|if s.installed{tr!("Added").into()}else if s.can_install{if s.capabilities.is_empty(){s.description}else{capabilities(&s)}}else{tr!("This type is not supported yet").into()})))
+                        .child(view().flex_row().items_center().gap(px(6.0))
+                            .child(text(move||source().map_or_else(String::new,|s|s.name)).number_of_lines(1).text_size(px(14.0)).text_color(move||theme().foreground).flex_1().min_w(px(0.0)))
+                            .child(verification_badge(source)))
+                        .child(caption(move||source().map_or_else(String::new,|s|if s.installed{tr!("Added").into()}else if s.can_install{if s.host_capabilities.is_empty(){s.description}else{capabilities(&s)}}else{tr!("This type is not supported yet").into()})))
                 }).flex_1().min_h(px(0.0)).estimated_item_size(px(70.0)).label(tr!("Music source list")))
         }))
         .child(when(move||this.page.get()==Page::Detail,move||{
             scroll().flex_1().min_h(px(0.0)).child(view().gap(px(10.0)).pb(px(12.0))
                 .child(view().flex_row().items_center().gap(px(9.0))
                     .child(crate::controls::source_badge(move||this.selected.with(|s|s.as_ref().map_or_else(String::new,|s|s.id.clone()))))
-                    .child(text(move||this.selected.with(|s|s.as_ref().map_or_else(String::new,|s|crate::controls::source_name(&s.id,&s.name)))).number_of_lines(2).text_size(px(19.0)).font_weight(FontWeight::SEMIBOLD).text_color(move||theme().foreground)))
+                    .child(text(move||this.selected.with(|s|s.as_ref().map_or_else(String::new,|s|crate::controls::source_name(&s.id,&s.name)))).number_of_lines(2).min_w(px(0.0)).text_size(px(19.0)).font_weight(FontWeight::SEMIBOLD).text_color(move||theme().foreground))
+                    .child(verification_badge(move||this.selected.get())))
                 .child(when(move||this.managing.get()||this.selected.with(|s|s.as_ref().is_some_and(|s|!s.installed)),move||caption(move||this.selected.with(|s|s.as_ref().map_or_else(String::new,|s|format!("{} · {}",s.version,capabilities(s)))))))
+                .child(view().gap(px(4.0))
+                    .child(each(move||this.selected.with(|s|s.as_ref().map_or_else(Vec::new,verification_details)),Clone::clone,move|line,_|caption(move||line.get()))))
                 .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|!s.description.is_empty())),move||caption(move||this.selected.with(|s|s.as_ref().map_or_else(String::new,|s|s.description.clone())))))
+                .child(each(move||this.selected.with(|s|s.as_ref().map_or_else(Vec::new,|s|s.notes.clone())),Clone::clone,move|note,_|caption(move||note.get())))
                 .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.repository.is_some()&&(!s.installed||this.managing.get()))),move||button()
                     .accessibility_label(Some(tr!("Open source project").into())).on_press(move||{if let Some(url)=this.selected.with(|s|s.as_ref().and_then(|s|s.repository.clone())){spawn(async move{let _=open_url(url).await;});}})
                     .py(px(6.0)).rounded(px(4.0)).hover(|s|s.bg(theme().muted)).child(caption(move||this.selected.with(|s|s.as_ref().and_then(|s|s.repository.clone()).unwrap_or_default())))))
@@ -623,13 +767,27 @@ pub fn sources_view(
                 }))
                 .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.installed)),move||{
                     view().gap(px(10.0))
-                        .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.capabilities.iter().any(|v|v=="account"||v=="signIn"))),move||{
+                        .child(each(move||this.selected.with(|s|s.as_ref().filter(|s|s.supports(Capability::Browse)).map_or_else(Vec::new,|s|s.pages.clone())),|row|row.page.clone(),move|row,_|button().accessibility_label(move||Some(row.with(|r|r.title.clone()).into())).disabled(move||this.busy.get()).on_press(move||{if let Some(source)=this.selected.with(|s|s.as_ref().map(|s|s.id.clone())){open_source(Action::Page{source,request:PageRequest::Browse{page:row.with(|r|r.page.clone())}});}}).px(px(8.0)).py(px(7.0)).rounded(px(5.0)).hover(|s|s.bg(theme().muted)).child(text(move||row.with(|r|r.title.clone())).text_size(px(12.0)).text_color(move||theme().foreground))))
+                        .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.supports(Capability::Recommendations))),move||action(tr!("Recommendations"),move||this.busy.get(),move||{if let Some(source)=this.selected.with(|s|s.as_ref().map(|s|s.id.clone())){open_source(Action::Page{source,request:PageRequest::Recommendations{}});}})))
+                        .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.supports(Capability::Stations))),move||action(tr!("Radio"),move||this.busy.get(),move||{if let Some(source)=this.selected.with(|s|s.as_ref().map(|s|s.id.clone())){open_source(Action::Page{source,request:PageRequest::Stations{}});}})))
+                        .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.network_unrestricted)),move||view().gap(px(6.0))
+                            .child(crate::controls::section(tr!("Unrestricted network")))
+                            .child(caption(tr!("Allow this source to contact any Internet or local network server. Without this permission, it can only use declared domains and server URLs you save. Changed files require permission again.")))
+                            .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|!s.network_granted)),move||action(tr!("Allow unrestricted network for this version"),move||this.busy.get(),move||this.network_permission(true))))
+                            .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.network_granted)),move||action(tr!("Revoke unrestricted network permission"),move||this.busy.get(),move||this.network_permission(false))))))
+                        .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|!s.process_programs.is_empty())),move||view().gap(px(6.0))
+                            .child(crate::controls::section(tr!("External programs")))
+                            .child(caption(move||this.selected.with(|s|s.as_ref().map_or_else(String::new,|s|s.process_programs.join(", ")))))
+                            .child(caption(tr!("External programs can access files and services with your account's permissions. Trust verification does not grant this access. Updates or changed files require permission again.")))
+                            .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|!s.process_granted)),move||action(tr!("Allow external programs for this version"),move||this.busy.get(),move||this.process_permission(true))))
+                            .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.process_granted)),move||action(tr!("Revoke external program permission"),move||this.busy.get(),move||this.process_permission(false))))))
+                        .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.supports(Capability::Account)||s.supports(Capability::SignIn))),move||{
                             view().gap(px(6.0)).pt(px(6.0))
                                 .child(text(tr!("Account")).text_size(px(12.0)).font_weight(FontWeight::SEMIBOLD).text_color(move||theme().foreground))
                                 .child(caption(move||this.account.with(|v| match v {
                                     Some(a) if a.connected => a.name.as_ref().map_or_else(||tr!("Connected").into(), |name| tr!("Connected · {name}"; name = name)),
                                     Some(_) => tr!("Account not connected").into(),
-                                    None if this.selected.with(|s|s.as_ref().is_some_and(|s|s.capabilities.iter().all(|v|v!="account"))) => tr!("This source has no account status").into(),
+                                    None if this.selected.with(|s|s.as_ref().is_some_and(|s|!s.supports(Capability::Account))) => tr!("This source has no account status").into(),
                                     None if this.busy.get() => tr!("Checking account…").into(),
                                     None => tr!("Account status unavailable").into(),
                                 })))
@@ -643,16 +801,16 @@ pub fn sources_view(
                                     .child(when(move||this.disconnecting.get(),move||action(tr!("Confirm account disconnection"),move||this.busy.get(),move||{this.disconnecting.set(false);this.sign_out();}))))
                                 .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|!s.qr_sign_in&&!s.web_sign_in&&!s.oauth_sign_in)),||caption(tr!("This sign-in method is not supported yet. Use the source’s account settings if available."))))
                         }))
-                        .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.capabilities.iter().any(|v|v=="playlist"))),move||{
+                        .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.supports(Capability::Playlist))),move||{
                             view().gap(px(6.0)).pt(px(6.0))
                                 .child(crate::controls::section(tr!("Playlists")))
                                 .child(caption(tr!("Imports are saved to My playlists.")))
                                 .child(action(tr!("Import source playlists"),move||this.busy.get(),move||this.playlists()))
                         }))
                         .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|!s.settings.is_empty())),move||action(tr!("Source settings"),move||this.busy.get(),move||this.configuring.update(|v|*v = !*v))))
-                        .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.capabilities.iter().any(|v|v=="liked"))),move||action(tr!("Import cloud likes"),move||this.busy.get(),move||this.import_collection(true))))
-                        .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.capabilities.iter().any(|v|v=="recent"))),move||action(tr!("Import cloud history"),move||this.busy.get(),move||this.import_collection(false))))
-                        .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.capabilities.iter().any(|v|v=="shows"))),move||action(tr!("Browse podcasts"),move||this.busy.get(),move||{if let Some(source)=this.selected.with(|s|s.as_ref().map(|s|s.id.clone())){open_source(Action::Shows{source});}})))
+                        .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.supports(Capability::LikedTracks))),move||action(tr!("Import cloud likes"),move||this.busy.get(),move||this.import_collection(true))))
+                        .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.supports(Capability::RecentTracks))),move||action(tr!("Import cloud history"),move||this.busy.get(),move||this.import_collection(false))))
+                        .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.supports(Capability::Podcasts))),move||action(tr!("Browse podcasts"),move||this.busy.get(),move||{if let Some(source)=this.selected.with(|s|s.as_ref().map(|s|s.id.clone())){open_source(Action::Shows{source});}})))
                         .child(when(move||this.configuring.get(),move||view().gap(px(10.0))
                         .child(each(move||this.selected.with(|s|s.as_ref().map_or_else(Vec::new,|s|s.settings.clone())),|f|f.definition.key.clone(),move|field,_|{
                             view().gap(px(5.0))
@@ -690,10 +848,10 @@ pub fn sources_view(
         .child(when(move||this.page.get()==Page::Playlists,move||view().flex_1().min_h(px(0.0)).gap(px(8.0))
             .child(crate::controls::heading(tr!("Import source content")))
             .child(caption(tr!("Import supported likes, history, or playlists into My playlists.")))
-            .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.capabilities.iter().any(|v|v=="liked"))),move||action(tr!("Import cloud likes"),move||this.busy.get(),move||this.import_collection(true))))
-            .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.capabilities.iter().any(|v|v=="recent"))),move||action(tr!("Import cloud history"),move||this.busy.get(),move||this.import_collection(false))))
-            .child(when(move||!this.busy.get()&&this.playlists.with(Vec::is_empty)&&this.selected.with(|s|s.as_ref().is_some_and(|s|s.capabilities.iter().any(|v|v=="playlists"))),move||action(tr!("View source account and settings"),move||this.busy.get(),move||{this.page.set(Page::Detail);this.refresh_account();})))
-            .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.capabilities.iter().any(|v|v=="playlist"))),move||view().flex_row().items_center().gap(px(4.0))
+            .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.supports(Capability::LikedTracks))),move||action(tr!("Import cloud likes"),move||this.busy.get(),move||this.import_collection(true))))
+            .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.supports(Capability::RecentTracks))),move||action(tr!("Import cloud history"),move||this.busy.get(),move||this.import_collection(false))))
+            .child(when(move||!this.busy.get()&&this.playlists.with(Vec::is_empty)&&this.selected.with(|s|s.as_ref().is_some_and(|s|s.supports(Capability::Playlists))),move||action(tr!("View source account and settings"),move||this.busy.get(),move||{this.page.set(Page::Detail);this.refresh_account();})))
+            .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.supports(Capability::Playlist))),move||view().flex_row().items_center().gap(px(4.0))
                 .child(input().label(tr!("Source playlist ID")).placeholder(tr!("Source playlist ID")).value(move||this.playlist_id.get()).on_change(move|v:&str|this.playlist_id.set(v.into())).flex_1().min_w(px(0.0)).h(px(32.0)).px(px(8.0)).rounded(px(5.0)).bg(move||theme().muted).text_color(move||theme().foreground))
                 .child(action(tr!("Import"),move||this.busy.get()||this.playlist_id.with(|v|v.trim().is_empty()),move||this.import(this.playlist_id.get())))))
             .child(virtual_list(move||this.playlists.with(Vec::len),move|at|{

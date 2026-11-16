@@ -8,7 +8,7 @@ publish = false
 
 [dependencies]
 musicx-core = { path = "../core" }
-musicx-plugin-api = { path = "../plugin-api" }
+musicx-plugin = { path = "../plugin" }
 anyhow = "1"
 base64 = "0.22"
 objc2 = "0.6"

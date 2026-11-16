@@ -30,15 +30,14 @@ use musicx_core::{
     player::{Action, Reply, Status},
     storage,
 };
-use musicx_plugin_api::DataSource;
-use musicx_plugins::{music_sources, mygo};
+use musicx_plugin::PluginSource;
 use musicx_protocol::{self as protocol, address};
 
 #[derive(Clone, Copy)]
 pub struct Services {
     pub submit: fn(Action, Reply),
     pub quit: fn(),
-    pub sources: &'static dyn DataSource,
+    pub sources: &'static dyn PluginSource,
 }
 
 pub fn read_token() -> Result<String> {
@@ -111,9 +110,9 @@ pub fn start(services: Services) -> Result<()> {
                 .route("/ui/queue", get(ui_queue))
                 .route("/ui/action", post(ui_action))
                 .route("/ui/session/restore", post(ui_restore))
-                .with_state(services)
                 .merge(local_library_ui::routes())
                 .merge(source_ui::routes())
+                .with_state(services)
                 .layer(middleware::from_fn_with_state(auth, authorize));
             axum::serve(listener, app).await
         });
@@ -121,7 +120,7 @@ pub fn start(services: Services) -> Result<()> {
             eprintln!("{}", tr!("MCP service stopped: {error}"; error = error));
         }
     });
-    if let Err(error) = musicx_plugins::plugin_updates::start() {
+    if let Err(error) = services.sources.start_updates() {
         eprintln!(
             "{}",
             protocol::tr!("Could not start automatic plugin updates: {error}"; error = error)
@@ -360,7 +359,7 @@ struct PluginSearch {
     plugin: String,
     query: String,
     offset: Option<u64>,
-    kind: Option<String>,
+    kind: Option<protocol::SourceSearchKind>,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -466,7 +465,8 @@ async fn blocking<T: Send + 'static>(
         .map_err(|error| {
             ErrorData::internal_error(
                 error.to_string(),
-                mygo::error_code(&error).map(|code| serde_json::json!({"plugin_code":code})),
+                musicx_plugin::error_code(&error)
+                    .map(|code| serde_json::json!({"plugin_code":code})),
             )
         })
 }
@@ -504,7 +504,7 @@ impl PlayerTools {
 #[tool_router]
 impl PlayerTools {
     #[tool(
-        description = "管理音乐数据源。action=list/catalog/catalog_view/refresh_catalog/get/install/check_update/update/uninstall/configure/account/sign_in/poll/cancel/sign_out/playlists/import_playlist/import_liked/import_recent/artist/album/shows/show/auto_update_settings/set_auto_update。auto_update_settings读取插件自动更新开关，set_auto_update需要enabled布尔值。artist/album/show需要id，show可用offset分页。catalog_view/refresh_catalog返回sources、refreshing和warning，旧缓存立即可读；install可直接用owner/repo或GitHub仓库URL，无需在目录中。插件source为mygo:ID。configure的values按声明字段保存，敏感值不回显；sign_in返回扫码任务，poll/cancel用job。导入仅建本地副本，不回写来源歌单。"
+        description = "Manage MusicX sources: list/catalog/catalog_view/refresh_catalog/get/install/check_update/update/uninstall/configure/account/sign_in/poll/cancel/sign_out/playlists/import_playlist/import_liked/import_recent/artist/album/shows/show/auto_update_settings/set_auto_update. Sources use mygo:ID; install accepts owner/repo or a GitHub URL. Imports create independent local snapshots. Source descriptors include MusicX host capabilities and version-bound functional verification. method is only a sign-in choice: qr, web or oauth. Login uses sign_in and job polling. Runtime compatibility does not expose arbitrary plugin exports, cloud edits, device control or helper permissions through this tool."
     )]
     async fn manage_music_sources(
         &self,
@@ -513,7 +513,40 @@ impl PlayerTools {
         let action: protocol::MusicSourceAction =
             serde_json::from_value(serde_json::to_value(input).map_err(tool_error)?)
                 .map_err(|_| tool_error(tr!("Invalid source action parameters")))?;
-        blocking(move || music_sources::execute(action))
+        // Product selection is explicit: future Rust/adapter operations do not
+        // automatically become MCP tools merely by being added to the protocol.
+        if !matches!(
+            action,
+            protocol::MusicSourceAction::List
+                | protocol::MusicSourceAction::AutoUpdateSettings
+                | protocol::MusicSourceAction::SetAutoUpdate { .. }
+                | protocol::MusicSourceAction::Catalog
+                | protocol::MusicSourceAction::CatalogView
+                | protocol::MusicSourceAction::RefreshCatalog
+                | protocol::MusicSourceAction::Get { .. }
+                | protocol::MusicSourceAction::Install { .. }
+                | protocol::MusicSourceAction::CheckUpdate { .. }
+                | protocol::MusicSourceAction::Update { .. }
+                | protocol::MusicSourceAction::Uninstall { .. }
+                | protocol::MusicSourceAction::Configure { .. }
+                | protocol::MusicSourceAction::Account { .. }
+                | protocol::MusicSourceAction::SignIn { .. }
+                | protocol::MusicSourceAction::Poll { .. }
+                | protocol::MusicSourceAction::Cancel { .. }
+                | protocol::MusicSourceAction::SignOut { .. }
+                | protocol::MusicSourceAction::Playlists { .. }
+                | protocol::MusicSourceAction::ImportLiked { .. }
+                | protocol::MusicSourceAction::ImportRecent { .. }
+                | protocol::MusicSourceAction::ImportPlaylist { .. }
+                | protocol::MusicSourceAction::Artist { .. }
+                | protocol::MusicSourceAction::Album { .. }
+                | protocol::MusicSourceAction::Shows { .. }
+                | protocol::MusicSourceAction::Show { .. }
+        ) {
+            return Err(tool_error(tr!("Invalid source action parameters")));
+        }
+        let sources = self.services.sources;
+        blocking(move || musicx_core::sources::execute(sources, action))
             .await
             .and_then(output)
     }
@@ -606,29 +639,37 @@ impl PlayerTools {
             }
             _ => unreachable!(),
         };
-        blocking(move || musicx_plugins::change_library(edit))
+        let sources = self.services.sources;
+        blocking(move || musicx_core::sources::change_library(sources, edit))
             .await
             .and_then(output)
     }
 
-    #[tool(description = "列出本机安装的 MyGo Music 插件和目录兼容状态。")]
+    #[tool(description = "列出本机安装的音乐来源插件和目录兼容状态。")]
     async fn list_music_plugins(&self) -> Result<CallToolResult, ErrorData> {
-        blocking(mygo::list).await.and_then(output)
+        let sources = self.services.sources;
+        blocking(move || sources.installed_plugins())
+            .await
+            .and_then(output)
     }
 
     #[tool(
-        description = "通过指定 MyGo 插件搜索。kind=tracks(默认)/albums/artists/playlists/shows，offset 分页。歌曲 tracks 返回统一 Track，duration 单位为秒，可直接传给 play_song/enqueue_song。插件提供的布尔 unavailable 会随搜索结果返回，true 表示来源报告曲目当前不可播。歌手/专辑/播客 ID 可用于 manage_music_sources 的 artist/album/show。"
+        description = "通过指定来源搜索，plugin 传入来源标识（MyGo 也兼容旧插件 ID）。kind=tracks(默认)/albums/artists/playlists/shows，offset 分页，结果包含 source 和 more。歌曲 tracks 返回统一 Track，duration 单位为秒，可直接传给 play_song/enqueue_song。来源提供的布尔 unavailable 会保留，true 表示当前不可播。其他分类返回统一实体；将 source 和实体 ID 用于 manage_music_sources 的 artist/album/show。"
     )]
     async fn plugin_search(
         &self,
         Parameters(input): Parameters<PluginSearch>,
     ) -> Result<CallToolResult, ErrorData> {
+        let sources = self.services.sources;
         blocking(move || {
-            mygo::search_kind(
+            musicx_core::sources::search(
+                sources,
                 &input.plugin,
-                &input.query,
-                input.kind.as_deref().unwrap_or("tracks"),
-                input.offset.unwrap_or(0),
+                protocol::SourceSearchRequest {
+                    query: input.query,
+                    kind: input.kind.unwrap_or_default(),
+                    offset: input.offset.unwrap_or(0),
+                },
             )
         })
         .await
@@ -729,7 +770,7 @@ impl ServerHandler for PlayerTools {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use musicx_plugin_api::Media;
+    use musicx_plugin::{DataSource, Media};
     use std::sync::Mutex;
 
     #[test]
@@ -802,7 +843,65 @@ mod tests {
 
     struct FixtureSource {
         seen: Mutex<Vec<protocol::Track>>,
+        source_reads: Mutex<Vec<String>>,
         fail: bool,
+    }
+
+    impl musicx_plugin::PluginSource for FixtureSource {
+        fn search(
+            &self,
+            source: &str,
+            request: protocol::SourceSearchRequest,
+        ) -> Result<protocol::SourceSearchPage> {
+            assert_eq!(source, "independent:fixture");
+            assert_eq!(request.query, "fixture query");
+            assert_eq!(request.kind, protocol::SourceSearchKind::Tracks);
+            assert_eq!(request.offset, 7);
+            self.source_reads.lock().unwrap().push("search".into());
+            Ok(protocol::SourceSearchPage {
+                source: source.into(),
+                tracks: vec![protocol::SourceSearchTrack {
+                    track: track(),
+                    unavailable: Some(true),
+                }],
+                ..Default::default()
+            })
+        }
+        fn account(&self, source: &str) -> Result<protocol::SourceAccount> {
+            assert_eq!(source, "independent:fixture");
+            self.source_reads.lock().unwrap().push("account".into());
+            Ok(protocol::SourceAccount {
+                connected: true,
+                name: Some("Independent account".into()),
+            })
+        }
+        fn playlists(&self, source: &str) -> Result<Vec<protocol::SourcePlaylist>> {
+            assert_eq!(source, "independent:fixture");
+            self.source_reads.lock().unwrap().push("playlists".into());
+            Ok(vec![protocol::SourcePlaylist {
+                id: "opaque:list/one".into(),
+                name: "Independent playlist".into(),
+                track_count: 1,
+                cover_url: None,
+            }])
+        }
+        fn page(
+            &self,
+            source: &str,
+            request: protocol::SourcePageRequest,
+        ) -> Result<protocol::SourcePage> {
+            assert_eq!(source, "independent:fixture");
+            assert!(matches!(
+                request,
+                protocol::SourcePageRequest::Recommendations {}
+            ));
+            self.source_reads.lock().unwrap().push("page".into());
+            Ok(protocol::SourcePage {
+                title: "Independent page".into(),
+                tracks: vec![track()],
+                ..Default::default()
+            })
+        }
     }
     impl DataSource for FixtureSource {
         fn resolve(&self, track: protocol::Track, quality: protocol::Quality) -> Result<Media> {
@@ -885,6 +984,7 @@ mod tests {
     fn fixture(submit: fn(Action, Reply), fail: bool) -> (PlayerTools, &'static FixtureSource) {
         let source = Box::leak(Box::new(FixtureSource {
             seen: Mutex::new(Vec::new()),
+            source_reads: Mutex::new(Vec::new()),
             fail,
         }));
         (
@@ -898,6 +998,82 @@ mod tests {
             },
             source,
         )
+    }
+
+    #[tokio::test]
+    async fn source_tools_use_the_injected_rust_contract_without_mygo() {
+        let (tools, source) = fixture(no_submit, true);
+        let search: PluginSearch = serde_json::from_value(serde_json::json!({"plugin":"independent:fixture","query":"fixture query","kind":"tracks","offset":7})).unwrap();
+        let response = tools.plugin_search(Parameters(search)).await.unwrap();
+        let response = serde_json::to_value(response).unwrap();
+        let page: serde_json::Value =
+            serde_json::from_str(response["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            page["tracks"][0]["source"]["id"],
+            track().source.unwrap().id
+        );
+        assert_eq!(page["tracks"][0]["unavailable"], true);
+        for (action, expected) in [
+            ("account", "Independent account"),
+            ("playlists", "Independent playlist"),
+        ] {
+            let input: SourceInput = serde_json::from_value(
+                serde_json::json!({"action":action,"source":"independent:fixture"}),
+            )
+            .unwrap();
+            let response = tools.manage_music_sources(Parameters(input)).await.unwrap();
+            let response = serde_json::to_value(response).unwrap();
+            let value: serde_json::Value =
+                serde_json::from_str(response["content"][0]["text"].as_str().unwrap()).unwrap();
+            assert_eq!(
+                if action == "account" {
+                    &value["name"]
+                } else {
+                    &value[0]["name"]
+                },
+                expected
+            );
+        }
+        let Json(page) = source_ui::source_action(
+            State(tools.services),
+            Json(protocol::MusicSourceAction::Page {
+                source: "independent:fixture".into(),
+                request: protocol::SourcePageRequest::Recommendations {},
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(page["title"], "Independent page");
+        assert_eq!(
+            page["tracks"][0]["source"]["id"],
+            track().source.unwrap().id
+        );
+        assert_eq!(
+            *source.source_reads.lock().unwrap(),
+            ["search", "account", "playlists", "page"]
+        );
+    }
+
+    #[tokio::test]
+    async fn runtime_exports_and_host_permissions_are_not_mcp_actions() {
+        let (tools, _) = fixture(no_submit, true);
+        for value in [
+            serde_json::json!({"action":"invoke","source":"mygo:fixture","method":"remoteUse","params":{"deviceId":"device"}}),
+            serde_json::json!({"action":"invoke","source":"mygo:fixture","method":"createPlaylist","params":{"name":"No cloud writes"}}),
+            serde_json::json!({"action":"page","source":"mygo:fixture","method":"home"}),
+            serde_json::json!({"action":"set_process_permission","source":"mygo:fixture","enabled":true}),
+            serde_json::json!({"action":"set_network_permission","source":"mygo:fixture","enabled":true}),
+        ] {
+            let input: SourceInput = serde_json::from_value(value).unwrap();
+            assert!(
+                tools
+                    .manage_music_sources(Parameters(input))
+                    .await
+                    .unwrap_err()
+                    .message
+                    .contains("Invalid source action parameters")
+            );
+        }
     }
 
     #[tokio::test]

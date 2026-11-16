@@ -4,7 +4,7 @@ use musicx_core::{
     audio::{AudioOutput, AudioSnapshot, AudioState},
     player::{Message, Player, Reply},
 };
-use musicx_plugin_api::{DataSource, Media};
+use musicx_plugin::{DataSource, Media};
 use objc2::{
     MainThreadMarker,
     rc::{Retained, autoreleasepool},
@@ -97,47 +97,6 @@ impl EndObserver {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use objc2_foundation::NSObject;
-
-    fn post_end(item: &AnyObject) {
-        unsafe {
-            NSNotificationCenter::defaultCenter()
-                .postNotificationName_object(AVPlayerItemDidPlayToEndTimeNotification, Some(item));
-        }
-    }
-
-    #[test]
-    fn end_notifications_are_scoped_to_the_loaded_item() {
-        autoreleasepool(|_| {
-            let old_item = NSObject::new();
-            let item = NSObject::new();
-            let mut observer = EndObserver::new(&old_item);
-            post_end(&old_item);
-            assert!(observer.ended.load(Ordering::Relaxed));
-            observer = EndObserver::new(&item);
-            post_end(&old_item);
-            assert!(!observer.ended.load(Ordering::Relaxed));
-            post_end(&item);
-            assert!(observer.ended.load(Ordering::Relaxed));
-        });
-    }
-
-    #[test]
-    fn dropping_end_observer_unregisters_its_callback() {
-        autoreleasepool(|_| {
-            let item = NSObject::new();
-            let observer = EndObserver::new(&item);
-            let ended = observer.ended.clone();
-            drop(observer);
-            post_end(&item);
-            assert!(!ended.load(Ordering::Relaxed));
-        });
-    }
-}
-
 impl Drop for EndObserver {
     fn drop(&mut self) {
         unsafe { NSNotificationCenter::defaultCenter().removeObserver(self.token.as_ref()) };
@@ -152,7 +111,10 @@ fn activate_audio_session() -> Result<()> {
 
 impl AudioOutput for AppleAudio {
     fn load(output: &mut Option<Self>, media: &Media, play: bool, volume: f32) -> Result<()> {
-        activate_audio_session()?;
+        anyhow::ensure!(
+            matches!(media.url.scheme(), "https" | "http" | "file"),
+            tr!("The source did not provide audio for MusicX playback")
+        );
         let url = NSURL::URLWithString(&NSString::from_str(media.url.as_str()))
             .ok_or_else(|| anyhow!(tr!("Invalid audio URL")))?;
         let main = MainThreadMarker::new().expect("AVPlayer main thread");
@@ -167,6 +129,7 @@ impl AudioOutput for AppleAudio {
             audio.set_volume(volume);
             audio
         });
+        activate_audio_session()?;
         output.gain.set(musicx_core::audio::normalization_scale(
             media.gain_db,
             media.peak,
@@ -261,5 +224,46 @@ impl AudioOutput for AppleAudio {
                     &completion,
                 );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use objc2_foundation::NSObject;
+
+    fn post_end(item: &AnyObject) {
+        unsafe {
+            NSNotificationCenter::defaultCenter()
+                .postNotificationName_object(AVPlayerItemDidPlayToEndTimeNotification, Some(item));
+        }
+    }
+
+    #[test]
+    fn end_notifications_are_scoped_to_the_loaded_item() {
+        autoreleasepool(|_| {
+            let old_item = NSObject::new();
+            let item = NSObject::new();
+            let mut observer = EndObserver::new(&old_item);
+            post_end(&old_item);
+            assert!(observer.ended.load(Ordering::Relaxed));
+            observer = EndObserver::new(&item);
+            post_end(&old_item);
+            assert!(!observer.ended.load(Ordering::Relaxed));
+            post_end(&item);
+            assert!(observer.ended.load(Ordering::Relaxed));
+        });
+    }
+
+    #[test]
+    fn dropping_end_observer_unregisters_its_callback() {
+        autoreleasepool(|_| {
+            let item = NSObject::new();
+            let observer = EndObserver::new(&item);
+            let ended = observer.ended.clone();
+            drop(observer);
+            post_end(&item);
+            assert!(!ended.load(Ordering::Relaxed));
+        });
     }
 }

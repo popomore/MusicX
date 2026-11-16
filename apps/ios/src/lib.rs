@@ -40,11 +40,11 @@ fn initialize() -> anyhow::Result<()> {
     STARTED
         .get_or_init(|| {
             let start = || -> anyhow::Result<()> {
-                player::configure(&musicx_plugins::MYGO)?;
+                player::configure(&musicx_mygo_plugin::MYGO)?;
                 musicx_mcp::start(musicx_mcp::Services {
                     submit: player::submit,
                     quit: || player::submit(player::Action::Pause, None),
-                    sources: &musicx_plugins::MYGO,
+                    sources: &musicx_mygo_plugin::MYGO,
                 })?;
                 mobile::start()
             };

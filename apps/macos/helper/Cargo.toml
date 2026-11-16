@@ -10,5 +10,5 @@ publish = false
 musicx-protocol = { path = "../../../crates/protocol" }
 musicx-mcp = { path = "../../../crates/mcp" }
 musicx-platform-apple = { path = "../../../crates/platform-apple" }
-musicx-plugins = { path = "../../../crates/plugins" }
+musicx-mygo-plugin = { path = "../../../crates/mygo-plugin" }
 anyhow = "1"
