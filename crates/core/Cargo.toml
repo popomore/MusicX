@@ -10,6 +10,7 @@ publish = false
 musicx-protocol = { path = "../protocol" }
 musicx-plugin-api = { path = "../plugin-api" }
 anyhow = "1"
+base64 = "0.22"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 hex = "0.4"

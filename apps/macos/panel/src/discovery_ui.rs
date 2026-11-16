@@ -3,7 +3,7 @@ use crate::protocol::tr;
 use crate::{
     controls::*,
     model::Model,
-    protocol::{MusicSourceAction as Action, SourcePage},
+    protocol::{MusicSourceAction as Action, SourceCollectionKind, SourcePage, SourcePageRequest},
     remote,
 };
 use nsh_base::{button, theme};
@@ -93,40 +93,34 @@ impl Browser {
             })
         });
     }
-    fn next(self, kind: &str, id: String, name: String) {
+    fn next(self, kind: SourceCollectionKind, id: String, name: String) {
         self.history.update(|h| h.push(self.action.get()));
         let source = self.action.with(source);
-        self.load(
-            if matches!(kind, "station" | "playlist" | "page") {
-                Action::Page {
-                    source,
-                    method: if kind == "page" {
-                        "browse"
-                    } else if kind == "station" {
-                        "stationNext"
-                    } else {
-                        "playlist"
-                    }
-                    .into(),
-                    params: if kind == "page" {
-                        serde_json::json!({"page":id})
-                    } else {
-                        serde_json::json!({"id":id,"name":name})
-                    },
-                }
-            } else if kind == "artist" {
-                Action::Artist { source, id }
-            } else if kind == "album" {
-                Action::Album { source, id }
-            } else {
-                Action::Show {
-                    source,
-                    id,
-                    offset: 0,
-                }
+        let action = match kind {
+            SourceCollectionKind::BrowsePage => Action::Page {
+                source,
+                request: SourcePageRequest::Browse { page: id },
             },
-            false,
-        );
+            SourceCollectionKind::Station => Action::Page {
+                source,
+                request: SourcePageRequest::StationTracks {
+                    id,
+                    name: Some(name),
+                },
+            },
+            SourceCollectionKind::Playlist => Action::Page {
+                source,
+                request: SourcePageRequest::Playlist { id },
+            },
+            SourceCollectionKind::Artist => Action::Artist { source, id },
+            SourceCollectionKind::Album => Action::Album { source, id },
+            SourceCollectionKind::Podcast => Action::Show {
+                source,
+                id,
+                offset: 0,
+            },
+        };
+        self.load(action, false);
     }
 }
 
@@ -309,7 +303,7 @@ fn browser(model: Model, initial: Action) -> impl IntoElement {
                         })
                         .on_press(move || {
                             if let Some(c) = collection() {
-                                this.next(&c.kind, c.id, c.name);
+                                this.next(c.kind, c.id, c.name);
                             } else if let Some(index) = this
                                 .page
                                 .with(|p| at.index().checked_sub(p.collections.len()))

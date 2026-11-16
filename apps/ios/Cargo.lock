@@ -1889,6 +1889,7 @@ name = "musicx-core"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "hex",
  "musicx-plugin-api",
  "musicx-protocol",
@@ -1926,7 +1927,6 @@ dependencies = [
  "axum",
  "musicx-core",
  "musicx-plugin-api",
- "musicx-plugins",
  "musicx-protocol",
  "rmcp",
  "serde",

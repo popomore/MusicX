@@ -6,6 +6,7 @@ pub mod local_library;
 pub mod metadata;
 pub mod player;
 mod session;
+pub mod sources;
 pub mod storage;
 
 pub use musicx_protocol as protocol;

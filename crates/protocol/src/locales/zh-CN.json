@@ -764,5 +764,7 @@
   "Trust covers the listed functional checks, not a security audit or platform certification": "可信仅表示所列功能已验证，不代表安全审计或平台官方认证",
   "Source program permissions changed; try playback again": "此来源的外部程序权限已更改，请重试播放",
   "The source did not provide audio for MusicX playback": "此来源未提供可由 MusicX 播放的音频",
-  "This source provides device controls but no audio for MusicX playback": "此来源提供设备遥控，但未提供可由 MusicX 播放的音频"
+  "This source provides device controls but no audio for MusicX playback": "此来源提供设备遥控，但未提供可由 MusicX 播放的音频",
+  "Source search information is incomplete": "来源搜索信息不完整",
+  "Source search exceeds 10,000 items": "来源搜索结果超过 10,000 项"
 }

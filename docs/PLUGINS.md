@@ -6,9 +6,11 @@ MusicX hosts a subset of the [MyGo Music plugin contract](https://github.com/ego
 
 MusicX capabilities are defined by the Rust source contract and implemented by the MyGo adapter. Script exports describe available adapter inputs; runtime compatibility does not automatically expose features in the UI or MCP. A service may also require an account, subscription or configuration.
 
+`crates/protocol/src/sources.rs` defines `SourceCapability`, typed search and page requests/results, collection kinds, and playlist snapshots. `crates/plugin-api` defines `PluginSource: DataSource`; `crates/plugins/src/adapter.rs` implements that interface for MyGo. Application dispatch and local imports in `crates/core/src/sources.rs` consume only this interface. MCP and local UI routes receive it through `Services`; MCP has no normal dependency on the MyGo implementation. The helper selects the adapter at startup.
+
 | MyGo exports | MusicX behavior |
 | --- | --- |
-| `search` | MCP searches tracks, albums, artists, playlists, or shows, with offset pagination. Track results use MusicX's shared `Track` type and durations in seconds; other search kinds retain the provider's entity shape. |
+| `search` | MCP searches tracks, albums, artists, playlists, or shows, with offset pagination. Track results use MusicX's shared `Track` type and durations in seconds; other search kinds use Rust-defined entities with opaque IDs and known metadata fields. |
 | `stream` | Resolves HTTP or HTTPS audio for AVPlayer. Supports source quality selection, HTTP request headers, and optional `gain`/`peak` normalization. Actual codec and service compatibility still need runtime verification. |
 | `lyrics` | LRC and translated LRC, or structured `lines` with line/word timing. The macOS lyrics view follows lines, highlights timed words, and seeks by line. |
 | `album` | Album tracks, reachable from the playing track or a source page. |
@@ -61,6 +63,8 @@ Search with `plugin_search`:
 {"plugin":"example","query":"artist name","kind":"artists","offset":0}
 ```
 
+The `plugin` parameter accepts a source identifier such as `mygo:example`; the MyGo adapter also accepts its legacy raw plugin ID. Results contain `source`, `more`, and the category arrays `tracks`, `albums`, `artists`, `playlists`, and `shows`. Track results retain the source's optional boolean `unavailable`. Other entities contain `id`, `name`, and optional `imageUrl`, `artists`, `description`, `publisher`, `trackCount`, and `releaseDate`; arbitrary provider fields are not forwarded. Use the returned `source` with the opaque entity ID for subsequent requests.
+
 Use `manage_music_sources` to browse and import:
 
 ```json
@@ -105,7 +109,9 @@ Normal calls use a fresh 64 MiB QuickJS runtime with an 18-second deadline; sign
 
 ## Source capabilities and permissions
 
-`host_capabilities` is the supported subset of declared exports. `action=page` returns normalized native `SourcePage` results for `home`, `browse`, `stations`, `stationNext` and `playlist`; nested playlist envelopes and both radio response shapes preserve track identity and second-based timing. `SourcePage.station` starts a radio queue that refills automatically, retries unavailable candidates, and cancels stale requests after user controls or queue changes.
+`MusicSource.host_capabilities` is `Vec<SourceCapability>`, populated by the adapter's explicit mapping of supported operations. UI availability uses `supports(SourceCapability)`. Raw exports remain in the diagnostic `adapter_exports` field (serialized as the legacy `capabilities` JSON key); they do not decide product availability. Capability wire labels such as `stream` and `home` remain compatible with existing clients.
+
+The native `action=page` route decodes the legacy `method`/`params` keys into the closed `SourcePageRequest` enum. It returns normalized `SourcePage` results for recommendations, browsing, stations, station continuation and playlists; arbitrary script method names are rejected. Nested playlist envelopes and both radio response shapes preserve track identity and second-based timing. `SourcePage.station` starts a radio queue that refills automatically, retries unavailable candidates, and cancels stale requests after user controls or queue changes.
 
 The generic `action=invoke` bridge has been removed. Native recommendations, browsing and radio use normalized Rust pages; the existing MCP source-management and import actions are selected independently. Cloud writes, comments, device control, arbitrary script exports and helper/network authorization are not added as MCP actions. Personal music information is viewed independently and imported on demand; current imports cover playlists, liked tracks and recent tracks. Local album, artist-follow and subscription models remain future work.
 
@@ -127,4 +133,4 @@ Packages are limited to 32 MiB and 4,096 ZIP entries, with 64 MiB per asset and 
 
 ## Verification boundaries
 
-Isolated fixtures cover source identity, artist/album/podcast browsing, podcast pagination and metadata, complete liked/recent imports, failed-pagination atomicity, structured lyrics, TypeScript compilation, header rules, audio range transport, OAuth loopback completion, update preservation/rollback, minimum versions, and removal without deleting local collections. An opt-in macOS regression also decodes a generated WAV and seeks through the authenticated proxy with a real, muted AVPlayer. These checks establish host behavior, not the availability or correctness of every third-party service. Real account login, native rendering, codec playback, seeking and audible output require separate acceptance.
+An independent Rust test source exercises MCP search/account/playlists, the local UI page route, and playlist/liked/recent snapshot imports without MyGo. A separate real JavaScript fixture exercises MyGo's typed adapter, including opaque IDs, seconds, unavailable flags, and canonical entities. Isolated fixtures also cover source identity, artist/album/podcast browsing, podcast pagination and metadata, complete liked/recent imports, failed-pagination atomicity, structured lyrics, TypeScript compilation, header rules, audio range transport, OAuth loopback completion, update preservation/rollback, minimum versions, and removal without deleting local collections. An opt-in macOS regression also decodes a generated WAV and seeks through the authenticated proxy with a real, muted AVPlayer. These checks establish host behavior, not the availability or correctness of every third-party service. Real account login, native rendering, codec playback, seeking and audible output require separate acceptance.

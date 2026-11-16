@@ -1,6 +1,6 @@
-use axum::{Json, Router, http::StatusCode, routing::get};
+use crate::Services;
+use axum::{Json, Router, extract::State, http::StatusCode, routing::get};
 use musicx_core::protocol::{MusicSource, MusicSourceAction};
-use musicx_plugins::music_sources::{execute, list};
 use serde_json::{Value, json};
 
 type Failure = (StatusCode, Json<Value>);
@@ -10,18 +10,21 @@ fn error(e: impl std::fmt::Display) -> Failure {
         Json(json!({"error":e.to_string()})),
     )
 }
-pub fn routes() -> Router {
+pub fn routes() -> Router<Services> {
     Router::new().route("/ui/music-sources", get(source_list).post(source_action))
 }
-async fn source_list() -> Result<Json<Vec<MusicSource>>, Failure> {
-    tokio::task::spawn_blocking(list)
+async fn source_list(State(services): State<Services>) -> Result<Json<Vec<MusicSource>>, Failure> {
+    tokio::task::spawn_blocking(move || services.sources.sources())
         .await
         .map_err(error)?
         .map(Json)
         .map_err(error)
 }
-async fn source_action(Json(input): Json<MusicSourceAction>) -> Result<Json<Value>, Failure> {
-    tokio::task::spawn_blocking(move || execute(input))
+pub(super) async fn source_action(
+    State(services): State<Services>,
+    Json(input): Json<MusicSourceAction>,
+) -> Result<Json<Value>, Failure> {
+    tokio::task::spawn_blocking(move || musicx_core::sources::execute(services.sources, input))
         .await
         .map_err(error)?
         .map(Json)

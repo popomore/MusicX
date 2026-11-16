@@ -52,7 +52,7 @@ export function inspect(){return host.storage.get('calls')||0}
         mygo::install(&fixture).unwrap();
         let descriptor = music_sources::get_source(&format!("mygo:{id}")).unwrap();
         assert!(
-            !descriptor.host_capabilities.iter().any(|c| c == "stream"),
+            !descriptor.supports(musicx_core::protocol::SourceCapability::Playback),
             "a remote-only source must not advertise MusicX audio"
         );
         let mut selected = track.clone();
@@ -62,12 +62,8 @@ export function inspect(){return host.storage.get('calls')||0}
             result.is_err(),
             "remote control must never resolve to a playable Media"
         );
-        assert!(
-            descriptor
-                .host_capabilities
-                .iter()
-                .all(|c| !c.starts_with("remote"))
-        );
+        assert!(descriptor.adapter_exports.iter().any(|c| c == "remotePlay"));
+        assert!(descriptor.supports(musicx_core::protocol::SourceCapability::Account));
         assert_eq!(
             mygo::invoke(id, "inspect", json!({})).unwrap(),
             0,

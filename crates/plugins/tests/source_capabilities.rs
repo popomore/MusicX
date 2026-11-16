@@ -1,4 +1,4 @@
-use musicx_core::protocol::MusicSourceAction;
+use musicx_core::protocol::{MusicSourceAction, SourceCapability, SourcePageRequest};
 use musicx_plugins::{music_sources, mygo};
 use serde_json::json;
 use std::{fs, process::Command};
@@ -54,24 +54,25 @@ export function stream(){return {url:'https://example.com/song.mp3'}}
 "#).unwrap();
     mygo::install(&fixture).unwrap();
     let call = |method: &str, params| {
-        music_sources::execute(MusicSourceAction::Page {
-            source: "mygo:capability.fixture".into(),
-            method: method.into(),
-            params,
-        })
+        (|| -> anyhow::Result<serde_json::Value> {
+            music_sources::execute(MusicSourceAction::Page {
+                source: "mygo:capability.fixture".into(),
+                request: serde_json::from_value(json!({"method":method,"params":params}))?,
+            })
+        })()
     };
     let native_page = music_sources::execute(MusicSourceAction::Page {
         source: "mygo:capability.fixture".into(),
-        method: "home".into(),
-        params: json!({}),
+        request: SourcePageRequest::Recommendations {},
     })
     .unwrap();
     assert_eq!(native_page["tracks"][0]["duration"], 42.0);
     assert_eq!(native_page["collections"][0]["kind"], "playlist");
     let wrapped = music_sources::execute(MusicSourceAction::Page {
         source: "mygo:capability.fixture".into(),
-        method: "playlist".into(),
-        params: json!({"id":"wrapped:collection/one"}),
+        request: SourcePageRequest::Playlist {
+            id: "wrapped:collection/one".into(),
+        },
     })
     .unwrap();
     assert_eq!(wrapped["title"], "Wrapped playlist");
@@ -79,15 +80,16 @@ export function stream(){return {url:'https://example.com/song.mp3'}}
     assert_eq!(wrapped["tracks"][0]["source"]["id"], "opaque:one");
     let station_page = music_sources::execute(MusicSourceAction::Page {
         source: "mygo:capability.fixture".into(),
-        method: "stations".into(),
-        params: json!({}),
+        request: SourcePageRequest::Stations {},
     })
     .unwrap();
     assert_eq!(station_page["collections"][0]["id"], "fm");
     let station = music_sources::execute(MusicSourceAction::Page {
         source: "mygo:capability.fixture".into(),
-        method: "stationNext".into(),
-        params: json!({"id":"fm"}),
+        request: SourcePageRequest::StationTracks {
+            id: "fm".into(),
+            name: None,
+        },
     })
     .unwrap();
     assert_eq!(station["station"]["source"], "mygo:capability.fixture");
@@ -123,10 +125,16 @@ export function stream(){return {url:'https://example.com/song.mp3'}}
     );
     assert!(call("browse", json!({"page":""})).is_err());
     let source = music_sources::get_source("mygo:capability.fixture").unwrap();
-    assert!(!source.host_capabilities.iter().any(|c| matches!(
-        c.as_str(),
-        "qqReadSession" | "createPlaylist" | "remoteUse" | "comments"
-    )));
+    assert!(source.supports(SourceCapability::Playback));
+    assert!(source.supports(SourceCapability::Recommendations));
+    assert!(
+        serde_json::to_value(&source.host_capabilities)
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .contains(&json!("stream"))
+    );
+    assert!(serde_json::from_value::<SourceCapability>(json!("createPlaylist")).is_err());
     let manifest_path = root.join("state/mygo-plugins/capability.fixture/plugin.json");
     let mut manifest: serde_json::Value =
         serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();

@@ -12,9 +12,22 @@
 
 通用 `invoke` 产品接口已移除。原生推荐/浏览/电台使用规范化的 Rust 页面；MCP 保留已有来源管理、账号和导入接口，不新增原始脚本方法、设备控制、云端写入或辅助程序授权入口。个人音乐信息按独立查看、按需导入的方向设计；当前已有歌单、喜欢歌曲和历史导入，收藏专辑、关注和订阅的独立本地模型仍需后续实现。
 
-本次移除回归确认：Spotify remote-only 来源不再声明 stream，播放解析不会调用账号或设备接口；带有真实 stream 的来源继续使用通用媒体契约，遥控标记仍被拒绝。当前工作区 160 项测试和自定义原生组件检查通过，另 2 项 opt-in 测试未运行；严格 Clippy、格式及 iOS locked metadata 检查通过。
+移除专用适配时的回归确认：Spotify remote-only 来源不再声明 stream，播放解析不会调用账号或设备接口；带有真实 stream 的来源继续使用通用媒体契约，遥控标记仍被拒绝。该阶段工作区 160 项测试和自定义原生组件检查通过，另 2 项 opt-in 测试未运行；严格 Clippy、格式及 iOS locked metadata 检查通过。
 
 之前的专用取流实现与合成 PCM/WAV 验证已被用户要求撤销，不代表当前支持 Spotify 音频，也未产生 Spotify 真实账号播放证据。Spotify 保持未验证，不增加可信标识。历史设备控制测试同样不属于当前产品播放能力。
+
+## Rust 契约落实（2026-11-16）
+
+之前仍有搜索、账号/歌单和能力字符串耦合 MyGo 的缺口，本次已迁移：
+
+- `crates/protocol/src/sources.rs` 定义 `SourceCapability`、搜索类型、页面请求、集合类型、歌单快照和来源管理结果；`crates/plugin-api` 定义 `PluginSource: DataSource`。
+- `crates/plugins/src/adapter.rs` 实现 MyGo 适配，账号/歌单原始调用及搜索数据转换封装在这里。非歌曲搜索返回 Rust 实体的已知字段，不再透传任意 provider 数据；保留 opaque ID、歌曲秒制时长和不可播标记。
+- `crates/core/src/sources.rs` 负责通用分发与本地快照导入。MCP 和 UI 路由经 `Services` 注入同一接口，MCP 普通依赖中已移除 `musicx-plugins`。
+- `host_capabilities` 改为 Rust 枚举，UI 使用 `supports(SourceCapability)`；原始导出只留作诊断，旧 JSON `capabilities` 字段兼容保留。页面与集合导航也改为枚举，旧 `method`/`params` 格式兼容，但不能调用任意脚本函数。
+
+独立 Rust 测试来源实际覆盖 MCP 搜索/账号/歌单、UI 页面路由，以及歌单/喜欢/最近播放的本地导入，不经过 MyGo；另以真实 JavaScript fixture 验证 MyGo 的类型转换、嵌套歌单和原脚本保留。旧页面请求省略或传 null params 的兼容性另有回归。此轮没有增加产品能力、修改第三方插件或改变 UI 布局，真实账号与音频验收范围不变。
+
+本轮工作区 164 项测试及自定义原生组件检查通过，2 项 opt-in 测试未运行；严格 workspace Clippy、格式和 iOS locked metadata 通过。MCP 普通依赖树无 MyGo 实现，Spotify QA 包四个原文件的 SHA256 与改动前一致。
 
 ## 可信的含义
 

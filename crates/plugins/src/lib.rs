@@ -1,4 +1,5 @@
 //! MyGo compatibility and explicit plugin source registration.
+mod adapter;
 pub mod assets;
 mod capabilities;
 mod catalog;
@@ -26,7 +27,7 @@ mod web_api;
 mod web_auth;
 
 use anyhow::Result;
-use musicx_core::{local_library, protocol};
+use musicx_core::protocol;
 use musicx_plugin_api::{DataSource, Media};
 use protocol::{AlbumPage, LocalLibraryAction, Quality, Track, TrackInfo};
 use serde_json::Value;
@@ -38,7 +39,14 @@ pub static MYGO: MyGo = MyGo;
 
 impl DataSource for MyGo {
     fn station_next(&self, source: &str, id: &str) -> Result<Vec<Track>> {
-        Ok(discovery::page(source, "stationNext", serde_json::json!({"id":id}))?.tracks)
+        Ok(discovery::page(
+            source,
+            protocol::SourcePageRequest::StationTracks {
+                id: id.into(),
+                name: None,
+            },
+        )?
+        .tracks)
     }
     fn artwork(&self, value: &str) -> Option<Vec<u8>> {
         let url = url::Url::parse(value).ok()?;
@@ -60,12 +68,5 @@ impl DataSource for MyGo {
 
 /// Fetch imports before acquiring the local library's writer lock.
 pub fn change_library(action: LocalLibraryAction) -> Result<Value> {
-    let (origin, tracks) = match action {
-        LocalLibraryAction::ImportSource {
-            source,
-            playlist_id,
-        } => music_sources::playlist_snapshot(&source, &playlist_id)?,
-        edit => return local_library::change(edit),
-    };
-    local_library::import(origin, tracks)
+    musicx_core::sources::change_library(&MYGO, action)
 }

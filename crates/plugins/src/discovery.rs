@@ -1,7 +1,6 @@
 //! Read-only provider browsing and atomic local imports.
 use crate::{mygo, protocol::*};
 use anyhow::{Context, Result, ensure};
-use musicx_core::local_library;
 use musicx_core::protocol::tr;
 use serde_json::{Value, json};
 use std::collections::HashSet;
@@ -41,7 +40,11 @@ fn more(v: &Value) -> bool {
         .unwrap_or(false)
 }
 
-pub fn import(source: &str, liked: bool) -> Result<Value> {
+pub fn personal_collection(
+    source: &str,
+    collection: SourcePersonalCollection,
+) -> Result<SourcePlaylistSnapshot> {
+    let liked = collection == SourcePersonalCollection::LikedTracks;
     let plugin = source_id(source)?;
     let export = if liked { "liked" } else { "recent" };
     let mut all = Vec::new();
@@ -92,19 +95,19 @@ pub fn import(source: &str, liked: bool) -> Result<Value> {
     } else {
         tr!("Cloud history")
     };
-    local_library::import(
-        PlaylistOrigin {
+    Ok(SourcePlaylistSnapshot {
+        origin: PlaylistOrigin {
             provider: source.into(),
             id: format!("collection:{export}"),
             name: format!("{} · {label}", mygo::source_name(plugin)),
         },
-        all,
-    )
+        tracks: all,
+    })
 }
 
-fn collection(plugin: &str, kind: &str, v: &Value) -> Option<SourceCollection> {
+fn collection(plugin: &str, kind: SourceCollectionKind, v: &Value) -> Option<SourceCollection> {
     Some(SourceCollection {
-        kind: kind.into(),
+        kind,
         id: v["id"].as_str()?.into(),
         name: v["name"]
             .as_str()
@@ -125,8 +128,24 @@ fn collection(plugin: &str, kind: &str, v: &Value) -> Option<SourceCollection> {
     })
 }
 
+pub fn page(source: &str, request: SourcePageRequest) -> Result<SourcePage> {
+    use SourcePageRequest::*;
+    let (method, params) = match request {
+        Recommendations {} => ("home", json!({})),
+        Browse { page } => ("browse", json!({"page":page})),
+        Stations {} => ("stations", json!({})),
+        StationTracks { id, name } => ("stationNext", json!({"id":id,"name":name})),
+        Playlist { id } => ("playlist", json!({"id":id})),
+        Artist { id } => return browse(source, "artist", &id, 0),
+        Album { id } => return browse(source, "album", &id, 0),
+        Podcasts {} => return browse(source, "shows", "", 0),
+        PodcastEpisodes { id, offset } => return browse(source, "show", &id, offset),
+    };
+    normalized_page(source, method, params)
+}
+
 /// Flatten provider sections into the shared native browser without exposing helpers.
-pub fn page(source: &str, method: &str, params: Value) -> Result<SourcePage> {
+fn normalized_page(source: &str, method: &str, params: Value) -> Result<SourcePage> {
     ensure!(
         matches!(
             method,
@@ -198,7 +217,7 @@ pub fn page(source: &str, method: &str, params: Value) -> Result<SourcePage> {
             .into_iter()
             .flatten()
             .take(1000)
-            .filter_map(|v| collection(plugin, "station", v))
+            .filter_map(|v| collection(plugin, SourceCollectionKind::Station, v))
             .collect();
     } else {
         fn section(plugin: &str, value: &Value, page: &mut SourcePage, depth: usize) -> Result<()> {
@@ -215,7 +234,7 @@ pub fn page(source: &str, method: &str, params: Value) -> Result<SourcePage> {
                         .filter(|s| !s.is_empty() && s.len() <= 1024)
                     {
                         page.collections.push(SourceCollection {
-                            kind: "page".into(),
+                            kind: SourceCollectionKind::BrowsePage,
                             id: id.into(),
                             name: link["title"]
                                 .as_str()
@@ -241,18 +260,18 @@ pub fn page(source: &str, method: &str, params: Value) -> Result<SourcePage> {
                 .filter(|s| !s.is_empty() && s.len() <= 1024)
             {
                 page.collections.push(SourceCollection {
-                    kind: "page".into(),
+                    kind: SourceCollectionKind::BrowsePage,
                     id: id.into(),
                     name: tr!("More {}", value["title"].as_str().unwrap_or_default()),
                     ..Default::default()
                 });
             }
             for (key, kind) in [
-                ("playlists", "playlist"),
-                ("albums", "album"),
-                ("artists", "artist"),
-                ("shows", "show"),
-                ("stations", "station"),
+                ("playlists", SourceCollectionKind::Playlist),
+                ("albums", SourceCollectionKind::Album),
+                ("artists", SourceCollectionKind::Artist),
+                ("shows", SourceCollectionKind::Podcast),
+                ("stations", SourceCollectionKind::Station),
             ] {
                 if let Some(rows) = value[key].as_array() {
                     page.collections
@@ -279,7 +298,7 @@ pub fn page(source: &str, method: &str, params: Value) -> Result<SourcePage> {
     Ok(result)
 }
 
-pub fn browse(source: &str, kind: &str, id: &str, offset: u64) -> Result<SourcePage> {
+fn browse(source: &str, kind: &str, id: &str, offset: u64) -> Result<SourcePage> {
     let plugin = source_id(source)?;
     ensure!(offset <= MAX_QUEUE_TRACKS as u64, tr!("Page out of range"));
     if kind != "shows" {
@@ -297,7 +316,7 @@ pub fn browse(source: &str, kind: &str, id: &str, offset: u64) -> Result<SourceP
             title: tr!("Podcasts").into(),
             collections: rows
                 .iter()
-                .filter_map(|v| collection(plugin, "show", v))
+                .filter_map(|v| collection(plugin, SourceCollectionKind::Podcast, v))
                 .collect(),
             ..Default::default()
         });
@@ -340,7 +359,7 @@ pub fn browse(source: &str, kind: &str, id: &str, offset: u64) -> Result<SourceP
             .into_iter()
             .flatten()
             .take(1000)
-            .filter_map(|v| collection(plugin, "album", v))
+            .filter_map(|v| collection(plugin, SourceCollectionKind::Album, v))
             .collect(),
         more: more(&value),
         next_offset: offset + rows.len() as u64,

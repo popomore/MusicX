@@ -132,8 +132,8 @@ The local release automation tests require Python 3.9 or later, Git, Bash, Cargo
 | `crates/core` | Playback state, queues, history, local playlists, and persistence |
 | `crates/protocol` | Shared types and the local control protocol |
 | `crates/platform-apple` | AVPlayer, system Now Playing, and macOS menu bar integration |
-| `crates/plugin-api` | Rust interfaces for search, streams, track information, and albums |
-| `crates/plugins` | MyGo bridge, source management, and account adapters |
+| `crates/plugin-api` | `DataSource` media interface and typed `PluginSource` operations |
+| `crates/plugins` | MyGo implementation, runtime injection, and source management |
 | `crates/mcp` | Streamable HTTP, MCP tools, and local panel routes |
 | `apps/macos/helper` | Entry point that wires the runtime together |
 | `apps/macos/panel` | NSH player window and details views |
@@ -142,7 +142,7 @@ The local release automation tests require Python 3.9 or later, Git, Bash, Cargo
 | `assets` | App artwork and theme tokens |
 | `vendor` | Patched NSH platform code |
 
-The helper wires the player core to the Apple `AudioOutput` and MyGo `DataSource` implementations. The panel and MCP server send commands to the same playback session. The design guide describes how this affects the window lifecycle, queues, and artwork. [Design guide](DESIGN.md)
+The helper wires the player core to the Apple `AudioOutput` and MyGo `PluginSource: DataSource` implementations. `crates/protocol/src/sources.rs` owns source capabilities and request/result types; `crates/core/src/sources.rs` dispatches application actions and imports typed snapshots. `crates/plugins/src/adapter.rs` converts MyGo inputs and results. MCP and local UI routes receive the interface through `Services`, without a normal dependency on `musicx-plugins`. The panel and MCP server send commands to the same playback session. The design guide describes how this affects the window lifecycle, queues, and artwork. [Design guide](DESIGN.md)
 
 ## MCP tools
 
@@ -168,7 +168,7 @@ See [Plugin capabilities and MyGo differences](PLUGINS.md) for artist/podcast br
 
 MusicX starts with the locally installed plugins, including an empty installation. Startup and listing installed sources do not install plugins or contact the catalog. Add a source in **Settings → Music Sources** on macOS or **Music Sources** on iPhone. Account sign-in, sign-out, configuration, and playlist import use that selected plugin's capabilities. MCP clients use `manage_music_sources` with `source=mygo:<plugin-id>`.
 
-Search with `plugin_search` and an explicit `plugin` ID. Its `tracks` array contains the shared `Track` wire type: title, artist, duration in seconds, available cover/album/source-link metadata, and the original string ID under `source.id`. The adapter normalizes the plugin's native search response and preserves its top-level pagination fields.
+Search with `plugin_search` and an explicit source identifier in `plugin`; the MyGo adapter also accepts its legacy raw plugin ID. Its `tracks` array contains the shared `Track` wire type: title, artist, duration in seconds, available cover/album/source-link metadata, and the original string ID under `source.id`, plus the optional `unavailable` flag. Other categories use `SourceSearchEntity` with opaque IDs and known metadata fields. `SourceSearchPage` returns `source`, `more`, and all five category arrays; arbitrary provider fields are not forwarded.
 
 Playback is independent of the source tools. Pass a complete item from `tracks` unchanged in the `track` parameter of `play_song` or `enqueue_song`. These tools resolve through the injected `DataSource` and submit a player action only after successful resolution. They do not invoke MyGo directly or reconstruct a partial track. `plugin_play` has been removed. The `play_song`/`enqueue_song` names now use this full-Track contract; the old bare `id` parameter is not supported.
 
@@ -182,7 +182,7 @@ cargo run --release --locked -- plugin-install /path/to/plugin
 
 Available actions depend on the plugin's capabilities. Repository installs prefer the latest Release's platform or generic ZIP, then its source archive. Repositories without a Release resolve the default branch to one fixed commit. ZIPs are limited to 32 MiB; oversized source archives fall back to that commit's manifest, single-file entry and supported locales. Bundled assets retain executable bits, with 64 MiB per file and 128 MiB total limits; package paths and symlinks are checked. TypeScript is transpiled and the entry is compiled without executing it. External modules and background extensions remain unavailable. Every source uses the same installation flow; curated trust records do not pin installation candidates to old versions. [MyGo Music plugin directory](https://music.egoist.dev/zh/plugins)
 
-Source descriptors distinguish raw MyGo exports from MusicX `host_capabilities`. Rust defines product operations and normalized pages; the adapter implements them. The generic `invoke` action is removed. Native recommendation/browse/radio pages do not automatically become MCP actions. Existing MCP source management, account and local snapshot imports remain available; cloud mutations, device control and helper/network grants are not exposed through the MCP source tool. Stations create a queue context that requests another batch when it ends.
+Source descriptors distinguish raw MyGo `adapter_exports` (legacy JSON `capabilities`) from typed `host_capabilities: Vec<SourceCapability>`. UI checks `supports(SourceCapability)`; Rust defines product operations and normalized pages, and the adapter implements them. Native page requests decode the legacy `method`/`params` keys into `SourcePageRequest`, and collection navigation uses `SourceCollectionKind`. The generic `invoke` action is removed. Native recommendation/browse/radio pages do not automatically become MCP actions. Existing MCP source management, account and local snapshot imports remain available; cloud mutations, device control and helper/network grants are not exposed through the MCP source tool. Stations create a queue context that requests another batch when it ends.
 
 The runtime supplies URL/URLSearchParams, Headers, UTF-8 TextEncoder/TextDecoder, base64, form and binary fetch bodies, and response `arrayBuffer()`. HTTP uses six bounded workers, at most 16 pending requests per VM, an 8 MiB response limit and the existing call deadline. Storage is bounded at 4 MiB and failed writes preserve the previous value.
 

@@ -1854,6 +1854,7 @@ name = "musicx-core"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "hex",
  "musicx-plugin-api",
  "musicx-protocol",

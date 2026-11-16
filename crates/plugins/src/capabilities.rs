@@ -6,35 +6,38 @@ use serde_json::{Value, json};
 
 const ACTIONS: &[&str] = &["home", "browse", "stations", "stationNext"];
 
-pub(crate) fn supported(exports: &[String]) -> Vec<String> {
-    let mut result: Vec<_> = exports
+pub(crate) fn supported(exports: &[String]) -> Vec<musicx_core::protocol::SourceCapability> {
+    use musicx_core::protocol::SourceCapability;
+    let mut capabilities: Vec<_> = exports
         .iter()
-        .filter(|name| {
-            ACTIONS.contains(&name.as_str())
-                || matches!(
-                    name.as_str(),
-                    "search"
-                        | "stream"
-                        | "lyrics"
-                        | "album"
-                        | "artist"
-                        | "account"
-                        | "signIn"
-                        | "signOut"
-                        | "setSetting"
-                        | "playlists"
-                        | "playlist"
-                        | "liked"
-                        | "recent"
-                        | "shows"
-                        | "show"
-                )
+        .filter_map(|export| {
+            Some(match export.as_str() {
+                "search" => SourceCapability::Search,
+                "stream" => SourceCapability::Playback,
+                "lyrics" => SourceCapability::Lyrics,
+                "album" => SourceCapability::Album,
+                "artist" => SourceCapability::Artist,
+                "account" => SourceCapability::Account,
+                "signIn" => SourceCapability::SignIn,
+                "signOut" => SourceCapability::SignOut,
+                "setSetting" => SourceCapability::Settings,
+                "playlists" => SourceCapability::Playlists,
+                "playlist" => SourceCapability::Playlist,
+                "liked" => SourceCapability::LikedTracks,
+                "recent" => SourceCapability::RecentTracks,
+                "shows" => SourceCapability::Podcasts,
+                "show" => SourceCapability::PodcastEpisodes,
+                "home" => SourceCapability::Recommendations,
+                "browse" => SourceCapability::Browse,
+                "stations" => SourceCapability::Stations,
+                "stationNext" => SourceCapability::StationContinuation,
+                _ => return None,
+            })
         })
-        .cloned()
         .collect();
-    result.sort();
-    result.dedup();
-    result
+    capabilities.sort();
+    capabilities.dedup();
+    capabilities
 }
 
 fn text<'a>(params: &'a Value, key: &str, limit: usize) -> Result<&'a str> {
@@ -115,7 +118,7 @@ pub(crate) fn invoke(source: &str, method: &str, params: Value) -> Result<Value>
     );
     let info = music_sources::get_source(source)?;
     ensure!(
-        info.capabilities.iter().any(|c| c == method),
+        info.adapter_exports.iter().any(|c| c == method),
         tr!("This source does not support this capability")
     );
     let params = if params.is_null() { json!({}) } else { params };

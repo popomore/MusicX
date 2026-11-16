@@ -764,5 +764,7 @@
   "Trust covers the listed functional checks, not a security audit or platform certification": "Trust covers the listed functional checks, not a security audit or platform certification",
   "Source program permissions changed; try playback again": "Source program permissions changed; try playback again",
   "The source did not provide audio for MusicX playback": "The source did not provide audio for MusicX playback",
-  "This source provides device controls but no audio for MusicX playback": "This source provides device controls but no audio for MusicX playback"
+  "This source provides device controls but no audio for MusicX playback": "This source provides device controls but no audio for MusicX playback",
+  "Source search information is incomplete": "Source search information is incomplete",
+  "Source search exceeds 10,000 items": "Source search exceeds 10,000 items"
 }

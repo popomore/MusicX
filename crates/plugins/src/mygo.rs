@@ -19,7 +19,7 @@ use std::{
 
 use crate::protocol::Track;
 use musicx_core::{metadata::merge_metadata, storage::state_dir};
-use musicx_plugin_api::Media;
+use musicx_plugin_api::{Media, SourceError as PluginFailure};
 
 fn aes_ecb(key: &str, text: &str) -> Result<String> {
     use aes::{
@@ -1168,22 +1168,8 @@ fn invoke_inner(id: &str, export: &str, args: Value, invocation: Invocation) -> 
     })
 }
 
-#[derive(Debug)]
-struct PluginFailure {
-    code: String,
-    message: String,
-}
-impl std::fmt::Display for PluginFailure {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-impl std::error::Error for PluginFailure {}
 pub fn error_code(error: &anyhow::Error) -> Option<&str> {
-    error
-        .downcast_ref::<PluginFailure>()
-        .map(|failure| failure.code.as_str())
-        .filter(|code| !code.is_empty())
+    musicx_plugin_api::error_code(error)
 }
 
 pub fn resolve_with_quality(mut track: Track, quality: crate::protocol::Quality) -> Result<Media> {
@@ -1192,7 +1178,7 @@ pub fn resolve_with_quality(mut track: Track, quality: crate::protocol::Quality)
         .as_ref()
         .context(tr!("Plugin track identifier missing"))?;
     let info = crate::music_sources::get_source(&format!("mygo:{}", source.plugin))?;
-    if info.playback == "remote" && !info.capabilities.iter().any(|c| c == "stream") {
+    if info.playback == "remote" && !info.adapter_exports.iter().any(|c| c == "stream") {
         if let Some(reason) = info.limitation {
             anyhow::bail!(reason);
         }

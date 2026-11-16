@@ -58,7 +58,7 @@ static LOGIN: Mutex<LoginRegistry> = Mutex::new(LoginRegistry {
     completed: std::collections::VecDeque::new(),
 });
 
-fn plugin(source: &str) -> Result<&str> {
+pub(crate) fn plugin(source: &str) -> Result<&str> {
     let id = source
         .strip_prefix("mygo:")
         .context(tr!("Choose a plugin source"))?;
@@ -561,7 +561,7 @@ fn source_descriptor(
         network_granted,
         permission_fingerprint,
         pages,
-        capabilities: exports,
+        adapter_exports: exports,
         settings,
         qr_sign_in: qr,
         web_sign_in: false,
@@ -750,7 +750,7 @@ pub fn configure(source: &str, changes: BTreeMap<String, String>) -> Result<Valu
     save_settings(id, &values)?;
     drop(guard);
     let mut warning = None;
-    if info.capabilities.iter().any(|v| v == "setSetting") {
+    if info.adapter_exports.iter().any(|v| v == "setSetting") {
         for (key, value) in changes {
             if mygo::invoke(id, "setSetting", json!({"key":key,"value":value})).is_err() {
                 warning = Some(tr!(
@@ -968,99 +968,14 @@ pub(crate) fn auto_update(
 }
 
 pub fn account(source: &str) -> Result<SourceAccount> {
-    let id = plugin(source)?;
-    let info = get_source(source)?;
-    if !info.capabilities.iter().any(|v| v == "account") {
-        return Ok(SourceAccount::default());
-    }
-    let v = mygo::invoke(id, "account", json!({})).map_err(|_| {
-        anyhow::anyhow!(tr!(
-            "Could not read account status; check the source settings"
-        ))
-    })?;
-    Ok(SourceAccount {
-        connected: !v.is_null() && v["id"].is_string(),
-        name: v["name"].as_str().map(|v| v.chars().take(100).collect()),
-    })
+    musicx_plugin_api::PluginSource::account(&crate::MYGO, source)
 }
 pub fn playlists(source: &str) -> Result<Vec<SourcePlaylist>> {
-    let id = plugin(source)?;
-    let v = mygo::invoke(id, "playlists", json!({})).map_err(|_| {
-        anyhow::anyhow!(tr!(
-            "Could not read source playlists; connect an account or check settings"
-        ))
-    })?;
-    let rows = v
-        .as_array()
-        .or_else(|| v["playlists"].as_array())
-        .context(tr!("The source returned no playlist list"))?;
-    ensure!(rows.len() <= 1000, tr!("Too many source playlists"));
-    Ok(rows
-        .iter()
-        .filter_map(|v| {
-            let id = v["id"]
-                .as_str()
-                .map(str::to_owned)
-                .or_else(|| v["id"].as_u64().map(|v| v.to_string()))?;
-            Some(SourcePlaylist {
-                cover_url: v["imageUrl"].as_str().and_then(metadata::artwork_url),
-                id,
-                name: v["name"]
-                    .as_str()
-                    .unwrap_or(tr!("Untitled playlist"))
-                    .into(),
-                track_count: v["trackCount"].as_u64().unwrap_or(0) as usize,
-            })
-        })
-        .collect())
+    musicx_plugin_api::PluginSource::playlists(&crate::MYGO, source)
 }
 pub fn playlist_snapshot(source: &str, id: &str) -> Result<(PlaylistOrigin, Vec<Track>)> {
-    let id = id.trim();
-    ensure!(
-        !id.is_empty() && id.len() <= 1024,
-        tr!("Invalid playlist identifier")
-    );
-    let plugin = plugin(source)?;
-    let value = mygo::invoke(plugin, "playlist", json!({"id":id})).map_err(|_| {
-        anyhow::anyhow!(tr!(
-            "Could not load the source playlist; check your account and settings"
-        ))
-    })?;
-    let page = if value["playlist"].is_object() {
-        &value["playlist"]
-    } else {
-        &value
-    };
-    let rows = page["tracks"]
-        .as_array()
-        .or_else(|| value["tracks"].as_array())
-        .context(tr!("The source returned no playlist tracks"))?;
-    ensure!(rows.len() <= 10000, tr!("Playlist exceeds 10,000 tracks"));
-    let tracks: Vec<_> = rows
-        .iter()
-        .filter_map(|v| mygo::catalog_track(plugin, v))
-        .collect();
-    ensure!(
-        tracks.len() == rows.len(),
-        tr!("Source track information is incomplete; nothing was imported")
-    );
-    ensure!(
-        page["trackCount"]
-            .as_u64()
-            .is_none_or(|n| n as usize <= tracks.len()),
-        tr!("The source returned an incomplete playlist; nothing was imported")
-    );
-    Ok((
-        PlaylistOrigin {
-            provider: source.into(),
-            id: id.into(),
-            name: page["name"]
-                .as_str()
-                .unwrap_or(tr!("Import playlist"))
-                .into(),
-        },
-        tracks,
-    ))
+    let snapshot = musicx_plugin_api::PluginSource::playlist(&crate::MYGO, source, id)?;
+    Ok((snapshot.origin, snapshot.tracks))
 }
 
 pub(crate) struct LoginJob {
@@ -1246,102 +1161,7 @@ pub fn login_state(id: &str, cancel: bool) -> Result<SourceLogin> {
 }
 
 pub fn execute(input: MusicSourceAction) -> Result<Value> {
-    Ok(match input {
-        MusicSourceAction::Page {
-            source,
-            method,
-            params,
-        } => serde_json::to_value(crate::discovery::page(&source, &method, params)?)?,
-        MusicSourceAction::SetNetworkPermission {
-            source,
-            enabled,
-            expected_fingerprint,
-        } => {
-            let guard = crate::permissions::lock()?;
-            crate::network::set(
-                plugin(&source)?,
-                enabled,
-                expected_fingerprint.as_deref(),
-                &guard,
-            )?;
-            drop(guard);
-            serde_json::to_value(get_source(&source)?)?
-        }
-        MusicSourceAction::SetProcessPermission {
-            source,
-            enabled,
-            expected_fingerprint,
-        } => {
-            let guard = crate::permissions::lock()?;
-            crate::process::set(
-                plugin(&source)?,
-                enabled,
-                expected_fingerprint.as_deref(),
-                &guard,
-            )?;
-            drop(guard);
-            serde_json::to_value(get_source(&source)?)?
-        }
-        MusicSourceAction::List => serde_json::to_value(list()?)?,
-        MusicSourceAction::AutoUpdateSettings => {
-            serde_json::to_value(crate::plugin_updates::settings()?)?
-        }
-        MusicSourceAction::SetAutoUpdate { enabled } => {
-            serde_json::to_value(crate::plugin_updates::set_enabled(enabled)?)?
-        }
-        MusicSourceAction::Catalog => serde_json::to_value(catalog()?)?,
-        MusicSourceAction::CatalogView => serde_json::to_value(catalog_view(false)?)?,
-        MusicSourceAction::RefreshCatalog => serde_json::to_value(catalog_view(true)?)?,
-        MusicSourceAction::Get { source } => serde_json::to_value(get_source(&source)?)?,
-        MusicSourceAction::Install { repository } => serde_json::to_value(install(&repository)?)?,
-        MusicSourceAction::CheckUpdate { source } => check_update(&source)?,
-        MusicSourceAction::Update { source } => serde_json::to_value(update(&source)?)?,
-        MusicSourceAction::Uninstall { source } => {
-            mygo::uninstall(plugin(&source)?)?;
-            json!({"ok":true})
-        }
-        MusicSourceAction::Configure { source, values } => configure(&source, values)?,
-        MusicSourceAction::Account { source } => serde_json::to_value(account(&source)?)?,
-        MusicSourceAction::SignIn {
-            source,
-            job,
-            method,
-        } => serde_json::to_value(begin_sign_in_method(&source, job, method)?)?,
-        MusicSourceAction::Poll { job } => serde_json::to_value(login_state(&job, false)?)?,
-        MusicSourceAction::Cancel { job } => serde_json::to_value(login_state(&job, true)?)?,
-        MusicSourceAction::SignOut { source } => {
-            let id = plugin(&source)?;
-            mygo::invoke(id, "signOut", json!({}))
-                .map_err(|_| anyhow::anyhow!(tr!("Could not sign out of the source")))?;
-            json!({"ok":true})
-        }
-        MusicSourceAction::Playlists { source } => serde_json::to_value(playlists(&source)?)?,
-        MusicSourceAction::ImportLiked { source } => crate::discovery::import(&source, true)?,
-        MusicSourceAction::ImportRecent { source } => crate::discovery::import(&source, false)?,
-        MusicSourceAction::Artist { source, id } => {
-            serde_json::to_value(crate::discovery::browse(&source, "artist", &id, 0)?)?
-        }
-        MusicSourceAction::Album { source, id } => {
-            serde_json::to_value(crate::discovery::browse(&source, "album", &id, 0)?)?
-        }
-        MusicSourceAction::Shows { source } => {
-            serde_json::to_value(crate::discovery::browse(&source, "shows", "", 0)?)?
-        }
-        MusicSourceAction::Artwork { source, url } => {
-            use base64::Engine;
-            json!({"data":base64::engine::general_purpose::STANDARD.encode(crate::assets::image(plugin(&source)?, &url)?)})
-        }
-        MusicSourceAction::Show { source, id, offset } => {
-            serde_json::to_value(crate::discovery::browse(&source, "show", &id, offset)?)?
-        }
-        MusicSourceAction::ImportPlaylist {
-            source,
-            playlist_id,
-        } => crate::change_library(LocalLibraryAction::ImportSource {
-            source,
-            playlist_id,
-        })?,
-    })
+    musicx_core::sources::execute(&crate::MYGO, input)
 }
 #[cfg(test)]
 mod tests {

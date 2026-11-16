@@ -1,5 +1,11 @@
+use crate::Services;
 use anyhow::Result;
-use axum::{Json, Router, extract::Query, http::StatusCode, routing::get};
+use axum::{
+    Json, Router,
+    extract::{Query, State},
+    http::StatusCode,
+    routing::get,
+};
 use musicx_core::{
     local_library::{favorite, lists, playlist},
     protocol::{FavoriteState, LocalLibraryAction},
@@ -31,7 +37,7 @@ async fn get_favorite(
         .map(Json)
         .map_err(failure)
 }
-pub fn routes() -> Router {
+pub fn routes() -> Router<Services> {
     Router::new()
         .route("/ui/local-playlists", get(get_library).post(edit_library))
         .route("/ui/favorite", get(get_favorite))
@@ -46,10 +52,15 @@ async fn get_library(Query(input): Query<Selection>) -> Result<Json<Value>, Fail
     .map(Json)
     .map_err(failure)
 }
-async fn edit_library(Json(input): Json<LocalLibraryAction>) -> Result<Json<Value>, Failure> {
-    tokio::task::spawn_blocking(move || musicx_plugins::change_library(input))
-        .await
-        .map_err(failure)?
-        .map(Json)
-        .map_err(failure)
+async fn edit_library(
+    State(services): State<Services>,
+    Json(input): Json<LocalLibraryAction>,
+) -> Result<Json<Value>, Failure> {
+    tokio::task::spawn_blocking(move || {
+        musicx_core::sources::change_library(services.sources, input)
+    })
+    .await
+    .map_err(failure)?
+    .map(Json)
+    .map_err(failure)
 }

@@ -1,5 +1,5 @@
 //! The source-management page is disposable. Only a live sign-in owns a temporary VM.
-use crate::protocol::tr;
+use crate::protocol::{SourceCapability as Capability, SourcePageRequest as PageRequest, tr};
 use crate::{
     protocol::{
         MusicSource, MusicSourceAction as Action, MusicSourceCatalog, SignInMethod, SourceAccount,
@@ -264,7 +264,7 @@ impl Browser {
         let Some(source) = self.selected.get() else {
             return;
         };
-        if !source.installed || !source.capabilities.iter().any(|v| v == "account") {
+        if !source.installed || !source.supports(Capability::Account) {
             return;
         }
         self.work(
@@ -411,7 +411,7 @@ impl Browser {
         self.page.set(Page::Playlists);
         self.playlists.set(Vec::new());
         self.message.set(String::new());
-        if source.capabilities.iter().any(|v| v == "playlists") {
+        if source.supports(Capability::Playlists) {
             self.work(
                 move || request::<Vec<SourcePlaylist>>(Action::Playlists { source: source.id }),
                 |this, rows| this.playlists.set(rows),
@@ -537,23 +537,22 @@ fn caption(value: impl IntoReactive<SharedString>) -> impl IntoElement {
 }
 fn capabilities(source: &MusicSource) -> String {
     [
-        ("search", tr!("Search")),
-        ("stream", tr!("Play")),
-        ("home", tr!("Recommendations")),
-        ("browse", tr!("Browse")),
-        ("stations", tr!("Radio")),
-        ("comments", tr!("Comments")),
-        ("lyrics", tr!("Lyrics")),
-        ("album", tr!("Album")),
-        ("artist", tr!("Artist")),
-        ("liked", tr!("Liked tracks import")),
-        ("recent", tr!("History import")),
-        ("shows", tr!("Podcasts")),
-        ("playlists", tr!("Playlists")),
-        ("signIn", tr!("Account")),
+        (Capability::Search, tr!("Search")),
+        (Capability::Playback, tr!("Play")),
+        (Capability::Recommendations, tr!("Recommendations")),
+        (Capability::Browse, tr!("Browse")),
+        (Capability::Stations, tr!("Radio")),
+        (Capability::Lyrics, tr!("Lyrics")),
+        (Capability::Album, tr!("Album")),
+        (Capability::Artist, tr!("Artist")),
+        (Capability::LikedTracks, tr!("Liked tracks import")),
+        (Capability::RecentTracks, tr!("History import")),
+        (Capability::Podcasts, tr!("Podcasts")),
+        (Capability::Playlists, tr!("Playlists")),
+        (Capability::SignIn, tr!("Account")),
     ]
     .iter()
-    .filter(|(key, _)| source.host_capabilities.iter().any(|v| v == key))
+    .filter(|(key, _)| source.host_capabilities.contains(key))
     .map(|(_, label)| *label)
     .collect::<Vec<_>>()
     .join(" · ")
@@ -741,7 +740,7 @@ pub fn sources_view(
                         .child(view().flex_row().items_center().gap(px(6.0))
                             .child(text(move||source().map_or_else(String::new,|s|s.name)).number_of_lines(1).text_size(px(14.0)).text_color(move||theme().foreground).flex_1().min_w(px(0.0)))
                             .child(verification_badge(source)))
-                        .child(caption(move||source().map_or_else(String::new,|s|if s.installed{tr!("Added").into()}else if s.can_install{if s.capabilities.is_empty(){s.description}else{capabilities(&s)}}else{tr!("This type is not supported yet").into()})))
+                        .child(caption(move||source().map_or_else(String::new,|s|if s.installed{tr!("Added").into()}else if s.can_install{if s.host_capabilities.is_empty(){s.description}else{capabilities(&s)}}else{tr!("This type is not supported yet").into()})))
                 }).flex_1().min_h(px(0.0)).estimated_item_size(px(70.0)).label(tr!("Music source list")))
         }))
         .child(when(move||this.page.get()==Page::Detail,move||{
@@ -768,9 +767,9 @@ pub fn sources_view(
                 }))
                 .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.installed)),move||{
                     view().gap(px(10.0))
-                        .child(each(move||this.selected.with(|s|s.as_ref().filter(|s|s.host_capabilities.iter().any(|c|c=="browse")).map_or_else(Vec::new,|s|s.pages.clone())),|row|row.page.clone(),move|row,_|button().accessibility_label(move||Some(row.with(|r|r.title.clone()).into())).disabled(move||this.busy.get()).on_press(move||{if let Some(source)=this.selected.with(|s|s.as_ref().map(|s|s.id.clone())){open_source(Action::Page{source,method:"browse".into(),params:serde_json::json!({"page":row.with(|r|r.page.clone())})});}}).px(px(8.0)).py(px(7.0)).rounded(px(5.0)).hover(|s|s.bg(theme().muted)).child(text(move||row.with(|r|r.title.clone())).text_size(px(12.0)).text_color(move||theme().foreground))))
-                        .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.host_capabilities.iter().any(|c|c=="home"))),move||action(tr!("Recommendations"),move||this.busy.get(),move||{if let Some(source)=this.selected.with(|s|s.as_ref().map(|s|s.id.clone())){open_source(Action::Page{source,method:"home".into(),params:serde_json::json!({})});}})))
-                        .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.host_capabilities.iter().any(|c|c=="stations"))),move||action(tr!("Radio"),move||this.busy.get(),move||{if let Some(source)=this.selected.with(|s|s.as_ref().map(|s|s.id.clone())){open_source(Action::Page{source,method:"stations".into(),params:serde_json::json!({})});}})))
+                        .child(each(move||this.selected.with(|s|s.as_ref().filter(|s|s.supports(Capability::Browse)).map_or_else(Vec::new,|s|s.pages.clone())),|row|row.page.clone(),move|row,_|button().accessibility_label(move||Some(row.with(|r|r.title.clone()).into())).disabled(move||this.busy.get()).on_press(move||{if let Some(source)=this.selected.with(|s|s.as_ref().map(|s|s.id.clone())){open_source(Action::Page{source,request:PageRequest::Browse{page:row.with(|r|r.page.clone())}});}}).px(px(8.0)).py(px(7.0)).rounded(px(5.0)).hover(|s|s.bg(theme().muted)).child(text(move||row.with(|r|r.title.clone())).text_size(px(12.0)).text_color(move||theme().foreground))))
+                        .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.supports(Capability::Recommendations))),move||action(tr!("Recommendations"),move||this.busy.get(),move||{if let Some(source)=this.selected.with(|s|s.as_ref().map(|s|s.id.clone())){open_source(Action::Page{source,request:PageRequest::Recommendations{}});}})))
+                        .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.supports(Capability::Stations))),move||action(tr!("Radio"),move||this.busy.get(),move||{if let Some(source)=this.selected.with(|s|s.as_ref().map(|s|s.id.clone())){open_source(Action::Page{source,request:PageRequest::Stations{}});}})))
                         .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.network_unrestricted)),move||view().gap(px(6.0))
                             .child(crate::controls::section(tr!("Unrestricted network")))
                             .child(caption(tr!("Allow this source to contact any Internet or local network server. Without this permission, it can only use declared domains and server URLs you save. Changed files require permission again.")))
@@ -782,13 +781,13 @@ pub fn sources_view(
                             .child(caption(tr!("External programs can access files and services with your account's permissions. Trust verification does not grant this access. Updates or changed files require permission again.")))
                             .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|!s.process_granted)),move||action(tr!("Allow external programs for this version"),move||this.busy.get(),move||this.process_permission(true))))
                             .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.process_granted)),move||action(tr!("Revoke external program permission"),move||this.busy.get(),move||this.process_permission(false))))))
-                        .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.capabilities.iter().any(|v|v=="account"||v=="signIn"))),move||{
+                        .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.supports(Capability::Account)||s.supports(Capability::SignIn))),move||{
                             view().gap(px(6.0)).pt(px(6.0))
                                 .child(text(tr!("Account")).text_size(px(12.0)).font_weight(FontWeight::SEMIBOLD).text_color(move||theme().foreground))
                                 .child(caption(move||this.account.with(|v| match v {
                                     Some(a) if a.connected => a.name.as_ref().map_or_else(||tr!("Connected").into(), |name| tr!("Connected · {name}"; name = name)),
                                     Some(_) => tr!("Account not connected").into(),
-                                    None if this.selected.with(|s|s.as_ref().is_some_and(|s|s.capabilities.iter().all(|v|v!="account"))) => tr!("This source has no account status").into(),
+                                    None if this.selected.with(|s|s.as_ref().is_some_and(|s|!s.supports(Capability::Account))) => tr!("This source has no account status").into(),
                                     None if this.busy.get() => tr!("Checking account…").into(),
                                     None => tr!("Account status unavailable").into(),
                                 })))
@@ -802,16 +801,16 @@ pub fn sources_view(
                                     .child(when(move||this.disconnecting.get(),move||action(tr!("Confirm account disconnection"),move||this.busy.get(),move||{this.disconnecting.set(false);this.sign_out();}))))
                                 .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|!s.qr_sign_in&&!s.web_sign_in&&!s.oauth_sign_in)),||caption(tr!("This sign-in method is not supported yet. Use the source’s account settings if available."))))
                         }))
-                        .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.capabilities.iter().any(|v|v=="playlist"))),move||{
+                        .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.supports(Capability::Playlist))),move||{
                             view().gap(px(6.0)).pt(px(6.0))
                                 .child(crate::controls::section(tr!("Playlists")))
                                 .child(caption(tr!("Imports are saved to My playlists.")))
                                 .child(action(tr!("Import source playlists"),move||this.busy.get(),move||this.playlists()))
                         }))
                         .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|!s.settings.is_empty())),move||action(tr!("Source settings"),move||this.busy.get(),move||this.configuring.update(|v|*v = !*v))))
-                        .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.capabilities.iter().any(|v|v=="liked"))),move||action(tr!("Import cloud likes"),move||this.busy.get(),move||this.import_collection(true))))
-                        .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.capabilities.iter().any(|v|v=="recent"))),move||action(tr!("Import cloud history"),move||this.busy.get(),move||this.import_collection(false))))
-                        .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.capabilities.iter().any(|v|v=="shows"))),move||action(tr!("Browse podcasts"),move||this.busy.get(),move||{if let Some(source)=this.selected.with(|s|s.as_ref().map(|s|s.id.clone())){open_source(Action::Shows{source});}})))
+                        .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.supports(Capability::LikedTracks))),move||action(tr!("Import cloud likes"),move||this.busy.get(),move||this.import_collection(true))))
+                        .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.supports(Capability::RecentTracks))),move||action(tr!("Import cloud history"),move||this.busy.get(),move||this.import_collection(false))))
+                        .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.supports(Capability::Podcasts))),move||action(tr!("Browse podcasts"),move||this.busy.get(),move||{if let Some(source)=this.selected.with(|s|s.as_ref().map(|s|s.id.clone())){open_source(Action::Shows{source});}})))
                         .child(when(move||this.configuring.get(),move||view().gap(px(10.0))
                         .child(each(move||this.selected.with(|s|s.as_ref().map_or_else(Vec::new,|s|s.settings.clone())),|f|f.definition.key.clone(),move|field,_|{
                             view().gap(px(5.0))
@@ -849,10 +848,10 @@ pub fn sources_view(
         .child(when(move||this.page.get()==Page::Playlists,move||view().flex_1().min_h(px(0.0)).gap(px(8.0))
             .child(crate::controls::heading(tr!("Import source content")))
             .child(caption(tr!("Import supported likes, history, or playlists into My playlists.")))
-            .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.capabilities.iter().any(|v|v=="liked"))),move||action(tr!("Import cloud likes"),move||this.busy.get(),move||this.import_collection(true))))
-            .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.capabilities.iter().any(|v|v=="recent"))),move||action(tr!("Import cloud history"),move||this.busy.get(),move||this.import_collection(false))))
-            .child(when(move||!this.busy.get()&&this.playlists.with(Vec::is_empty)&&this.selected.with(|s|s.as_ref().is_some_and(|s|s.capabilities.iter().any(|v|v=="playlists"))),move||action(tr!("View source account and settings"),move||this.busy.get(),move||{this.page.set(Page::Detail);this.refresh_account();})))
-            .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.capabilities.iter().any(|v|v=="playlist"))),move||view().flex_row().items_center().gap(px(4.0))
+            .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.supports(Capability::LikedTracks))),move||action(tr!("Import cloud likes"),move||this.busy.get(),move||this.import_collection(true))))
+            .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.supports(Capability::RecentTracks))),move||action(tr!("Import cloud history"),move||this.busy.get(),move||this.import_collection(false))))
+            .child(when(move||!this.busy.get()&&this.playlists.with(Vec::is_empty)&&this.selected.with(|s|s.as_ref().is_some_and(|s|s.supports(Capability::Playlists))),move||action(tr!("View source account and settings"),move||this.busy.get(),move||{this.page.set(Page::Detail);this.refresh_account();})))
+            .child(when(move||this.selected.with(|s|s.as_ref().is_some_and(|s|s.supports(Capability::Playlist))),move||view().flex_row().items_center().gap(px(4.0))
                 .child(input().label(tr!("Source playlist ID")).placeholder(tr!("Source playlist ID")).value(move||this.playlist_id.get()).on_change(move|v:&str|this.playlist_id.set(v.into())).flex_1().min_w(px(0.0)).h(px(32.0)).px(px(8.0)).rounded(px(5.0)).bg(move||theme().muted).text_color(move||theme().foreground))
                 .child(action(tr!("Import"),move||this.busy.get()||this.playlist_id.with(|v|v.trim().is_empty()),move||this.import(this.playlist_id.get())))))
             .child(virtual_list(move||this.playlists.with(Vec::len),move|at|{

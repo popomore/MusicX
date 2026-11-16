@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 pub mod i18n;
+mod sources;
+pub use sources::*;
 mod update_channel;
 pub use update_channel::UpdateChannel;
 
@@ -564,9 +566,10 @@ pub struct MusicSource {
     pub installed: bool,
     pub can_install: bool,
     pub limitation: Option<String>,
-    pub capabilities: Vec<String>,
+    #[serde(default, rename = "capabilities")]
+    pub adapter_exports: Vec<String>,
     #[serde(default)]
-    pub host_capabilities: Vec<String>,
+    pub host_capabilities: Vec<SourceCapability>,
     #[serde(default)]
     pub process_programs: Vec<String>,
     #[serde(default)]
@@ -587,6 +590,11 @@ pub struct MusicSource {
     pub oauth_sign_in: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verification: Option<SourceVerification>,
+}
+impl MusicSource {
+    pub fn supports(&self, capability: SourceCapability) -> bool {
+        self.host_capabilities.contains(&capability)
+    }
 }
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SourceNavigation {
@@ -636,7 +644,7 @@ pub struct SourcePlaylist {
 
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SourceCollection {
-    pub kind: String,
+    pub kind: SourceCollectionKind,
     pub id: String,
     pub name: String,
     pub description: String,
@@ -673,9 +681,8 @@ pub struct PluginUpdateSettings {
 pub enum MusicSourceAction {
     Page {
         source: String,
-        method: String,
-        #[serde(default)]
-        params: serde_json::Value,
+        #[serde(flatten)]
+        request: SourcePageRequest,
     },
     SetProcessPermission {
         source: String,
