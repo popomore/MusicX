@@ -260,11 +260,18 @@ pub fn library_view(model: Model) -> impl IntoElement {
                         move || {
                             view()
                                 .gap(px(4.0))
-                                .child(primary(
-                                    tr!("Get Radio recommendations"),
-                                    move || this.busy.get(),
-                                    move || this.radio(),
-                                ))
+                                .child(
+                                    view()
+                                        .flex_row()
+                                        .items_center()
+                                        .justify_between()
+                                        .child(heading(tr!("Radio")))
+                                        .child(primary(
+                                            tr!("Add recommendations"),
+                                            move || this.busy.get(),
+                                            move || this.radio(),
+                                        )),
+                                )
                                 .child(caption(tr!("Songs picked for you from connected music accounts.")))
                         },
                     ))
@@ -573,7 +580,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                 .child(when(
                                     move || this.selected.with(|p| p.as_ref().is_some_and(|p| p.id == RADIO_PLAYLIST_ID)),
                                     move || action(
-                                        tr!("Get more recommendations"),
+                                        tr!("Add recommendations"),
                                         move || this.busy.get(),
                                         move || this.radio(),
                                     ),

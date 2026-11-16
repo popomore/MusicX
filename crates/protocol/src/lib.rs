@@ -467,6 +467,8 @@ impl LocalPlaylist {
     pub fn display_name(&self) -> &str {
         if self.favorite {
             tr!("Liked Songs")
+        } else if self.id == RADIO_PLAYLIST_ID && self.name == "Radio" {
+            tr!("Radio")
         } else {
             &self.name
         }
@@ -477,6 +479,8 @@ impl LocalPlaylistSummary {
     pub fn display_name(&self) -> &str {
         if self.favorite {
             tr!("Liked Songs")
+        } else if self.id == RADIO_PLAYLIST_ID && self.name == "Radio" {
+            tr!("Radio")
         } else {
             &self.name
         }

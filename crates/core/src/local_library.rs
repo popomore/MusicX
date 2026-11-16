@@ -281,6 +281,15 @@ pub fn change(action: LocalLibraryAction) -> Result<Value> {
     update(|library| library.edit(action))
 }
 
+pub(crate) fn radio_keys() -> Result<std::collections::HashSet<String>> {
+    Ok(read()?
+        .playlists
+        .iter()
+        .filter(|list| list.id == RADIO_PLAYLIST_ID)
+        .flat_map(|list| list.tracks.iter().map(identity))
+        .collect())
+}
+
 pub(crate) fn add_radio(tracks: Vec<Track>) -> Result<(Option<LocalPlaylist>, usize)> {
     if tracks.is_empty() {
         return Ok((

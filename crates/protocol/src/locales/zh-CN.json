@@ -772,8 +772,7 @@
   "Connect a music account in Music sources to get personal recommendations.": "请在音乐源设置中登录音乐账号，以获取个人推荐。",
   "Added {} to Radio.": "已向电台添加{}。",
   "No new recommendations. Try again later.": "暂无新的推荐歌曲，请稍后重试。",
-  "Get Radio recommendations": "获取电台推荐",
+  "Add recommendations": "添加推荐歌曲",
   "Songs picked for you from connected music accounts.": "汇总已登录音乐账号为你推荐的歌曲。",
-  "Get more recommendations": "继续获取推荐",
   "Getting recommendations…": "正在获取推荐…"
 }

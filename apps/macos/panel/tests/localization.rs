@@ -577,16 +577,18 @@ fn radio_flow() {
         let mut app = Headless::start(config).unwrap();
         app.first_render().unwrap();
         app.wait_for(protocol::tr!("No playlists yet")).unwrap();
-        app.press(protocol::tr!("Get Radio recommendations"))
-            .unwrap();
+        assert!(app.shows(protocol::tr!("Radio")));
+        assert_eq!(
+            requests.load(Ordering::SeqCst),
+            iteration * 3,
+            "opening Radio must not fetch recommendations"
+        );
+        app.press(protocol::tr!("Add recommendations")).unwrap();
         app.wait_for(protocol::tr!("Getting recommendations…"))
             .unwrap();
         assert!(
             app.screen()
-                .press_target(&format!(
-                    "label:{}",
-                    protocol::tr!("Get Radio recommendations")
-                ))
+                .press_target(&format!("label:{}", protocol::tr!("Add recommendations")))
                 .unwrap()
                 .is_none()
         );
@@ -594,6 +596,7 @@ fn radio_flow() {
         *gate.0.lock().unwrap() = true;
         gate.1.notify_all();
         app.wait_for("Personal fixture song").unwrap();
+        assert!(app.shows(protocol::tr!("Radio")));
         assert!(app.shows("Broken source: fixture provider failed"));
         assert!(app.shows(&protocol::tr!(
             "Added {} to Radio.",
@@ -610,14 +613,12 @@ fn radio_flow() {
             iteration,
             "fetching must not start playback"
         );
-        app.press(protocol::tr!("Get more recommendations"))
-            .unwrap();
+        app.press(protocol::tr!("Add recommendations")).unwrap();
         app.wait_for(protocol::tr!("No new recommendations. Try again later."))
             .unwrap();
         assert!(!app.shows("fixture provider failed"));
         assert!(app.shows("Personal fixture song"));
-        app.press(protocol::tr!("Get more recommendations"))
-            .unwrap();
+        app.press(protocol::tr!("Add recommendations")).unwrap();
         app.wait_for("fixture connection failed").unwrap();
         assert!(
             app.shows("Personal fixture song"),

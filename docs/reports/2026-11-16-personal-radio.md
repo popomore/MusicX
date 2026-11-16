@@ -2,14 +2,14 @@
 
 ## Implemented behavior
 
-My Playlists offers **Get Radio recommendations**. Each connected, playback-capable music account supplies its personal FM batch or an explicitly advertised daily recommendation page. MusicX alternates sources, deduplicates by provider track identity and appends to the local Radio playlist. **Get more recommendations** appends another batch. Fetching leaves the listening session and current queue intact.
+My Playlists offers **Radio** with an **Add recommendations** button. Each connected, playback-capable music account supplies its personal FM batch or an explicitly advertised daily recommendation page. MusicX alternates sources, deduplicates by provider track identity and appends to the local Radio playlist. The same button appends another batch. Fetching requires an explicit button press or agent request; opening the player or browser never fetches automatically. Fetching leaves the listening session and current queue intact.
 
 Radio uses normal playlist playback and management. Renaming and pinning survive a refresh; deleting it allows a later successful fetch to create it again. Empty results do not create or clear a playlist. Per-source failures are reported while successful sources still contribute tracks. Unavailable tracks and mixed home-page content are excluded.
 
 ## Automated verification
 
 - Workspace tests: 167 libtest cases passed, together with the custom localization, notice and UI layout harnesses. The opt-in native window lifecycle harness was skipped.
-- New core regression: connected-account selection, provider identity, interleaving, deduplication, source failure isolation, malformed tracks, repeated/empty results, rename/pin preservation, deletion/recreation and atomic failure at playlist capacity.
+- New core regression: connected-account selection, provider identity, interleaving, deduplication, source failure isolation, malformed tracks, repeated/empty results, rename/pin preservation, deletion/recreation and atomic failure at playlist capacity. A stable 60-track response adds 50 tracks on the first request and the remaining 10 on the second; stored identities never consume the next batch's limit.
 - New MyGo regression: personal station selection, opaque identity and duration conversion, unavailable-track filtering, daily-page selection, failed-FM fallback and exclusion of public home sections/stations.
 - Production playlist UI exercised in English and Simplified Chinese against an isolated HTTP fixture: disabled busy controls, fetching feedback, partial failures, preservation of failures across library revision updates, empty results, failed refresh preservation and explicit playlist playback.
 - Formatting, whitespace checks, Clippy with warnings denied, 47 release-automation tests and the iOS workspace's locked dependency metadata check passed.

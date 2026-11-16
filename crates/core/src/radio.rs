@@ -7,7 +7,11 @@ use std::{collections::HashSet, sync::Mutex};
 static REFRESH: Mutex<()> = Mutex::new(());
 const BATCH_PER_SOURCE: usize = 50;
 
-fn collect(sources: &dyn PluginSource, source: &MusicSource) -> (RadioSourceResult, Vec<Track>) {
+fn collect(
+    sources: &dyn PluginSource,
+    source: &MusicSource,
+    stored: &HashSet<String>,
+) -> (RadioSourceResult, Vec<Track>) {
     let result = (|| -> Result<Vec<Track>> {
         ensure!(
             sources.account(&source.id)?.connected,
@@ -27,7 +31,8 @@ fn collect(sources: &dyn PluginSource, source: &MusicSource) -> (RadioSourceResu
                 track.source.is_some(),
                 tr!("Track source identifier missing")
             );
-            if seen.insert(track_key(&track)) && batch.len() < BATCH_PER_SOURCE {
+            let key = track_key(&track);
+            if !stored.contains(&key) && seen.insert(key) && batch.len() < BATCH_PER_SOURCE {
                 batch.push(track);
             }
         }
@@ -55,6 +60,7 @@ pub fn refresh(sources: &dyn PluginSource) -> Result<RadioRefresh> {
     let _guard = REFRESH
         .try_lock()
         .map_err(|_| anyhow::anyhow!(tr!("Radio is already getting recommendations")))?;
+    let stored = local_library::radio_keys()?;
     let eligible: Vec<_> = sources
         .sources()?
         .into_iter()
@@ -72,9 +78,10 @@ pub fn refresh(sources: &dyn PluginSource) -> Result<RadioRefresh> {
     // Bound network fan-out while allowing a slow or unavailable provider to fail independently.
     for group in eligible.chunks(4) {
         std::thread::scope(|scope| -> Result<()> {
+            let stored = &stored;
             let jobs: Vec<_> = group
                 .iter()
-                .map(|source| scope.spawn(move || collect(sources, source)))
+                .map(|source| scope.spawn(move || collect(sources, source, stored)))
                 .collect();
             for job in jobs {
                 let (report, tracks) = job

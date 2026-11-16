@@ -90,6 +90,10 @@ impl PluginSource for Accounts {
     fn radio_tracks(&self, source: &str) -> Result<Vec<Track>> {
         self.calls.lock().unwrap().push(source.into());
         match source {
+            "a" if self.mode.load(Ordering::Relaxed) == 3 => Ok((0..60)
+                .map(|id| track("a", &format!("daily:{id}")))
+                .collect()),
+            "b" if self.mode.load(Ordering::Relaxed) == 3 => Ok(Vec::new()),
             "a" if self.mode.load(Ordering::Relaxed) == 0 => {
                 Ok(vec![track("a", "1"), track("a", "1"), track("a", "2")])
             }
@@ -241,4 +245,19 @@ fn radio_combines_connected_accounts_and_appends_an_atomic_deduplicated_playlist
         before,
         "a full playlist must remain intact on a failed append"
     );
+    local_library::change(LocalLibraryAction::Delete {
+        id: RADIO_PLAYLIST_ID.into(),
+    })
+    .unwrap();
+    provider.mode.store(3, Ordering::Relaxed);
+    assert_eq!(refresh(&provider).unwrap().added, 50);
+    let remaining = refresh(&provider).unwrap();
+    assert_eq!(
+        remaining.added, 10,
+        "stored tracks must not consume the next batch's 50-track limit"
+    );
+    let playlist = remaining.playlist.unwrap();
+    assert_eq!(playlist.tracks.len(), 60);
+    assert_eq!(playlist.tracks[59].source.as_ref().unwrap().id, "daily:59");
+    assert_eq!(refresh(&provider).unwrap().added, 0);
 }
