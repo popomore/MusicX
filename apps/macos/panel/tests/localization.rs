@@ -128,6 +128,38 @@ fn verified_source_details() {
     }
 }
 
+static SOURCE_PLAYABLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+#[component]
+fn SourcePageScreen() -> impl IntoElement {
+    discovery_ui::preview_page(model::Model::new(), protocol::SourcePage {
+        playable: SOURCE_PLAYABLE.load(std::sync::atomic::Ordering::Relaxed),
+        tracks: vec![serde_json::from_value(serde_json::json!({"id":1,"title":"Fixture track","artist":"Fixture artist","duration":42})).unwrap()],
+        ..Default::default()
+    })
+}
+fn source_playback_capability() {
+    for playable in [false, true] {
+        SOURCE_PLAYABLE.store(playable, std::sync::atomic::Ordering::Relaxed);
+        let mut config = EngineConfig::new(Root::of::<SourcePageScreen>());
+        config.viewport = Size::new(px(440.0), px(600.0));
+        config.environment.window = config.viewport;
+        let mut app = Headless::start(config).unwrap();
+        app.first_render().unwrap();
+        let play = protocol::tr!("Play {}", "Fixture track");
+        assert_eq!(
+            app.screen().matches(&format!("label:{play}")).unwrap(),
+            playable
+        );
+        if !playable {
+            assert!(app.screen().matches("label:Fixture track").unwrap());
+            assert!(
+                app.press("label:Fixture track").is_err(),
+                "metadata-only track must be disabled"
+            );
+        }
+    }
+}
+
 fn player_layout() {
     let mut config = EngineConfig::new(Root::of::<ui::App>());
     config.viewport = Size::new(px(320.0), px(512.0));
@@ -492,6 +524,7 @@ fn exercise() {
     drop(app);
     source_navigation();
     verified_source_details();
+    source_playback_capability();
     settings_escape();
     setup_navigation();
     player_entries();

@@ -131,10 +131,21 @@ pub(crate) fn copy_assets(source: &Path, target: &Path, entry: &Path) -> Result<
     Ok(())
 }
 pub(crate) fn hashes(root: &Path) -> Result<BTreeMap<String, String>> {
+    #[cfg(test)]
+    HASH_COUNT.with(|count| count.set(count.get() + 1));
     Ok(files(root)?
         .into_iter()
         .map(|(name, asset)| (name, format!("{:x}", Sha256::digest(&asset.bytes))))
         .collect())
+}
+
+#[cfg(test)]
+thread_local! {
+    static HASH_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+#[cfg(test)]
+pub(crate) fn hash_count() -> usize {
+    HASH_COUNT.with(std::cell::Cell::get)
 }
 
 pub(crate) fn owned_file(plugin: &str, url: &url::Url) -> Option<std::path::PathBuf> {

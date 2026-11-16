@@ -21,6 +21,7 @@ struct Stream {
     content_type: Option<&'static str>,
     used: Instant,
     lease: Weak<()>,
+    helper: Option<Weak<crate::process::Runtime>>,
 }
 struct Proxy {
     port: u16,
@@ -97,6 +98,30 @@ pub(crate) fn register_server(
     register_stream(url, headers, Some(grants), content_type)
 }
 
+pub(crate) fn register_helper(
+    url: Url,
+    headers: BTreeMap<String, String>,
+    grants: Vec<String>,
+    content_type: Option<&'static str>,
+    helper: &Arc<crate::process::Runtime>,
+) -> Result<(Url, Arc<()>)> {
+    ensure!(
+        helper.owns_listener(&url),
+        tr!("Unsupported audio redirect URL")
+    );
+    let registration = register_server(url, headers, grants, content_type)?;
+    let proxy = PROXY.get().unwrap().as_ref().unwrap();
+    let key = registration.0.path().trim_start_matches('/');
+    proxy
+        .streams
+        .lock()
+        .map_err(|_| anyhow::anyhow!(tr!("Audio transfer unavailable")))?
+        .get_mut(key)
+        .context(tr!("Audio transfer unavailable"))?
+        .helper = Some(Arc::downgrade(helper));
+    Ok(registration)
+}
+
 pub(crate) fn register_restricted(
     url: Url,
     headers: BTreeMap<String, String>,
@@ -146,6 +171,7 @@ fn register_stream(
             content_type,
             used: Instant::now(),
             lease: Arc::downgrade(&lease),
+            helper: None,
         },
     );
     Ok((
@@ -209,6 +235,14 @@ fn serve(mut socket: TcpStream, streams: &Mutex<BTreeMap<String, Stream>>) -> Re
     };
     let client = upstream_client(Duration::from_secs(120))?;
     for _ in 0..5 {
+        if let Some(helper) = &stream.helper {
+            ensure!(
+                helper
+                    .upgrade()
+                    .is_some_and(|h| h.owns_listener(&stream.url)),
+                tr!("Unsupported audio redirect URL")
+            );
+        }
         let mut request = if head {
             client.head(stream.url.clone())
         } else {

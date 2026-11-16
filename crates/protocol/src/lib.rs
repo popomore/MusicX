@@ -658,6 +658,9 @@ pub struct SourcePage {
     pub description: String,
     pub cover_url: Option<String>,
     pub tracks: Vec<Track>,
+    /// The adapter confirms this page's source supports MusicX audio playback.
+    #[serde(default)]
+    pub playable: bool,
     pub collections: Vec<SourceCollection>,
     pub more: bool,
     pub next_offset: u64,

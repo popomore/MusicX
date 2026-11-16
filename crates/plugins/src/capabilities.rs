@@ -73,9 +73,10 @@ fn validate(method: &str, params: &Value) -> Result<()> {
     Ok(())
 }
 
-fn track(plugin: &str, value: &Value) -> Result<Value> {
+fn track(catalog: &mygo::Catalog<'_>, value: &Value) -> Result<Value> {
     let mut result = serde_json::to_value(
-        mygo::catalog_track(plugin, value)
+        catalog
+            .track(value)
             .context(tr!("Source track information is incomplete"))?,
     )?;
     if let Some(unavailable) = value["unavailable"].as_bool() {
@@ -83,7 +84,7 @@ fn track(plugin: &str, value: &Value) -> Result<Value> {
     }
     Ok(result)
 }
-fn adapt(plugin: &str, value: &mut Value, depth: usize) -> Result<()> {
+fn adapt(catalog: &mygo::Catalog<'_>, value: &mut Value, depth: usize) -> Result<()> {
     ensure!(depth < 64, tr!("Source response is nested too deeply"));
     match value {
         Value::Object(object) => {
@@ -94,16 +95,16 @@ fn adapt(plugin: &str, value: &mut Value, depth: usize) -> Result<()> {
                         tr!("Source exceeds 10,000 tracks")
                     );
                     for value in value.as_array_mut().unwrap() {
-                        *value = track(plugin, value)?;
+                        *value = track(catalog, value)?;
                     }
                 } else {
-                    adapt(plugin, value, depth + 1)?;
+                    adapt(catalog, value, depth + 1)?;
                 }
             }
         }
         Value::Array(rows) => {
             for row in rows {
-                adapt(plugin, row, depth + 1)?;
+                adapt(catalog, row, depth + 1)?;
             }
         }
         _ => {}
@@ -127,7 +128,8 @@ pub(crate) fn invoke(source: &str, method: &str, params: Value) -> Result<Value>
         .strip_prefix("mygo:")
         .context(tr!("Choose a plugin source"))?;
     let mut result = mygo::invoke(plugin, method, params)?;
-    mygo::remember_artwork(plugin, &result);
+    let catalog = mygo::Catalog::new(plugin);
+    catalog.remember(&result);
     if method == "stationNext" && result.is_array() {
         if let Some(rows) = result.as_array_mut() {
             ensure!(
@@ -135,11 +137,11 @@ pub(crate) fn invoke(source: &str, method: &str, params: Value) -> Result<Value>
                 tr!("Source exceeds 10,000 tracks")
             );
             for row in rows {
-                *row = track(plugin, row)?;
+                *row = track(&catalog, row)?;
             }
         }
     } else {
-        adapt(plugin, &mut result, 0)?;
+        adapt(&catalog, &mut result, 0)?;
     }
     Ok(result)
 }

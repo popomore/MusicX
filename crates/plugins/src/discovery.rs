@@ -21,14 +21,16 @@ fn bounded_id(id: &str) -> Result<&str> {
     Ok(id)
 }
 
-fn tracks(plugin: &str, rows: &[Value]) -> Result<Vec<Track>> {
+fn tracks(catalog: &mygo::Catalog<'_>, rows: &[Value]) -> Result<Vec<Track>> {
     ensure!(
         rows.len() <= MAX_QUEUE_TRACKS,
         tr!("Source exceeds 10,000 tracks")
     );
     rows.iter()
         .map(|v| {
-            mygo::catalog_track(plugin, v).context(tr!("Source track information is incomplete"))
+            catalog
+                .track(v)
+                .context(tr!("Source track information is incomplete"))
         })
         .collect()
 }
@@ -68,7 +70,8 @@ pub fn personal_collection(
             value.as_array().or_else(|| value["tracks"].as_array())
         }
         .context(tr!("The source returned no track list"))?;
-        let page = tracks(plugin, rows)?;
+        let catalog = mygo::Catalog::new(plugin);
+        let page = tracks(&catalog, rows)?;
         ensure!(
             all.len() + page.len() <= MAX_QUEUE_TRACKS,
             tr!("Import exceeds 10,000 tracks; no incomplete copy was saved")
@@ -105,10 +108,17 @@ pub fn personal_collection(
     })
 }
 
-fn collection(plugin: &str, kind: SourceCollectionKind, v: &Value) -> Option<SourceCollection> {
+fn collection(
+    artwork: &crate::assets::Artwork<'_>,
+    kind: SourceCollectionKind,
+    v: &Value,
+) -> Option<SourceCollection> {
     Some(SourceCollection {
         kind,
-        id: v["id"].as_str()?.into(),
+        id: v["id"]
+            .as_str()
+            .map(str::to_owned)
+            .or_else(|| v["id"].as_u64().map(|id| id.to_string()))?,
         name: v["name"]
             .as_str()
             .unwrap_or_default()
@@ -122,9 +132,7 @@ fn collection(plugin: &str, kind: SourceCollectionKind, v: &Value) -> Option<Sou
             .chars()
             .take(4000)
             .collect(),
-        cover_url: v["imageUrl"]
-            .as_str()
-            .and_then(|url| crate::assets::artwork(plugin, url)),
+        cover_url: v["imageUrl"].as_str().and_then(|url| artwork.url(url)),
     })
 }
 
@@ -197,6 +205,7 @@ fn normalized_page(source: &str, method: &str, params: Value) -> Result<SourcePa
             .collect(),
         ..Default::default()
     };
+    let artwork = crate::assets::Artwork::new(plugin);
     if method == "stationNext" {
         result.tracks = serde_json::from_value(
             value
@@ -217,10 +226,15 @@ fn normalized_page(source: &str, method: &str, params: Value) -> Result<SourcePa
             .into_iter()
             .flatten()
             .take(1000)
-            .filter_map(|v| collection(plugin, SourceCollectionKind::Station, v))
+            .filter_map(|v| collection(&artwork, SourceCollectionKind::Station, v))
             .collect();
     } else {
-        fn section(plugin: &str, value: &Value, page: &mut SourcePage, depth: usize) -> Result<()> {
+        fn section(
+            artwork: &crate::assets::Artwork<'_>,
+            value: &Value,
+            page: &mut SourcePage,
+            depth: usize,
+        ) -> Result<()> {
             ensure!(depth < 32, tr!("Source response is nested too deeply"));
             if let Some(rows) = value["tracks"].as_array() {
                 for row in rows {
@@ -248,9 +262,7 @@ fn normalized_page(source: &str, method: &str, params: Value) -> Result<SourcePa
                                 .chars()
                                 .take(4000)
                                 .collect(),
-                            cover_url: link["imageUrl"]
-                                .as_str()
-                                .and_then(|url| crate::assets::artwork(plugin, url)),
+                            cover_url: link["imageUrl"].as_str().and_then(|url| artwork.url(url)),
                         });
                     }
                 }
@@ -275,12 +287,12 @@ fn normalized_page(source: &str, method: &str, params: Value) -> Result<SourcePa
             ] {
                 if let Some(rows) = value[key].as_array() {
                     page.collections
-                        .extend(rows.iter().filter_map(|v| collection(plugin, kind, v)));
+                        .extend(rows.iter().filter_map(|v| collection(artwork, kind, v)));
                 }
             }
             if let Some(rows) = value["sections"].as_array() {
                 for row in rows {
-                    section(plugin, row, page, depth + 1)?;
+                    section(artwork, row, page, depth + 1)?;
                 }
             }
             ensure!(
@@ -289,7 +301,7 @@ fn normalized_page(source: &str, method: &str, params: Value) -> Result<SourcePa
             );
             Ok(())
         }
-        section(plugin, &value, &mut result, 0)?;
+        section(&artwork, &value, &mut result, 0)?;
     }
     ensure!(
         result.tracks.len() <= MAX_QUEUE_TRACKS,
@@ -305,6 +317,7 @@ fn browse(source: &str, kind: &str, id: &str, offset: u64) -> Result<SourcePage>
         bounded_id(id)?;
     }
     let value = mygo::invoke(plugin, kind, json!({"id":id,"offset":offset}))?;
+    let catalog = mygo::Catalog::new(plugin);
     if kind == "shows" {
         let rows = value
             .as_array()
@@ -316,7 +329,7 @@ fn browse(source: &str, kind: &str, id: &str, offset: u64) -> Result<SourcePage>
             title: tr!("Podcasts").into(),
             collections: rows
                 .iter()
-                .filter_map(|v| collection(plugin, SourceCollectionKind::Podcast, v))
+                .filter_map(|v| collection(&catalog.artwork, SourceCollectionKind::Podcast, v))
                 .collect(),
             ..Default::default()
         });
@@ -352,14 +365,15 @@ fn browse(source: &str, kind: &str, id: &str, offset: u64) -> Result<SourcePage>
             .collect(),
         cover_url: descriptor["imageUrl"]
             .as_str()
-            .and_then(|url| crate::assets::artwork(plugin, url)),
-        tracks: tracks(plugin, rows)?,
+            .and_then(|url| catalog.artwork.url(url)),
+        tracks: tracks(&catalog, rows)?,
+        playable: false,
         collections: value["albums"]
             .as_array()
             .into_iter()
             .flatten()
             .take(1000)
-            .filter_map(|v| collection(plugin, SourceCollectionKind::Album, v))
+            .filter_map(|v| collection(&catalog.artwork, SourceCollectionKind::Album, v))
             .collect(),
         more: more(&value),
         next_offset: offset + rows.len() as u64,

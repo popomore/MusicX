@@ -80,9 +80,10 @@ pub fn search_kind(plugin: &str, query: &str, kind: &str, offset: u64) -> Result
     let rows = result["tracks"]
         .as_array()
         .context(tr!("The source returned no song list"))?;
+    let catalog = Catalog::new(plugin);
     let mut tracks = Vec::with_capacity(rows.len());
     for row in rows {
-        let Some(track) = catalog_track(plugin, row) else {
+        let Some(track) = catalog.track(row) else {
             continue;
         };
         let mut track = serde_json::to_value(track)?;
@@ -91,109 +92,124 @@ pub fn search_kind(plugin: &str, query: &str, kind: &str, offset: u64) -> Result
         }
         tracks.push(track);
     }
-    remember_artwork(plugin, &result);
+    catalog.remember(&result);
     result["tracks"] = Value::Array(tracks);
     Ok(result)
 }
 
 /// Keep a small metadata-only window of plugin search covers, never image bytes.
 pub fn remember_artwork(plugin: &str, result: &Value) {
-    let Some(tracks) = result["tracks"].as_array() else {
-        return;
-    };
-    let mut cache = METADATA.lock().unwrap_or_else(|e| e.into_inner());
-    for track in tracks.iter().take(32) {
-        if let Some(track) = catalog_track(plugin, track) {
-            let id = track.source.as_ref().expect("plugin track").id.clone();
-            cache.retain(|(p, i, _)| p != plugin || i != &id);
-            if cache.len() == 32 {
-                cache.pop_front();
-            }
-            cache.push_back((plugin.to_owned(), id, track));
-        }
-    }
+    Catalog::new(plugin).remember(result);
 }
 
-pub(crate) fn catalog_track(plugin: &str, value: &Value) -> Option<Track> {
-    let id = value["id"]
-        .as_str()
-        .map(str::to_owned)
-        .or_else(|| value["id"].as_u64().map(|id| id.to_string()))?;
-    if id.is_empty() || id.len() > 512 {
-        return None;
+pub(crate) struct Catalog<'a> {
+    plugin: &'a str,
+    pub(crate) artwork: crate::assets::Artwork<'a>,
+}
+impl<'a> Catalog<'a> {
+    pub(crate) fn new(plugin: &'a str) -> Self {
+        Self {
+            plugin,
+            artwork: crate::assets::Artwork::new(plugin),
+        }
     }
-    let album = &value["album"];
-    Some(Track {
-        id: id.parse().unwrap_or(0),
-        title: value["name"].as_str()?.chars().take(512).collect(),
-        artist: value["artists"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|v| v["name"].as_str())
-            .collect::<Vec<_>>()
-            .join(" / ")
-            .chars()
-            .take(1024)
-            .collect(),
-        artists: value["artists"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .take(64)
-            .filter_map(|a| {
-                Some(crate::protocol::Artist {
-                    id: a["id"].as_str()?.chars().take(512).collect(),
-                    name: a["name"].as_str()?.chars().take(512).collect(),
-                    cover_url: a["imageUrl"]
-                        .as_str()
-                        .and_then(|url| crate::assets::artwork(plugin, url)),
+    pub(crate) fn remember(&self, result: &Value) {
+        let plugin = self.plugin;
+        let Some(tracks) = result["tracks"].as_array() else {
+            return;
+        };
+        let mut cache = METADATA.lock().unwrap_or_else(|e| e.into_inner());
+        for track in tracks.iter().take(32) {
+            if let Some(track) = self.track(track) {
+                let id = track.source.as_ref().expect("plugin track").id.clone();
+                cache.retain(|(p, i, _)| p != plugin || i != &id);
+                if cache.len() == 32 {
+                    cache.pop_front();
+                }
+                cache.push_back((plugin.to_owned(), id, track));
+            }
+        }
+    }
+
+    pub(crate) fn track(&self, value: &Value) -> Option<Track> {
+        let plugin = self.plugin;
+        let id = value["id"]
+            .as_str()
+            .map(str::to_owned)
+            .or_else(|| value["id"].as_u64().map(|id| id.to_string()))?;
+        if id.is_empty() || id.len() > 512 {
+            return None;
+        }
+        let album = &value["album"];
+        Some(Track {
+            id: id.parse().unwrap_or(0),
+            title: value["name"].as_str()?.chars().take(512).collect(),
+            artist: value["artists"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|v| v["name"].as_str())
+                .collect::<Vec<_>>()
+                .join(" / ")
+                .chars()
+                .take(1024)
+                .collect(),
+            artists: value["artists"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .take(64)
+                .filter_map(|a| {
+                    Some(crate::protocol::Artist {
+                        id: a["id"].as_str()?.chars().take(512).collect(),
+                        name: a["name"].as_str()?.chars().take(512).collect(),
+                        cover_url: a["imageUrl"].as_str().and_then(|url| self.artwork.url(url)),
+                    })
                 })
-            })
-            .collect(),
-        episode: value["showId"]
-            .as_str()
-            .filter(|id| !id.is_empty())
-            .map(|id| crate::protocol::Episode {
-                show_id: id.chars().take(512).collect(),
-                description: value["description"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .chars()
-                    .take(8000)
-                    .collect(),
-                published: value["published"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .chars()
-                    .take(100)
-                    .collect(),
+                .collect(),
+            episode: value["showId"]
+                .as_str()
+                .filter(|id| !id.is_empty())
+                .map(|id| crate::protocol::Episode {
+                    show_id: id.chars().take(512).collect(),
+                    description: value["description"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .chars()
+                        .take(8000)
+                        .collect(),
+                    published: value["published"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .chars()
+                        .take(100)
+                        .collect(),
+                }),
+            duration: value["duration"].as_f64().unwrap_or(0.0) / 1000.0,
+            cover_url: [&album["imageUrl"], &value["imageUrl"], &value["coverUrl"]]
+                .into_iter()
+                .filter_map(Value::as_str)
+                .find_map(|url| self.artwork.url(url)),
+            album: album["id"].as_str().filter(|id| !id.is_empty()).map(|id| {
+                crate::protocol::Album {
+                    id: id.chars().take(512).collect(),
+                    name: album["name"]
+                        .as_str()
+                        .unwrap_or(tr!("Album"))
+                        .chars()
+                        .take(512)
+                        .collect(),
+                }
             }),
-        duration: value["duration"].as_f64().unwrap_or(0.0) / 1000.0,
-        cover_url: [&album["imageUrl"], &value["imageUrl"], &value["coverUrl"]]
-            .into_iter()
-            .filter_map(Value::as_str)
-            .find_map(|url| crate::assets::artwork(plugin, url)),
-        album: album["id"]
-            .as_str()
-            .filter(|id| !id.is_empty())
-            .map(|id| crate::protocol::Album {
-                id: id.chars().take(512).collect(),
-                name: album["name"]
-                    .as_str()
-                    .unwrap_or(tr!("Album"))
-                    .chars()
-                    .take(512)
-                    .collect(),
+            source_url: value["url"]
+                .as_str()
+                .and_then(musicx_core::metadata::public_url),
+            source: Some(Source {
+                plugin: plugin.to_owned(),
+                id,
             }),
-        source_url: value["url"]
-            .as_str()
-            .and_then(musicx_core::metadata::public_url),
-        source: Some(Source {
-            plugin: plugin.to_owned(),
-            id,
-        }),
-    })
+        })
+    }
 }
 
 /// Only enrich the same source identity. Older queue and library entries may
@@ -240,6 +256,7 @@ pub(crate) fn fill_artwork(track: &mut Track) {
     ) else {
         return;
     };
+    let catalog = Catalog::new(&source.plugin);
     if let Some(metadata) = result["tracks"]
         .as_array()
         .into_iter()
@@ -248,9 +265,7 @@ pub(crate) fn fill_artwork(track: &mut Track) {
             let id = &value["id"];
             let matches = id.as_str().is_some_and(|id| id == source.id)
                 || id.as_u64().is_some_and(|id| id.to_string() == source.id);
-            matches
-                .then(|| catalog_track(&source.plugin, value))
-                .flatten()
+            matches.then(|| catalog.track(value)).flatten()
         })
     {
         merge_metadata(track, &metadata);
@@ -297,12 +312,13 @@ pub fn album(track: &Track) -> Result<crate::protocol::AlbumPage> {
     if let Some(name) = descriptor["name"].as_str().filter(|v| !v.is_empty()) {
         album.name = name.chars().take(512).collect();
     }
-    remember_artwork(&source.plugin, &result);
+    let catalog = Catalog::new(&source.plugin);
+    catalog.remember(&result);
     let tracks = result["tracks"]
         .as_array()
         .into_iter()
         .flatten()
-        .filter_map(|value| catalog_track(&source.plugin, value))
+        .filter_map(|value| catalog.track(value))
         .collect();
     Ok(crate::protocol::AlbumPage { album, tracks })
 }
@@ -701,6 +717,7 @@ pub(crate) fn uninstall(id: &str) -> Result<()> {
         target.is_dir() && !fs::symlink_metadata(&target)?.file_type().is_symlink(),
         tr!("Source not installed or invalid directory type")
     );
+    crate::process::remove_data(id)?;
     fs::remove_dir_all(target)?;
     let account = state_dir()?.join(format!("mygo-{id}-storage.json"));
     match fs::remove_file(account) {
@@ -1203,13 +1220,10 @@ pub fn resolve_with_quality(mut track: Track, quality: crate::protocol::Quality)
             .context(tr!("The plugin returned no audio URL"))?,
     )?;
     let grants = crate::network::for_plugin(&source.plugin)?;
-    let helper_stream = helpers
-        .as_ref()
-        .is_some_and(|runtime| runtime.has_children())
-        && url.scheme() == "http"
-        && url.host_str() == Some("127.0.0.1")
-        && url.username().is_empty()
-        && url.password().is_none();
+    let helper_stream = !crate::network::explicit(&url, &grants)
+        && helpers
+            .as_ref()
+            .is_some_and(|runtime| runtime.owns_listener(&url));
     let mut grants = grants;
     if helper_stream {
         grants.push(format!("@server:{}", url.origin().ascii_serialization()));
@@ -1255,7 +1269,6 @@ pub fn resolve_with_quality(mut track: Track, quality: crate::protocol::Quality)
         }
     }
     let mut user_agent = request_headers.get("user-agent").cloned();
-    let helper_lease = helpers.filter(|runtime| runtime.has_children());
     let mut lease: Option<Arc<dyn Send + Sync>> = None;
     if let Some(generated) = generated {
         url = generated.url()?;
@@ -1265,7 +1278,15 @@ pub fn resolve_with_quality(mut track: Track, quality: crate::protocol::Quality)
         lease = Some(decoded as std::sync::Arc<dyn Send + Sync>);
     } else if uses_http || request_headers.keys().any(|k| k != "user-agent") {
         let content_type = (stream["type"] == "m4a").then_some("audio/mp4");
-        let registration = if private_server {
+        let registration = if helper_stream {
+            crate::stream_proxy::register_helper(
+                url,
+                request_headers,
+                grants,
+                content_type,
+                helpers.as_ref().unwrap(),
+            )?
+        } else if private_server {
             crate::stream_proxy::register_server(url, request_headers, grants, content_type)?
         } else {
             crate::stream_proxy::register_audio(url, request_headers, content_type)?
@@ -1275,6 +1296,7 @@ pub fn resolve_with_quality(mut track: Track, quality: crate::protocol::Quality)
         user_agent = None;
     }
     fill_artwork(&mut track);
+    let helper_lease = helpers.filter(|runtime| runtime.has_children());
     if let Some(helper) = helper_lease {
         lease = Some(Arc::new((helper, lease)));
     }

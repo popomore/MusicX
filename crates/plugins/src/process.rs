@@ -18,7 +18,7 @@ use std::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc,
     },
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 fn approval_name(id: &str) -> String {
@@ -187,6 +187,84 @@ impl Runtime {
     }
     pub(crate) fn has_children(&self) -> bool {
         !self.children.lock().unwrap().is_empty()
+    }
+    pub(crate) fn owns_listener(&self, url: &url::Url) -> bool {
+        if url.scheme() != "http"
+            || url.host_str() != Some("127.0.0.1")
+            || !url.username().is_empty()
+            || url.password().is_some()
+        {
+            return false;
+        }
+        let Some(port) = url.port_or_known_default() else {
+            return false;
+        };
+        let groups: Vec<_> = self
+            .children
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|child| child.status().is_ok_and(|s| s.is_none()))
+            .map(|child| child.child.lock().unwrap().id() as i32)
+            .collect();
+        if groups.is_empty() {
+            return false;
+        }
+        // Query IPv4 listeners only, so an owned IPv6-only socket cannot grant
+        // access to another process's IPv4 listener on the same port.
+        let program = if cfg!(target_os = "macos") {
+            "/usr/sbin/lsof"
+        } else {
+            "/usr/bin/lsof"
+        };
+        let Ok(mut query) = Command::new(program)
+            .args([
+                "-nP",
+                "-a",
+                &format!("-i4TCP:{port}"),
+                "-sTCP:LISTEN",
+                "-Fpn",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+        else {
+            return false;
+        };
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match query.try_wait() {
+                Ok(Some(_)) => break,
+                Ok(None) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(5))
+                }
+                _ => {
+                    let _ = query.kill();
+                    let _ = query.wait();
+                    return false;
+                }
+            }
+        }
+        let Ok(output) = query.wait_with_output() else {
+            return false;
+        };
+        if !output.status.success() {
+            return false;
+        }
+        let mut owned = false;
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            if let Some(pid) = line.strip_prefix('p') {
+                owned = pid
+                    .parse::<i32>()
+                    .ok()
+                    .is_some_and(|pid| groups.contains(&unsafe { libc::getpgid(pid) }));
+            } else if owned
+                && (line == format!("n127.0.0.1:{port}") || line == format!("n*:{port}"))
+            {
+                return true;
+            }
+        }
+        false
     }
     fn program(&self, name: &str) -> Result<PathBuf> {
         ensure!(
@@ -455,6 +533,29 @@ impl Drop for Runtime {
     fn drop(&mut self) {
         self.kill_all();
     }
+}
+
+pub(crate) fn remove_data(id: &str) -> Result<()> {
+    ensure!(mygo::valid_id(id), tr!("Invalid plugin ID"));
+    let root = storage::state_dir()?.join("mygo-data");
+    match fs::symlink_metadata(&root) {
+        Ok(metadata) => ensure!(
+            metadata.is_dir() && !metadata.file_type().is_symlink(),
+            tr!("Invalid source data directory")
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    }
+    let path = root.join(id);
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
+            fs::remove_dir_all(path)?
+        }
+        Ok(_) => fs::remove_file(path)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    Ok(())
 }
 
 pub(crate) fn install_paths(ctx: &Ctx<'_>, manifest: &Manifest) -> Result<()> {

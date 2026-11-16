@@ -61,8 +61,10 @@ server.serve_forever()
     fs::write(fixture.join("index.js"),r#"
 export async function echo(){const child=host.spawn(host.dir+'/bin/helper-echo',[]);child.write('hello\n');child.closeStdin();const line=await child.readLine();const eof=await child.readLine();const status=await child.wait();return {line,eof,status,pid:child.pid};}
 export function forbidden(){return host.spawn('/bin/sh',['-c','exit 0']).pid}
-export async function stream({id}){if(id==='local')return {url:'file://'+encodeURI(host.dir+'/clip.wav')};if(id==='outside')return {url:'file:///etc/hosts'};const child=host.spawn('bin/helper-server',[]);const url=await child.readLine();host.storage.set('serverPid',child.pid);return {url};}
+export async function stream({id}){if(id==='local')return {url:'file://'+encodeURI(host.dir+'/clip.wav')};if(id==='outside')return {url:'file:///etc/hosts'};if(id==='unrelated'){host.spawn('bin/helper-echo',[]);return {url:host.storage.get('unrelatedURL')}}const child=host.spawn('bin/helper-server',[]);const url=await child.readLine();host.storage.set('serverPid',child.pid);host.storage.set('serverURL',url);return {url};}
+export function unrelatedServer({url}){host.storage.set('unrelatedURL',url)}
 export function serverPid(){return host.storage.get('serverPid')}
+export function serverURL(){return host.storage.get('serverURL')}
 "#).unwrap();
     fs::write(fixture.join("clip.wav"), b"fixture-file-audio").unwrap();
     fs::write(fixture.join("cover.png"), b"fixture-image").unwrap();
@@ -94,6 +96,18 @@ export function serverPid(){return host.storage.get('serverPid')}
         .unwrap()
     };
     grant(true);
+    let unrelated = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    mygo::invoke(
+        "process.fixture",
+        "unrelatedServer",
+        json!({"url":format!("http://{}/audio",unrelated.local_addr().unwrap())}),
+    )
+    .unwrap();
+    let unrelated_track: Track = serde_json::from_value(json!({"id":1,"title":"Unrelated listener","artist":"Fixture","duration":60,"source":{"plugin":"process.fixture","id":"unrelated"}})).unwrap();
+    assert!(
+        mygo::resolve_with_quality(unrelated_track, Quality::Standard).is_err(),
+        "an alive helper must not authorize an unrelated loopback listener"
+    );
     assert!(
         music_sources::get_source("mygo:process.fixture")
             .unwrap()
@@ -190,7 +204,12 @@ export function serverPid(){return host.storage.get('serverPid')}
             .process_granted
     );
     // Cleanup must still work after a downloaded/installed manifest is damaged.
-    for damage in ["malformed", "missing"] {
+    for (damage, revoke_first) in [
+        ("malformed", false),
+        ("missing", false),
+        ("malformed", true),
+        ("missing", true),
+    ] {
         if !installed.exists() {
             mygo::install(&fixture).unwrap();
         }
@@ -200,7 +219,20 @@ export function serverPid(){return host.storage.get('serverPid')}
             .unwrap()
             .as_i64()
             .unwrap() as i32;
+        let active_url: url::Url = mygo::invoke("process.fixture", "serverURL", json!({}))
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap();
         let state = installed.parent().unwrap().parent().unwrap();
+        let data = state.join("mygo-data/process.fixture");
+        fs::create_dir_all(&data).unwrap();
+        fs::write(data.join("helper-credentials.json"), "fixture credential").unwrap();
+        let other_data = state.join("mygo-data/other.fixture");
+        fs::create_dir_all(&other_data).unwrap();
+        fs::write(other_data.join("keep"), "other source data").unwrap();
+        std::os::unix::fs::symlink(&other_data, data.join("linked-cache")).unwrap();
         let network_record = state.join("mygo-process.fixture-network-permission.json");
         fs::write(&network_record, "{}").unwrap();
         if damage == "missing" {
@@ -208,11 +240,38 @@ export function serverPid(){return host.storage.get('serverPid')}
         } else {
             fs::write(installed.join("plugin.json"), "not json").unwrap();
         }
+        if revoke_first {
+            for action in [
+                MusicSourceAction::SetProcessPermission {
+                    source: "mygo:process.fixture".into(),
+                    enabled: false,
+                    expected_fingerprint: None,
+                },
+                MusicSourceAction::SetNetworkPermission {
+                    source: "mygo:process.fixture".into(),
+                    enabled: false,
+                    expected_fingerprint: None,
+                },
+            ] {
+                assert!(
+                    music_sources::execute(action).unwrap().is_null(),
+                    "revocation must succeed without a readable descriptor"
+                );
+            }
+        }
         music_sources::execute(MusicSourceAction::Uninstall {
             source: "mygo:process.fixture".into(),
         })
         .unwrap();
         assert!(!installed.exists());
+        assert!(
+            !data.exists(),
+            "uninstall must remove source-scoped helper data"
+        );
+        assert_eq!(
+            fs::read_to_string(other_data.join("keep")).unwrap(),
+            "other source data"
+        );
         assert!(
             !state
                 .join("mygo-process.fixture-process-permission.json")
@@ -220,6 +279,24 @@ export function serverPid(){return host.storage.get('serverPid')}
         );
         assert!(!network_record.exists());
         assert_ne!(unsafe { libc::kill(active_pid, 0) }, 0);
+        let rebound =
+            std::net::TcpListener::bind(("127.0.0.1", active_url.port().unwrap())).unwrap();
+        rebound.set_nonblocking(true).unwrap();
+        let response = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(3))
+            .build()
+            .unwrap()
+            .get(active.url.clone())
+            .send();
+        assert!(
+            response.is_err(),
+            "a retained proxy must reject a listener rebound after revocation"
+        );
+        assert_eq!(
+            rebound.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock,
+            "no request may reach the unrelated replacement listener"
+        );
         drop(active);
     }
 }

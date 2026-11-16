@@ -228,6 +228,28 @@ fn browser(model: Model, initial: Action) -> impl IntoElement {
         error: signal(String::new()),
     };
     this.load(initial, false);
+    browser_content(model, this)
+}
+
+#[cfg(test)]
+#[allow(dead_code)] // Used by the separate production-component UI harness.
+pub(crate) fn preview_page(model: Model, page: SourcePage) -> impl IntoElement {
+    browser_content(
+        model,
+        Browser {
+            owner: Owner::current(),
+            action: signal(Action::Shows {
+                source: "mygo:fixture".into(),
+            }),
+            history: signal(Vec::new()),
+            page: signal(page),
+            busy: signal(false),
+            error: signal(String::new()),
+        },
+    )
+}
+
+fn browser_content(model: Model, this: Browser) -> impl IntoElement {
     view()
         .flex_1()
         .min_h(px(0.0))
@@ -292,21 +314,34 @@ fn browser(model: Model, initial: Action) -> impl IntoElement {
                         })
                     };
                     button()
-                        .disabled(move || this.busy.get() || model.starting.get())
+                        .disabled(move || {
+                            this.busy.get()
+                                || model.starting.get()
+                                || (collection().is_none() && !this.page.with(|p| p.playable))
+                        })
                         .accessibility_label(move || {
                             Some(SharedString::from(
                                 collection()
                                     .map(|c| tr!("Open {}", c.name))
-                                    .or_else(|| track().map(|t| tr!("Play {}", t.title)))
+                                    .or_else(|| {
+                                        track().map(|t| {
+                                            if this.page.with(|p| p.playable) {
+                                                tr!("Play {}", t.title)
+                                            } else {
+                                                t.title
+                                            }
+                                        })
+                                    })
                                     .unwrap_or_default(),
                             ))
                         })
                         .on_press(move || {
                             if let Some(c) = collection() {
                                 this.next(c.kind, c.id, c.name);
-                            } else if let Some(index) = this
-                                .page
-                                .with(|p| at.index().checked_sub(p.collections.len()))
+                            } else if this.page.with(|p| p.playable)
+                                && let Some(index) = this
+                                    .page
+                                    .with(|p| at.index().checked_sub(p.collections.len()))
                             {
                                 model.play_source(this.page.get(), this.action.with(source), index);
                             }

@@ -110,20 +110,22 @@ pub trait PluginSource: DataSource {
     fn source_artwork(&self, _source: &str, _url: &str) -> Result<Vec<u8>> {
         unsupported()
     }
+    /// Revocation returns no descriptor when its manifest is unreadable.
     fn process_permission(
         &self,
         _source: &str,
         _enabled: bool,
         _fingerprint: Option<&str>,
-    ) -> Result<MusicSource> {
+    ) -> Result<Option<MusicSource>> {
         unsupported()
     }
+    /// Enabling still requires a valid, reviewed descriptor and payload.
     fn network_permission(
         &self,
         _source: &str,
         _enabled: bool,
         _fingerprint: Option<&str>,
-    ) -> Result<MusicSource> {
+    ) -> Result<Option<MusicSource>> {
         unsupported()
     }
     fn update_settings(&self, _enabled: Option<bool>) -> Result<PluginUpdateSettings> {

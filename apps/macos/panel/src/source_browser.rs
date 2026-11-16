@@ -115,13 +115,13 @@ impl Browser {
         };
         self.work(
             move || {
-                request::<MusicSource>(Action::SetNetworkPermission {
+                request::<Option<MusicSource>>(Action::SetNetworkPermission {
                     source,
                     enabled,
                     expected_fingerprint,
                 })
             },
-            |this, source| this.selected.set(Some(source)),
+            |this, source| this.selected.set(source),
         );
     }
     fn process_permission(self, enabled: bool) {
@@ -133,13 +133,13 @@ impl Browser {
         };
         self.work(
             move || {
-                request::<MusicSource>(Action::SetProcessPermission {
+                request::<Option<MusicSource>>(Action::SetProcessPermission {
                     source,
                     enabled,
                     expected_fingerprint,
                 })
             },
-            |this, source| this.selected.set(Some(source)),
+            |this, source| this.selected.set(source),
         );
     }
     fn work<T: Send + 'static>(

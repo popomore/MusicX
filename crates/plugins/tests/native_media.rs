@@ -43,6 +43,7 @@ export function remoteState(){record();return {playing:true}}
 export function remoteDevices(){record();return []}
 export function remoteUse(){record()}
 export function inspect(){return host.storage.get('calls')||0}
+export function home(){return {tracks:[{id:'opaque:track',name:'Remote metadata',duration:60000,artists:[]}]}}
 "#;
     let track: Track = serde_json::from_value(json!({"id":1,"title":"Fixture","artist":"Artist","duration":60,"source":{"plugin":"remote.fixture","id":"0123456789012345678901"}})).unwrap();
     for id in ["remote.fixture", "spotify"] {
@@ -64,6 +65,17 @@ export function inspect(){return host.storage.get('calls')||0}
         );
         assert!(descriptor.adapter_exports.iter().any(|c| c == "remotePlay"));
         assert!(descriptor.supports(musicx_core::protocol::SourceCapability::Account));
+        let page = musicx_plugin_api::PluginSource::page(
+            &MYGO,
+            &format!("mygo:{id}"),
+            musicx_core::protocol::SourcePageRequest::Recommendations {},
+        )
+        .unwrap();
+        assert_eq!(page.tracks.len(), 1);
+        assert!(
+            !page.playable,
+            "a metadata page must not advertise playback"
+        );
         assert_eq!(
             mygo::invoke(id, "inspect", json!({})).unwrap(),
             0,

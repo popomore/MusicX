@@ -39,8 +39,8 @@ const track={id:'opaque:track/one',name:'Song',artists:[{id:'opaque:artist/one',
 export function search({kind,query,offset}){if(query!=='fixture'||offset!==7)throw new Error('wrong input');return kind==='tracks'?{tracks:[track],hasMore:true,privateToken:'must-not-leak'}:{[kind]:[{id:'opaque:'+kind+'/one',name:'Entity',artists:track.artists,description:'Description',publisher:'Publisher',imageUrl:'https://example.com/cover.png',releaseDate:'2026-01-01',trackCount:1}],more:true}}
 export function account(){return {id:'opaque:account',name:'Fixture account',privateToken:'must-not-leak'}}
 export function playlists(){return [{id:'opaque:list/one',name:'List',trackCount:1}]}
-export function playlist({id}){if(id!=='opaque:list/one')throw new Error('wrong playlist');return {playlist:{name:'Nested list',trackCount:1,tracks:[track]}}}
-export function home(){return {title:'Home',sections:[{tracks:[track]}]}}
+export function playlist({id}){if(id==='incomplete-outer')return {playlist:{name:'List'},tracks:[track],trackCount:2};if(id!=='opaque:list/one')throw new Error('wrong playlist');return {playlist:{name:'Nested list',trackCount:1,tracks:[track]}}}
+export function home(){return {title:'Home',sections:[{tracks:[track],playlists:[{id:42,name:'List'}],albums:[{id:43,name:'Album'}],artists:[{id:44,name:'Artist'}]}]}}
 export function stationNext(){return [track]}
 export function stream(){return {url:'https://example.com/song.mp3'}}
 export function remotePlay(){throw new Error('must not control a device')}
@@ -127,10 +127,23 @@ export function createPlaylist(){throw new Error('must not write cloud data')}
         .unwrap();
     assert_eq!(snapshot.origin.name, "Nested list");
     assert_eq!(snapshot.tracks[0].duration, 42.0);
+    assert!(
+        source
+            .playlist("mygo:typed.fixture", "incomplete-outer")
+            .is_err(),
+        "outer track-count metadata must reject an incomplete snapshot"
+    );
     let page = source
         .page("mygo:typed.fixture", SourcePageRequest::Recommendations {})
         .unwrap();
     assert_eq!(page.tracks[0].duration, 42.0);
+    assert_eq!(
+        page.collections
+            .iter()
+            .map(|c| c.id.as_str())
+            .collect::<Vec<_>>(),
+        ["42", "43", "44"]
+    );
     assert_eq!(
         fs::read_to_string(root.join("state/mygo-plugins/typed.fixture/index.js")).unwrap(),
         script

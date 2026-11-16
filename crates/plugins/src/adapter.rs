@@ -71,21 +71,20 @@ fn playlist_snapshot(source: &str, id: &str) -> Result<(PlaylistOrigin, Vec<Trac
     } else {
         &value
     };
-    let rows = page["tracks"]
+    let (rows, completion) = page["tracks"]
         .as_array()
-        .or_else(|| value["tracks"].as_array())
+        .map(|rows| (rows, page))
+        .or_else(|| value["tracks"].as_array().map(|rows| (rows, &value)))
         .context(tr!("The source returned no playlist tracks"))?;
     ensure!(rows.len() <= 10000, tr!("Playlist exceeds 10,000 tracks"));
-    let tracks: Vec<_> = rows
-        .iter()
-        .filter_map(|v| mygo::catalog_track(plugin, v))
-        .collect();
+    let catalog = mygo::Catalog::new(plugin);
+    let tracks: Vec<_> = rows.iter().filter_map(|v| catalog.track(v)).collect();
     ensure!(
         tracks.len() == rows.len(),
         tr!("Source track information is incomplete; nothing was imported")
     );
     ensure!(
-        page["trackCount"]
+        completion["trackCount"]
             .as_u64()
             .is_none_or(|n| n as usize <= tracks.len()),
         tr!("The source returned an incomplete playlist; nothing was imported")
@@ -136,9 +135,10 @@ impl PluginSource for MyGo {
                 .map(|r| serde_json::from_value(r.clone()))
                 .collect::<std::result::Result<_, _>>()?;
         } else {
+            let artwork = assets::Artwork::new(id);
             let entities = rows
                 .iter()
-                .map(|r| search_entity(id, r))
+                .map(|r| search_entity(&artwork, r))
                 .collect::<Result<Vec<_>>>()?;
             match request.kind {
                 SourceSearchKind::Albums => result.albums = entities,
@@ -219,7 +219,9 @@ impl PluginSource for MyGo {
         discovery::personal_collection(source, collection)
     }
     fn page(&self, source: &str, request: SourcePageRequest) -> Result<SourcePage> {
-        discovery::page(source, request)
+        let mut page = discovery::page(source, request)?;
+        page.playable = get_source(source)?.supports(SourceCapability::Playback);
+        Ok(page)
     }
     fn source_artwork(&self, source: &str, url: &str) -> Result<Vec<u8>> {
         assets::image(plugin(source)?, url)
@@ -229,22 +231,30 @@ impl PluginSource for MyGo {
         source: &str,
         enabled: bool,
         fingerprint: Option<&str>,
-    ) -> Result<MusicSource> {
+    ) -> Result<Option<MusicSource>> {
         let guard = crate::permissions::lock()?;
         crate::process::set(plugin(source)?, enabled, fingerprint, &guard)?;
         drop(guard);
-        get_source(source)
+        if enabled {
+            get_source(source).map(Some)
+        } else {
+            Ok(get_source(source).ok())
+        }
     }
     fn network_permission(
         &self,
         source: &str,
         enabled: bool,
         fingerprint: Option<&str>,
-    ) -> Result<MusicSource> {
+    ) -> Result<Option<MusicSource>> {
         let guard = crate::permissions::lock()?;
         crate::network::set(plugin(source)?, enabled, fingerprint, &guard)?;
         drop(guard);
-        get_source(source)
+        if enabled {
+            get_source(source).map(Some)
+        } else {
+            Ok(get_source(source).ok())
+        }
     }
     fn update_settings(&self, enabled: Option<bool>) -> Result<PluginUpdateSettings> {
         if let Some(enabled) = enabled {
@@ -258,7 +268,7 @@ impl PluginSource for MyGo {
     }
 }
 
-fn search_entity(plugin: &str, value: &Value) -> Result<SourceSearchEntity> {
+fn search_entity(artwork: &assets::Artwork<'_>, value: &Value) -> Result<SourceSearchEntity> {
     let id = value["id"]
         .as_str()
         .map(str::to_owned)
@@ -276,9 +286,7 @@ fn search_entity(plugin: &str, value: &Value) -> Result<SourceSearchEntity> {
             .take(512)
             .collect(),
         id,
-        image_url: value["imageUrl"]
-            .as_str()
-            .and_then(|url| assets::artwork(plugin, url)),
+        image_url: value["imageUrl"].as_str().and_then(|url| artwork.url(url)),
         artists: value["artists"]
             .as_array()
             .into_iter()
@@ -291,9 +299,7 @@ fn search_entity(plugin: &str, value: &Value) -> Result<SourceSearchEntity> {
                         .or_else(|| a["id"].as_u64().map(|id| id.to_string()))
                         .unwrap_or_default(),
                     name: a["name"].as_str()?.chars().take(512).collect(),
-                    cover_url: a["imageUrl"]
-                        .as_str()
-                        .and_then(|url| assets::artwork(plugin, url)),
+                    cover_url: a["imageUrl"].as_str().and_then(|url| artwork.url(url)),
                 })
             })
             .collect(),
