@@ -101,7 +101,9 @@ After CI passes for a push to `main`, the Tag macOS Preview workflow creates a t
 
 Tag macOS Preview dispatches Release macOS with the new tag as its ref because [tags created using `GITHUB_TOKEN` do not trigger another push workflow](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow#triggering-a-workflow-from-a-workflow). Manually pushing a version tag starts Release macOS through the tag push event. [Release workflow](../.github/workflows/release-macos.yml)
 
-Release macOS builds an ad hoc signed DMG with Sparkle for preview tags and publishes it as a GitHub Pre-release. macOS may block it on first launch because it lacks notarization. Stable tags use Developer ID signing and notarization when all six repository Actions secrets are configured. With all six unset, a stable tag also produces an ad hoc signed regular release with a signed update feed. A partial configuration fails before the build of a stable tag.
+Release macOS builds an ad hoc signed DMG with Sparkle for preview tags and publishes it as a GitHub Pre-release. macOS may block it on first launch because it lacks notarization. Stable tags require Developer ID Application signing, Apple notarization and a stapled ticket. Configure all six repository Actions secrets below before creating a stable tag. Missing or partial Apple configuration fails before the stable build; the publisher also rejects ad hoc stable releases before calling GitHub.
+
+Signing in to Xcode alone does not configure GitHub Actions. Use an Apple Developer Program team to create a Developer ID Application certificate with its private key, then export it as a password-protected `.p12`. A Personal Team or an Apple Development certificate cannot sign a production release for distribution outside the Mac App Store. Create a team App Store Connect API key for notarization and store its `.p8`, key ID and issuer ID in the repository secrets. Keep certificate passwords and private keys out of Git and chat.
 
 | Secret | Value |
 | --- | --- |
@@ -112,14 +114,14 @@ Release macOS builds an ad hoc signed DMG with Sparkle for preview tags and publ
 | `APPLE_API_KEY` | App Store Connect API key ID |
 | `APPLE_API_ISSUER` | App Store Connect API issuer ID |
 
-Formal releases use manual stable `vX.Y.Z` tags on tested commits on `main`; package versions are independent. Stable tags become regular releases and Latest regardless of Apple signing mode. Preview tags remain **Pre-release**. Both require the Sparkle signing configuration.
+Formal releases use manual stable `vX.Y.Z` tags on tested commits on `main`; package versions are independent. Only successfully signed, notarized and stapled stable builds become regular releases and Latest. Preview tags remain **Pre-release**. Both require the Sparkle signing configuration.
 
 ```sh
 git tag -a v0.2.0 -m "MusicX 0.2.0"
 git push origin v0.2.0
 ```
 
-The macOS job validates the tagged commit, allocates its build number, packages the DMG, and signs both the release appcast and combined feed. Developer ID builds also notarize and staple the installer. The publish job verifies the checksum and update signature and uploads the installer, checksum, single-release appcast, and `release-manifest.json` to a draft. After verifying GitHub asset digests and publishing the installer, it updates the dedicated signed feed. The manifest records the display version, build number and signing mode and is retained for 90 days.
+The macOS job validates the tagged commit, allocates its build number and packages the DMG. For stable builds it verifies the Developer ID signature, requires an Accepted notarization result, and staples and validates the ticket before writing the checksum and signing both the release appcast and combined feed. The publish job verifies the checksum and update signature and uploads the installer, checksum, single-release appcast, and `release-manifest.json` to a draft. After verifying GitHub asset digests and publishing the installer, it updates the dedicated signed feed. The manifest records the display version, build number and signing mode and is retained for 90 days.
 
 If publication fails after a successful build, rerun the failed jobs to reuse the same installer. Preview installers are retained for 14 days; tagged release installers are retained for seven days. The publisher reuses matching uploads and stops if the draft contains conflicting assets. After configuring Apple credentials, use the next version tag for the signed release.
 

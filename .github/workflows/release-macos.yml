@@ -75,7 +75,7 @@ jobs:
       - name: Install Rust
         run: rustup toolchain install --no-self-update
 
-      - name: Select signing mode
+      - name: Require production signing
         if: needs.validate.outputs.channel == 'stable'
         id: signing
         env:
@@ -158,6 +158,7 @@ jobs:
           notary_dir=$(mktemp -d "$RUNNER_TEMP/musicx-notary.XXXXXX")
           trap 'rm -rf "$notary_dir"' EXIT
           printf '%s\n' "$APPLE_API_PRIVATE_KEY" > "$notary_dir/key.p8"
+          codesign --verify --strict "$DMG"
           xcrun notarytool submit "$DMG" \
             --key "$notary_dir/key.p8" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER" \
             --wait --timeout 20m --output-format json > "$notary_dir/result.json"

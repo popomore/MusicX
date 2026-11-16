@@ -9,7 +9,7 @@
 1. Fetch `origin/main` and use a clean checkout with passing CI.
 2. Use `vX.Y.Z` for the requested release. Derive release versions from tags; do not bump Cargo package versions.
 3. Check local and remote tags, then create `git tag <tag> <commit>`. When requested, push only that tag with `git push origin refs/tags/<tag>`.
-4. Verify the `Release macOS` workflow and published assets. Stable releases must become Latest and include a signed update feed; Apple credentials are optional.
+4. Verify the `Release macOS` workflow and published assets. Stable releases require Developer ID Application signing, Apple notarization and a stapled ticket, must become Latest, and must include a signed update feed. Missing Apple credentials must fail the release; ad hoc signing is only for previews and local development.
 
 Get approval before moving pushed tags. Create branches or worktrees only when explicitly requested.
 

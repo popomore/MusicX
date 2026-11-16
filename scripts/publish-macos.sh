@@ -7,6 +7,10 @@ source_sha=${SOURCE_SHA:?}
 signing_mode=${SIGNING_MODE:?}
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 channel=$(bash "$script_dir/validate-release-tag.sh" "$source_sha" "$tag")
+if [[ "$channel" == stable && "$signing_mode" != developer-id ]]; then
+    echo '::error::Stable releases require Developer ID signing and notarization.' >&2
+    exit 1
+fi
 cd "$(dirname "$1")"
 dmg=$(basename "$1")
 checksum="$dmg.sha256"
