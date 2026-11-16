@@ -1,7 +1,7 @@
 //! Execute original fixture exports through the public, typed Rust adapter.
 use musicx_core::protocol::*;
-use musicx_plugin_api::PluginSource;
-use musicx_plugins::{MYGO, mygo};
+use musicx_mygo_plugin::{MYGO, mygo};
+use musicx_plugin::PluginSource;
 use serde_json::json;
 use std::{fs, process::Command};
 

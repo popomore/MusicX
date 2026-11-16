@@ -1,8 +1,8 @@
 [workspace]
 members = [
     "crates/core",
-    "crates/plugin-api",
-    "crates/plugins",
+    "crates/plugin",
+    "crates/mygo-plugin",
     "crates/mcp",
     "crates/platform-apple",
     "apps/macos/helper",

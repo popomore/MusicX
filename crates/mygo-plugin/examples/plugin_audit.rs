@@ -1,6 +1,6 @@
 //! Isolated, one-operation-per-process smoke test driver for third-party plugins.
 //! Always set MUSICX_DATA_DIR to a disposable directory before running this example.
-use musicx_plugins::{music_sources, mygo};
+use musicx_mygo_plugin::{music_sources, mygo};
 use serde_json::{Value, json};
 use std::{path::Path, time::Instant};
 

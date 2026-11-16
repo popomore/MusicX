@@ -1,5 +1,5 @@
 [package]
-name = "musicx-plugins"
+name = "musicx-mygo-plugin"
 version = "0.2.0"
 edition = "2024"
 license = "MIT"
@@ -8,7 +8,7 @@ publish = false
 
 [dependencies]
 musicx-core = { path = "../core" }
-musicx-plugin-api = { path = "../plugin-api" }
+musicx-plugin = { path = "../plugin" }
 anyhow = "1"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
@@ -27,3 +27,6 @@ url = "2"
 zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 [target.'cfg(target_os = "ios")'.dependencies]
 rquickjs = { version = "=0.14.0", features = ["bindgen"] }
+
+[dev-dependencies]
+musicx-mcp = { path = "../mcp" }

@@ -1,4 +1,4 @@
-//! MyGo compatibility and explicit plugin source registration.
+//! MyGo runtime and adapter implementing the `musicx-plugin` contracts.
 mod adapter;
 pub mod assets;
 mod capabilities;
@@ -28,7 +28,7 @@ mod web_auth;
 
 use anyhow::Result;
 use musicx_core::protocol;
-use musicx_plugin_api::{DataSource, Media};
+use musicx_plugin::{DataSource, Media};
 use protocol::{AlbumPage, LocalLibraryAction, Quality, Track, TrackInfo};
 use serde_json::Value;
 

@@ -6,7 +6,7 @@ MusicX hosts a subset of the [MyGo Music plugin contract](https://github.com/ego
 
 MusicX capabilities are defined by the Rust source contract and implemented by the MyGo adapter. Script exports describe available adapter inputs; runtime compatibility does not automatically expose features in the UI or MCP. A service may also require an account, subscription or configuration.
 
-`crates/protocol/src/sources.rs` defines `SourceCapability`, typed search and page requests/results, collection kinds, and playlist snapshots. `crates/plugin-api` defines `PluginSource: DataSource`; `crates/plugins/src/adapter.rs` implements that interface for MyGo. Application dispatch and local imports in `crates/core/src/sources.rs` consume only this interface. MCP and local UI routes receive it through `Services`; MCP has no normal dependency on the MyGo implementation. The helper selects the adapter at startup.
+`crates/protocol/src/sources.rs` defines `SourceCapability`, typed search and page requests/results, collection kinds, and playlist snapshots. The generic `musicx-plugin` crate in `crates/plugin` defines `PluginSource: DataSource`; the independent `musicx-mygo-plugin` crate implements that interface in `crates/mygo-plugin/src/adapter.rs` and owns MyGo runtime injection. Application dispatch and local imports in `crates/core/src/sources.rs` consume only this interface. MCP and local UI routes receive it through `Services`; MCP has no MyGo dependency, including tests. macOS/iOS entry points select the adapter at startup. Its runtime data remains in `mygo-plugins` and `mygo-data`; crate names do not migrate user data.
 
 | MyGo exports | MusicX behavior |
 | --- | --- |

@@ -1,5 +1,5 @@
 use anyhow::{Result, anyhow, ensure};
-use musicx_plugin_api::{DataSource, Media};
+use musicx_plugin::{DataSource, Media};
 use musicx_protocol::tr;
 use std::{
     sync::Arc,

@@ -30,7 +30,7 @@ use musicx_core::{
     player::{Action, Reply, Status},
     storage,
 };
-use musicx_plugin_api::PluginSource;
+use musicx_plugin::PluginSource;
 use musicx_protocol::{self as protocol, address};
 
 #[derive(Clone, Copy)]
@@ -465,7 +465,7 @@ async fn blocking<T: Send + 'static>(
         .map_err(|error| {
             ErrorData::internal_error(
                 error.to_string(),
-                musicx_plugin_api::error_code(&error)
+                musicx_plugin::error_code(&error)
                     .map(|code| serde_json::json!({"plugin_code":code})),
             )
         })
@@ -770,7 +770,7 @@ impl ServerHandler for PlayerTools {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use musicx_plugin_api::{DataSource, Media};
+    use musicx_plugin::{DataSource, Media};
     use std::sync::Mutex;
 
     #[test]
@@ -847,7 +847,7 @@ mod tests {
         fail: bool,
     }
 
-    impl musicx_plugin_api::PluginSource for FixtureSource {
+    impl musicx_plugin::PluginSource for FixtureSource {
         fn search(
             &self,
             source: &str,

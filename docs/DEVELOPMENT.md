@@ -132,8 +132,8 @@ The local release automation tests require Python 3.9 or later, Git, Bash, Cargo
 | `crates/core` | Playback state, queues, history, local playlists, and persistence |
 | `crates/protocol` | Shared types and the local control protocol |
 | `crates/platform-apple` | AVPlayer, system Now Playing, and macOS menu bar integration |
-| `crates/plugin-api` | `DataSource` media interface and typed `PluginSource` operations |
-| `crates/plugins` | MyGo implementation, runtime injection, and source management |
+| `crates/plugin` | `DataSource` media interface and typed `PluginSource` operations |
+| `crates/mygo-plugin` | MyGo implementation, runtime injection, and source management |
 | `crates/mcp` | Streamable HTTP, MCP tools, and local panel routes |
 | `apps/macos/helper` | Entry point that wires the runtime together |
 | `apps/macos/panel` | NSH player window and details views |
@@ -142,7 +142,7 @@ The local release automation tests require Python 3.9 or later, Git, Bash, Cargo
 | `assets` | App artwork and theme tokens |
 | `vendor` | Patched NSH platform code |
 
-The helper wires the player core to the Apple `AudioOutput` and MyGo `PluginSource: DataSource` implementations. `crates/protocol/src/sources.rs` owns source capabilities and request/result types; `crates/core/src/sources.rs` dispatches application actions and imports typed snapshots. `crates/plugins/src/adapter.rs` converts MyGo inputs and results. MCP and local UI routes receive the interface through `Services`, without a normal dependency on `musicx-plugins`. The panel and MCP server send commands to the same playback session. The design guide describes how this affects the window lifecycle, queues, and artwork. [Design guide](DESIGN.md)
+The helper wires the player core to the Apple `AudioOutput` and MyGo `PluginSource: DataSource` implementations. `crates/plugin` is the `musicx-plugin` contract crate; `crates/mygo-plugin` is its `musicx-mygo-plugin` implementation. The generic contract has no dependency on MyGo or the player core. `crates/protocol/src/sources.rs` owns source capabilities and request/result types; `crates/core/src/sources.rs` dispatches application actions and imports typed snapshots. `crates/mygo-plugin/src/adapter.rs` converts MyGo inputs and results. MCP and local UI routes receive the interface through `Services`; MCP has no MyGo dependency, including test dependencies. The real adapter startup test lives in `crates/mygo-plugin/tests/plugin_startup.rs`, with MCP as a development dependency of the implementation crate. The panel and MCP server send commands to the same playback session. [Design guide](DESIGN.md)
 
 ## MCP tools
 

@@ -56,15 +56,15 @@ The source adapter, player, local library, and UI have different ownership. Shar
 | --- | --- | --- |
 | `Source` | A track locator: plugin ID plus the original string track ID. | Shared protocol |
 | `Track`, `Album`, `SourceLink` | Stable music metadata: title, artist, duration in seconds, artwork, album and source references. No resolved audio URL or credentials. | Shared protocol |
-| `Media` | A resolved playback request: full `Track`, temporary audio URL, supported headers and actual stream quality. | `crates/plugin-api` |
+| `Media` | A resolved playback request: full `Track`, temporary audio URL, supported headers and actual stream quality. | `crates/plugin` |
 | `Quality`, `AudioQuality` | Listener preference versus the actual source-reported format, bitrate, sample rate and bit depth. A preference never substitutes for measured/reported metadata. | Shared protocol / `crates/core` |
 | `Player`, `Action`, `Message` | The authoritative listening session and its commands: queue, current position, volume, playback transitions and asynchronous resolution. | `crates/core` |
 | `Status`, `QueueContext` | A session snapshot for clients and the origin of its independent queue snapshot. | Shared protocol |
 | `Session` | Durable queue, index, context, position and volume checkpoint. A restart restores paused and obtains a fresh stream on Play. | `crates/core` |
 | `LocalPlaylist`, `PlaylistOrigin` | Player-owned saved tracks, revisions, favorite/pinned state and optional import provenance. A local edit never changes the source playlist. | `crates/core` / shared protocol |
 | `HistoryEntry`, `HistoryProgress` | Each recorded play and its position, duration and completion state, separate from the current queue. | `crates/core` / shared protocol |
-| `MusicSource`, `MusicSourceCatalog` | Plugin descriptions, installation/compatibility state, capabilities, settings and discovery refresh state. | `crates/plugins` / shared protocol |
-| `SourceAccount`, `SourceLogin`, `SourcePlaylist` | Source-provided account state, temporary sign-in jobs and remote playlist descriptions. These do not own the player's session. | `crates/plugins` / shared protocol |
+| `MusicSource`, `MusicSourceCatalog` | Plugin descriptions, installation/compatibility state, capabilities, settings and discovery refresh state. | Shared protocol / `PluginSource` |
+| `SourceAccount`, `SourceLogin`, `SourcePlaylist` | Source-provided account state, temporary sign-in jobs and remote playlist descriptions. These do not own the player's session. | Shared protocol / `PluginSource` |
 
 `Source` identifies a track, `MusicSource` describes an installed or discoverable plugin, and `PlaylistOrigin` records where a local import came from. They are not interchangeable. The numeric `Track.id` remains for existing records; current source identity is carried by `Source(plugin, id)`, and a bare number never selects a source.
 
@@ -87,6 +87,6 @@ flowchart LR
 - `crates/core` owns session state and persistence. The core drives audio through `AudioOutput` and obtains media through `DataSource`. `crates/protocol` holds the shared types.
 - `crates/platform-apple` adapts playback to AVPlayer and publishes system Now Playing metadata. The macOS helper assembles the platform, plugin bridge, and MCP service.
 - MCP source tools discover music and return the shared `Track` type. Independent `play_song`/`enqueue_song` player tools accept that complete track and resolve through the injected `DataSource`; they do not invoke a concrete source plugin.
-- `crates/plugin-api` defines the Rust source contract. `crates/plugins` adapts MyGo plugins and handles source configuration and accounts. `crates/mcp` exposes player actions and the panel's local routes.
+- `crates/plugin` (`musicx-plugin`) defines the Rust source contract without depending on a concrete adapter or the player core. `crates/mygo-plugin` (`musicx-mygo-plugin`) implements that contract with the MyGo runtime, source configuration and account handling. macOS/iOS entry points select this implementation; core, MCP and Apple playback depend on the generic contract. MCP's dependencies, including tests, do not include MyGo.
 - Fetch the full queue when its version changes and render only visible rows in long lists. Share playback progress with lyrics and run the lyric display timer only when needed. Limit the panel's artwork cache to 4 MiB and release its resources on close.
 - The distributed macOS app ships the panel and web sign-in components inside its bundle. Source builds stage their app bundles under `runtime/` in `~/Library/Application Support/MusicX/`. Installed plugins live under `mygo-plugins/` in the same data directory. The iPhone app uses its own sandbox. [Local data](../README.md#local-data)

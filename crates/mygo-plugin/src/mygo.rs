@@ -19,7 +19,7 @@ use std::{
 
 use crate::protocol::Track;
 use musicx_core::{metadata::merge_metadata, storage::state_dir};
-use musicx_plugin_api::{Media, SourceError as PluginFailure};
+use musicx_plugin::{Media, SourceError as PluginFailure};
 
 fn aes_ecb(key: &str, text: &str) -> Result<String> {
     use aes::{
@@ -1186,7 +1186,7 @@ fn invoke_inner(id: &str, export: &str, args: Value, invocation: Invocation) -> 
 }
 
 pub fn error_code(error: &anyhow::Error) -> Option<&str> {
-    musicx_plugin_api::error_code(error)
+    musicx_plugin::error_code(error)
 }
 
 pub fn resolve_with_quality(mut track: Track, quality: crate::protocol::Quality) -> Result<Media> {

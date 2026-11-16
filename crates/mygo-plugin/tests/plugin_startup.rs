@@ -59,7 +59,7 @@ fn startup_child() {
     musicx_mcp::start(musicx_mcp::Services {
         submit,
         quit: || {},
-        sources: &musicx_plugins::MYGO,
+        sources: &musicx_mygo_plugin::MYGO,
     })
     .unwrap();
     let token = musicx_mcp::read_token().unwrap();

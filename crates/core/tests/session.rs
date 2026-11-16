@@ -6,7 +6,7 @@ use musicx_core::{
         AlbumPage, AudioQuality, HistoryProgress, Quality, QueueContext, Status, Track, TrackInfo,
     },
 };
-use musicx_plugin_api::{DataSource, Media};
+use musicx_plugin::{DataSource, Media};
 use std::{
     cell::Cell,
     process::Command,

@@ -1,5 +1,5 @@
 use musicx_core::protocol::{MusicSourceAction, SourceCapability, SourcePageRequest};
-use musicx_plugins::{music_sources, mygo};
+use musicx_mygo_plugin::{music_sources, mygo};
 use serde_json::json;
 use std::{fs, process::Command};
 

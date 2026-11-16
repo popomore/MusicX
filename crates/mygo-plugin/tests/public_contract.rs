@@ -1,6 +1,6 @@
 //! Exercise the public boundary in a child process so tests never share user data.
-use musicx_plugin_api::DataSource;
-use musicx_plugins::{MYGO, music_sources, mygo};
+use musicx_mygo_plugin::{MYGO, music_sources, mygo};
+use musicx_plugin::DataSource;
 use serde_json::json;
 use std::{
     fs,
@@ -241,7 +241,7 @@ export function account() {
     assert!(music_sources::get_source("fixture-source").is_err());
     let playlists = music_sources::playlists("mygo:fixture-source").unwrap();
     assert_eq!(playlists[0].id, "collection:mix/001");
-    let imported = musicx_plugins::change_library(serde_json::from_value(json!({
+    let imported = musicx_mygo_plugin::change_library(serde_json::from_value(json!({
         "action":"import_source","source":"mygo:fixture-source","playlist_id":"  collection:mix/001  "
     })).unwrap()).unwrap();
     assert_eq!(imported["imported_from"]["provider"], "mygo:fixture-source");
@@ -312,7 +312,7 @@ export function account() {
         json!({"key":"apiToken","value":"fixture-private"}),
     )
     .unwrap();
-    let headers = musicx_plugins::assets::headers(
+    let headers = musicx_mygo_plugin::assets::headers(
         "fixture-source",
         &"https://private.example.com/image".parse().unwrap(),
         "image",
@@ -321,13 +321,14 @@ export function account() {
     assert_eq!(headers["authorization"], "Bearer fixture-private");
     assert_eq!(headers["x-default"], "default-fixture");
     let http_url = "http://private.example.com/audio".parse().unwrap();
-    let headers = musicx_plugins::assets::headers("fixture-source", &http_url, "audio").unwrap();
+    let headers =
+        musicx_mygo_plugin::assets::headers("fixture-source", &http_url, "audio").unwrap();
     assert!(
         headers.is_empty(),
         "an HTTPS rule must not send stored credentials over HTTP"
     );
     assert!(
-        musicx_plugins::assets::headers(
+        musicx_mygo_plugin::assets::headers(
             "fixture-source",
             &"http://bare.example.com/audio".parse().unwrap(),
             "audio"
@@ -337,7 +338,7 @@ export function account() {
         "scheme-less rules must retain their HTTPS-only behavior"
     );
     assert_eq!(
-        musicx_plugins::assets::headers(
+        musicx_mygo_plugin::assets::headers(
             "fixture-source",
             &"https://bare.example.com/audio".parse().unwrap(),
             "audio"
@@ -353,11 +354,12 @@ export function account() {
         )]),
     )
     .unwrap();
-    let headers = musicx_plugins::assets::headers("fixture-source", &http_url, "audio").unwrap();
+    let headers =
+        musicx_mygo_plugin::assets::headers("fixture-source", &http_url, "audio").unwrap();
     assert_eq!(headers["authorization"], "Bearer fixture-private");
     assert_eq!(headers["x-default"], "default-fixture");
     assert!(
-        musicx_plugins::assets::headers("fixture-source", &http_url, "image")
+        musicx_mygo_plugin::assets::headers("fixture-source", &http_url, "image")
             .unwrap()
             .is_empty()
     );
@@ -380,7 +382,7 @@ export function account() {
     )
     .unwrap();
     assert_eq!(
-        musicx_plugins::assets::headers(
+        musicx_mygo_plugin::assets::headers(
             "fixture-source",
             &"https://private.example.com/image".parse().unwrap(),
             "image"
@@ -389,7 +391,7 @@ export function account() {
         "saved-override"
     );
     assert!(
-        musicx_plugins::assets::headers(
+        musicx_mygo_plugin::assets::headers(
             "fixture-source",
             &"https://other.example.com/image".parse().unwrap(),
             "image"
@@ -510,7 +512,7 @@ export function account() {
         2
     );
     assert_eq!(
-        musicx_plugins::assets::headers(
+        musicx_mygo_plugin::assets::headers(
             "fixture-source",
             &"https://private.example.com/cover".parse().unwrap(),
             "image"

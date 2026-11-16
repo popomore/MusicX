@@ -1,7 +1,7 @@
 //! Local snapshots must work with a source that has no MyGo runtime.
 use anyhow::Result;
 use musicx_core::{history, local_library, protocol::*, sources};
-use musicx_plugin_api::{DataSource, Media, PluginSource};
+use musicx_plugin::{DataSource, Media, PluginSource};
 use std::{
     fs,
     process::Command,

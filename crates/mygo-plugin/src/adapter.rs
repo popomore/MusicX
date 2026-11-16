@@ -3,7 +3,7 @@ use crate::{MyGo, assets, discovery, music_sources, mygo, plugin_updates};
 use anyhow::{Context, Result, ensure};
 use music_sources::{get_source, plugin};
 use musicx_core::{metadata, protocol::*};
-use musicx_plugin_api::PluginSource;
+use musicx_plugin::PluginSource;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 

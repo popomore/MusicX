@@ -1,4 +1,5 @@
-//! Typed data-source contract shared by the player and its source adapters.
+//! MusicX plugin contracts shared by the player, application services and adapters.
+//! Concrete plugin runtimes implement these interfaces in separate crates.
 use anyhow::Result;
 use musicx_protocol::{AlbumPage, AudioQuality, Quality, Track, TrackInfo};
 use musicx_protocol::{

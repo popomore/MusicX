@@ -5,7 +5,7 @@ use crate::{
 };
 use anyhow::{Context, Result, ensure};
 use musicx_core::protocol::tr;
-use musicx_plugin_api::Media;
+use musicx_plugin::Media;
 
 pub fn resolve_with_quality(track: Track, quality: crate::protocol::Quality) -> Result<Media> {
     ensure!(

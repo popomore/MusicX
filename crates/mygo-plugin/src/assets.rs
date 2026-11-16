@@ -254,7 +254,7 @@ mod tests {
     #[test]
     fn artwork_permission_checks_are_bounded_per_response() {
         use musicx_core::protocol::*;
-        use musicx_plugin_api::PluginSource;
+        use musicx_plugin::PluginSource;
         use std::process::Command;
         if std::env::var_os("MUSICX_ARTWORK_SNAPSHOT_CHILD").is_none() {
             let root = std::env::temp_dir()

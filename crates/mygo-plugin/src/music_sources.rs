@@ -968,13 +968,13 @@ pub(crate) fn auto_update(
 }
 
 pub fn account(source: &str) -> Result<SourceAccount> {
-    musicx_plugin_api::PluginSource::account(&crate::MYGO, source)
+    musicx_plugin::PluginSource::account(&crate::MYGO, source)
 }
 pub fn playlists(source: &str) -> Result<Vec<SourcePlaylist>> {
-    musicx_plugin_api::PluginSource::playlists(&crate::MYGO, source)
+    musicx_plugin::PluginSource::playlists(&crate::MYGO, source)
 }
 pub fn playlist_snapshot(source: &str, id: &str) -> Result<(PlaylistOrigin, Vec<Track>)> {
-    let snapshot = musicx_plugin_api::PluginSource::playlist(&crate::MYGO, source, id)?;
+    let snapshot = musicx_plugin::PluginSource::playlist(&crate::MYGO, source, id)?;
     Ok((snapshot.origin, snapshot.tracks))
 }
 

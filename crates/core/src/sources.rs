@@ -1,7 +1,7 @@
 //! Application source operations consume only the injected Rust contract.
 use crate::{local_library, protocol::*};
 use anyhow::Result;
-use musicx_plugin_api::PluginSource;
+use musicx_plugin::PluginSource;
 use serde_json::{Value, json};
 
 pub fn change_library(sources: &dyn PluginSource, action: LocalLibraryAction) -> Result<Value> {

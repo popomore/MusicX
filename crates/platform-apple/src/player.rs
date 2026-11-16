@@ -4,7 +4,7 @@ use musicx_core::{
     audio::{AudioOutput, AudioSnapshot, AudioState},
     player::{Message, Player, Reply},
 };
-use musicx_plugin_api::{DataSource, Media};
+use musicx_plugin::{DataSource, Media};
 use objc2::{
     MainThreadMarker,
     rc::{Retained, autoreleasepool},

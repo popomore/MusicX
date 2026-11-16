@@ -195,6 +195,6 @@ MusicX 当前可承接搜索、流解析、歌词、专辑/歌手、登录、歌
 
 ## 复核与复测
 
-隔离驱动：[plugin_audit.rs](../../crates/plugins/examples/plugin_audit.rs)。构建：`CARGO_PROFILE_DEV_DEBUG=0 cargo build --locked -p musicx-plugins --example plugin_audit`。执行前必须把 `MUSICX_DATA_DIR` 指向一次性的独立目录。支持 `install-local`、`install-repo`、`describe`、`search`、`invoke`、`action`、`resolve`；`resolve` 接收完整 Track JSON，可附 `probe` 或 `decode` 及请求音质，decode 只消费前 2 秒。运行错误使用非零退出码。批量编排脚本与完整原始数据见上述本机临时目录。
+隔离驱动：[plugin_audit.rs](../../crates/mygo-plugin/examples/plugin_audit.rs)。构建（2026-11-16 拆分后的包名）：`CARGO_PROFILE_DEV_DEBUG=0 cargo build --locked -p musicx-mygo-plugin --example plugin_audit`。执行前必须把 `MUSICX_DATA_DIR` 指向一次性的独立目录。支持 `install-local`、`install-repo`、`describe`、`search`、`invoke`、`action`、`resolve`；`resolve` 接收完整 Track JSON，可附 `probe` 或 `decode` 及请求音质，decode 只消费前 2 秒。运行错误使用非零退出码。批量编排脚本与完整原始数据见上述本机临时目录。
 
 所有仓库的固定 revision、ZIP URL、入口/manifest/归档 SHA256、GitHub 发布时间/更新时间、声明权限、宿主接口交集和各调用摘要均保存在同名 JSON 文件中；没有保存账号会话、完整歌词或临时音频 URL。GitHub 许可证识别只作为原始元数据保留，不据此推断完整授权或安全性。

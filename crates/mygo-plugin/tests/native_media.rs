@@ -1,7 +1,7 @@
 //! Remote-control exports are runtime compatibility, never native audio.
 use musicx_core::protocol::{Quality, Track};
-use musicx_plugin_api::DataSource;
-use musicx_plugins::{MYGO, music_sources, mygo};
+use musicx_mygo_plugin::{MYGO, music_sources, mygo};
+use musicx_plugin::DataSource;
 use serde_json::json;
 use std::{fs, process::Command};
 
@@ -65,7 +65,7 @@ export function home(){return {tracks:[{id:'opaque:track',name:'Remote metadata'
         );
         assert!(descriptor.adapter_exports.iter().any(|c| c == "remotePlay"));
         assert!(descriptor.supports(musicx_core::protocol::SourceCapability::Account));
-        let page = musicx_plugin_api::PluginSource::page(
+        let page = musicx_plugin::PluginSource::page(
             &MYGO,
             &format!("mygo:{id}"),
             musicx_core::protocol::SourcePageRequest::Recommendations {},

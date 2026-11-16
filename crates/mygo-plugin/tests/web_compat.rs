@@ -1,5 +1,5 @@
 //! Exercises the real plugin runtime in an isolated child process.
-use musicx_plugins::mygo;
+use musicx_mygo_plugin::mygo;
 use serde_json::json;
 use std::{fs, process::Command, time::SystemTime};
 

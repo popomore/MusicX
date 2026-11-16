@@ -1,6 +1,6 @@
 //! A user-configured server may be private; another origin never inherits access.
 use musicx_core::protocol::{MusicSourceAction, Quality, Track};
-use musicx_plugins::{assets, music_sources, mygo};
+use musicx_mygo_plugin::{assets, music_sources, mygo};
 use serde_json::json;
 use std::{
     fs,

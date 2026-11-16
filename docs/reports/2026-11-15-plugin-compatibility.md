@@ -18,6 +18,8 @@
 
 ## Rust 契约落实（2026-11-16）
 
+同日后续拆分：通用契约迁移至 `crates/plugin`（`musicx-plugin`），MyGo 实现迁移至 `crates/mygo-plugin`（`musicx-mygo-plugin`）；下列阶段记录中的旧目录/包名保留其当时含义。当前结构见 [开发指南](../DEVELOPMENT.md#repository-layout)。运行时数据、第三方脚本与可信登记内容不变。
+
 之前仍有搜索、账号/歌单和能力字符串耦合 MyGo 的缺口，本次已迁移：
 
 - `crates/protocol/src/sources.rs` 定义 `SourceCapability`、搜索类型、页面请求、集合类型、歌单快照和来源管理结果；`crates/plugin-api` 定义 `PluginSource: DataSource`。
@@ -78,7 +80,7 @@
 
 评审修复后的工作区测试有 168 项通过，另有自定义 headless UI 检查通过，2 项需显式开启的测试保留忽略。严格 Clippy、格式、iOS locked metadata 检查以及 47 项发布脚本测试通过。重建隔离原生测试版后，再次观察了 QQ 的可信解释与 60 秒试听说明，以及 Spotify 的未验证、设备发声和前台辅助程序限制。源码/运行时模拟、真实第三方匿名调用、原生窗口、原生合成音频和真实账号/设备是分别记录的证据。
 
-[原始兼容性与同平台比较](2026-11-15-plugin-audit.md)保留修复前基线。[本轮逐项目与逐调用摘要](2026-11-15-plugin-compatibility.json)包含版本和结果；[可信证据登记](../../crates/plugins/src/verified_plugins.json)包含精确内容摘要。本机原始日志位于 `/tmp/musicx-plugin-audit-20261115-0aeb/`，不随 Git 提交。
+[原始兼容性与同平台比较](2026-11-15-plugin-audit.md)保留修复前基线。[本轮逐项目与逐调用摘要](2026-11-15-plugin-compatibility.json)包含版本和结果；[可信证据登记](../../crates/mygo-plugin/src/verified_plugins.json)包含精确内容摘要。本机原始日志位于 `/tmp/musicx-plugin-audit-20261115-0aeb/`，不随 Git 提交。
 
 ## 可信版本
 
