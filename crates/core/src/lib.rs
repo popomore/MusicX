@@ -5,6 +5,7 @@ pub mod history;
 pub mod local_library;
 pub mod metadata;
 pub mod player;
+pub mod radio;
 mod session;
 pub mod sources;
 pub mod storage;

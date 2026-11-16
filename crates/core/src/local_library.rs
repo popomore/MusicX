@@ -82,6 +82,25 @@ fn identity(track: &Track) -> String {
     crate::protocol::track_key(track)
 }
 
+pub(crate) fn validate_track(track: &Track) -> Result<()> {
+    ensure!(
+        !track.title.trim().is_empty()
+            && track.title.len() <= 2048
+            && track.artist.len() <= 4096
+            && track.duration.is_finite()
+            && track.duration >= 0.0,
+        tr!("Track information is incomplete")
+    );
+    ensure!(
+        track
+            .source
+            .as_ref()
+            .map_or(track.id > 0, |s| !s.plugin.is_empty() && !s.id.is_empty()),
+        tr!("Track source identifier missing")
+    );
+    Ok(())
+}
+
 fn append(list: &mut LocalPlaylist, tracks: Vec<Track>) -> Result<()> {
     ensure!(
         tracks.len() <= MAX_TRACKS,
@@ -89,21 +108,7 @@ fn append(list: &mut LocalPlaylist, tracks: Vec<Track>) -> Result<()> {
     );
     let mut keys: std::collections::HashSet<_> = list.tracks.iter().map(identity).collect();
     for track in tracks {
-        ensure!(
-            !track.title.trim().is_empty()
-                && track.title.len() <= 2048
-                && track.artist.len() <= 4096
-                && track.duration.is_finite()
-                && track.duration >= 0.0,
-            tr!("Track information is incomplete")
-        );
-        ensure!(
-            track
-                .source
-                .as_ref()
-                .map_or(track.id > 0, |s| !s.plugin.is_empty() && !s.id.is_empty()),
-            tr!("Track source identifier missing")
-        );
+        validate_track(&track)?;
         if keys.insert(identity(&track)) {
             list.tracks.push(track);
         }
@@ -262,7 +267,7 @@ pub fn playlist(id: &str) -> Result<LocalPlaylist> {
     Ok(read()?.get(id)?.clone())
 }
 
-fn update(edit: impl FnOnce(&mut Library) -> Result<Value>) -> Result<Value> {
+fn update<T>(edit: impl FnOnce(&mut Library) -> Result<T>) -> Result<T> {
     let _guard = WRITER
         .lock()
         .map_err(|_| anyhow::anyhow!(tr!("Local playlists unavailable")))?;
@@ -274,6 +279,47 @@ fn update(edit: impl FnOnce(&mut Library) -> Result<Value>) -> Result<Value> {
 
 pub fn change(action: LocalLibraryAction) -> Result<Value> {
     update(|library| library.edit(action))
+}
+
+pub(crate) fn add_radio(tracks: Vec<Track>) -> Result<(Option<LocalPlaylist>, usize)> {
+    if tracks.is_empty() {
+        return Ok((
+            read()?
+                .playlists
+                .into_iter()
+                .find(|p| p.id == RADIO_PLAYLIST_ID),
+            0,
+        ));
+    }
+    update(|library| {
+        let index = match library
+            .playlists
+            .iter()
+            .position(|p| p.id == RADIO_PLAYLIST_ID)
+        {
+            Some(index) => index,
+            None => {
+                library.playlists.push(LocalPlaylist {
+                    id: RADIO_PLAYLIST_ID.into(),
+                    name: "Radio".into(),
+                    revision: 0,
+                    favorite: false,
+                    pinned: false,
+                    tracks: Vec::new(),
+                    imported_from: None,
+                });
+                library.playlists.len() - 1
+            }
+        };
+        let list = &mut library.playlists[index];
+        let before = list.tracks.len();
+        append(list, tracks)?;
+        let added = list.tracks.len() - before;
+        if added > 0 {
+            list.revision = list.revision.wrapping_add(1);
+        }
+        Ok((Some(list.clone()), added))
+    })
 }
 
 pub fn import(origin: PlaylistOrigin, tracks: Vec<Track>) -> Result<Value> {
