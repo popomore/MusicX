@@ -28,6 +28,11 @@ def normalize_permissions(app):
             path.chmod(0o755 if path.is_dir() or path.stat().st_mode & 0o111 else 0o644)
 
 
+def remove_quarantine(app):
+    # Browser-downloaded profiles can propagate quarantine into installer payloads.
+    run("xattr", "-drs", "com.apple.quarantine", str(app))
+
+
 def build(package, binary, destination, env):
     executable = None
     with subprocess.Popen(
@@ -152,6 +157,7 @@ def main():
         if profile:
             shutil.copyfile(args.profile, app / "Contents/embedded.provisionprofile")
         normalize_permissions(app)
+        remove_quarantine(app)
         inherited = {"com.apple.security.app-sandbox": True, "com.apple.security.inherit": True}
         parent = {"com.apple.security.app-sandbox": True,
                   "com.apple.security.network.client": True, "com.apple.security.network.server": True,

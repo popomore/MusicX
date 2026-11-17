@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -121,6 +122,23 @@ class TestFlightPackagingTests(unittest.TestCase):
             for path in (app, contents, binary):
                 self.assertTrue(path.stat().st_mode & 0o001, path)
             self.assertFalse(resource.stat().st_mode & 0o111)
+
+    @unittest.skipUnless(sys.platform == "darwin", "Apple quarantine metadata requires macOS")
+    def test_downloaded_profile_quarantine_is_removed_from_the_staged_bundle(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = Path(directory) / "MusicX.app"
+            contents = app / "Contents"
+            contents.mkdir(parents=True)
+            profile = contents / "embedded.provisionprofile"
+            profile.write_bytes(b"downloaded profile")
+            for path in (app, profile):
+                subprocess.run(["xattr", "-w", "com.apple.quarantine",
+                                "0081;00000000;MusicX Test;", str(path)], check=True)
+            PACKAGER.remove_quarantine(app)
+            for path in (app, profile):
+                attributes = subprocess.run(["xattr", str(path)], check=True,
+                                            capture_output=True, text=True).stdout.splitlines()
+                self.assertNotIn("com.apple.quarantine", attributes)
 
 
 if __name__ == "__main__":
