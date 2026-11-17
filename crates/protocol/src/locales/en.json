@@ -161,6 +161,7 @@
   "Set up Codex": "Set up Codex",
   "Set up Claude Code": "Set up Claude Code",
   "Set up music control in your agent.": "Set up music control in your agent.",
+  "Use the MCP settings below to configure your agent manually.": "Use the MCP settings below to configure your agent manually.",
   "Automatic setup": "Automatic setup",
   "Setting up…": "Setting up…",
   "Setup complete. Restart {agent} to connect.": "Setup complete. Restart {agent} to connect.",

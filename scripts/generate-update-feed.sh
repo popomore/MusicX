@@ -5,22 +5,26 @@ cd "$(dirname "$0")/.."
 dmg=${1:?}
 repo=${GITHUB_REPOSITORY:?}
 tag=${RELEASE_TAG:-${GITHUB_REF_NAME:?}}
+feed_tag=${UPDATE_FEED_TAG:-update-feed}
+[[ "$feed_tag" =~ ^update-feed(-[0-9]+(\.[0-9]+)?\.x)?$ ]] || { echo 'Invalid update feed tag.' >&2; exit 1; }
 sparkle=$(bash scripts/prepare-sparkle.sh)
 stage=$(mktemp -d "${TMPDIR:-/tmp}/musicx-update-feed.XXXXXX")
 trap 'rm -rf "$stage"' EXIT
 directory=$(dirname "$dmg")
-previous=$(gh api --paginate "repos/$repo/releases?per_page=100" | jq -rs '
+previous=$(gh api --paginate "repos/$repo/releases?per_page=100" | jq -rs --arg feed "$feed_tag" '
     [.[][] | select(.draft == false)] as $releases |
-    ($releases | map(select(.tag_name == "update-feed")) | first) //
-    ($releases | map(select(.prerelease == false and (.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))))
-     | sort_by(.published_at) | last)')
+    ($releases | map(select(.tag_name == $feed)) | first) //
+    (if $feed == "update-feed" then
+       ($releases | map(select(.prerelease == false and (.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))))
+        | sort_by(.published_at) | last)
+     else null end)')
 prior='-'
 base=missing
 if [[ "$previous" != null ]]; then
     previous_tag=$(jq -er .tag_name <<< "$previous")
     mkdir "$stage/prior"
     name=appcast.xml
-    if [[ "$previous_tag" == update-feed ]]; then
+    if [[ "$previous_tag" == "$feed_tag" ]]; then
         assets=$(gh api --paginate "repos/$repo/releases/$(jq -er .id <<< "$previous")/assets?per_page=100" | jq -cs '[.[][]]')
         reference=$(jq -ec '[.[] | select(.state == "uploaded" and
             (.name == "appcast.xml" or (.name | startswith("appcast-next-") or startswith("appcast-previous-"))))] |
@@ -34,7 +38,7 @@ if [[ "$previous" != null ]]; then
     fi
     gh release download "$previous_tag" --repo "$repo" --pattern "$name" --dir "$stage/prior"
     prior="$stage/prior/$name"
-    if [[ "$previous_tag" == update-feed ]]; then
+    if [[ "$previous_tag" == "$feed_tag" ]]; then
         [[ "$(shasum -a 256 "$prior" | cut -d ' ' -f 1)" == "$(jq -er .digest <<< "$reference" | cut -d : -f 2)" ]]
     fi
 fi

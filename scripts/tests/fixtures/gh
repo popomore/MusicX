@@ -65,7 +65,7 @@ def execute():
             return state["release"]["assets"]
         if endpoint == "releases/2/assets?per_page=100":
             return state["feed_release"]["assets"]
-        if endpoint == "releases/tags/update-feed":
+        if endpoint.startswith("releases/tags/update-feed"):
             return state["feed_release"]
         if endpoint.startswith("releases/assets/") and method == "PATCH":
             asset_id = int(endpoint.rsplit("/", 1)[1])
@@ -100,7 +100,7 @@ def execute():
         return {}
     if args[:2] == ["release", "create"]:
         tag = args[2]
-        if tag == "update-feed":
+        if tag.startswith("update-feed"):
             assert state.get("feed_release") is None
             assert "--prerelease" in args and "--latest=false" in args
             path = Path(args[-1])
@@ -114,6 +114,7 @@ def execute():
             "id": 1,
             "tag_name": tag,
             "title": flag("--title"),
+            "notes": flag("--notes"),
             "draft": True,
             "prerelease": "--prerelease=true" in args,
             "assets": [],
@@ -127,15 +128,15 @@ def execute():
             "isPrerelease": release["prerelease"],
         }
     if args[:2] == ["release", "upload"]:
-        assets = state["feed_release" if args[2] == "update-feed" else "release"]["assets"]
+        assets = state["feed_release" if args[2].startswith("update-feed") else "release"]["assets"]
         for filename in args[args.index("--repo") + 2 :]:
             if filename.startswith("--"):
                 continue
             path = Path(filename)
-            if args[2] == "update-feed" and "--clobber" in args:
+            if args[2].startswith("update-feed") and "--clobber" in args:
                 assets[:] = [asset for asset in assets if asset["name"] != path.name]
             assert all(asset["name"] != path.name for asset in assets)
-            if args[2] == "update-feed" and state.get("fail_feed_upload", 0):
+            if args[2].startswith("update-feed") and state.get("fail_feed_upload", 0):
                 state["fail_feed_upload"] -= 1
                 assets.append({"id": max((a.get("id", 0) for a in assets), default=0) + 1,
                                "name": path.name, "digest": None, "state": "starter"})
@@ -145,11 +146,11 @@ def execute():
                 "name": path.name,
                 "digest": "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest(),
                 "state": "uploaded",
-                **({"content": path.read_text()} if args[2] == "update-feed" else {}),
+                **({"content": path.read_text()} if args[2].startswith("update-feed") else {}),
             })
         return {}
     if args[:2] == ["release", "download"]:
-        assert args[2] == "update-feed"
+        assert args[2].startswith("update-feed")
         asset = next(a for a in state["feed_release"]["assets"] if a["name"] == flag("--pattern") and a["state"] == "uploaded")
         (Path(flag("--dir")) / asset["name"]).write_text(asset["content"])
         return {}

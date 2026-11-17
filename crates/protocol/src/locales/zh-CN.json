@@ -161,6 +161,7 @@
   "Set up Codex": "设置 Codex",
   "Set up Claude Code": "设置 Claude Code",
   "Set up music control in your agent.": "让智能体为你选歌和控制播放。",
+  "Use the MCP settings below to configure your agent manually.": "请使用下方的 MCP 设置手动配置智能体。",
   "Automatic setup": "自动设置",
   "Setting up…": "正在设置…",
   "Setup complete. Restart {agent} to connect.": "设置完成，重启 {agent} 后即可连接。",

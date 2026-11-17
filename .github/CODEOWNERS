@@ -1,0 +1,9 @@
+# Release code can access signing credentials after merge. Review these together.
+/.github/ @popomore
+/AGENTS.md @popomore
+/release.config.mjs @popomore
+/package.json @popomore
+/package-lock.json @popomore
+/scripts/ @popomore
+/Cargo.lock @popomore
+/rust-toolchain.toml @popomore

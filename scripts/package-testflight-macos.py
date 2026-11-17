@@ -103,9 +103,7 @@ def main():
         parser.error("Store packaging requires --profile, --app-identity and --installer-identity")
     if args.app_identity and not re.fullmatch(r"[0-9a-fA-F]{40}", args.app_identity):
         parser.error("--app-identity must be the certificate's SHA-1 fingerprint")
-    profile, team = (None, None) if args.prepare_only else load_profile(
-        args.profile.resolve(), args.bundle_id, args.app_identity,
-    )
+    profile, team = None, None
     # Public bundle metadata and newly generated code-signature resources are readable.
     os.umask(0o022)
     env = dict(os.environ)
@@ -115,6 +113,7 @@ def main():
         MUSICX_BUILD_APP_NAME="MusicX TestFlight QA" if args.prepare_only else "MusicX", MUSICX_BUILD_APP_ID=args.bundle_id,
         MUSICX_BUILD_ADDRESS="127.0.0.1:45974" if args.prepare_only else "127.0.0.1:45969", MUSICX_RELEASE_VERSION=args.version,
         MUSICX_SHORT_VERSION=args.version, MUSICX_BUNDLE_VERSION=args.build,
+        MUSICX_APP_SANDBOX="1",
         MACOSX_DEPLOYMENT_TARGET="14.0",
     )
     sdk_version = run("xcrun", "--sdk", "macosx", "--show-sdk-version").decode().strip()
@@ -125,6 +124,11 @@ def main():
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="musicx-testflight-") as directory:
         stage = Path(directory)
+        if not args.prepare_only:
+            # Decode and embed one snapshot even if the original file changes during compilation.
+            staged_profile = stage / 'distribution.provisionprofile'
+            staged_profile.write_bytes(args.profile.read_bytes())
+            profile, team = load_profile(staged_profile, args.bundle_id, args.app_identity)
         binaries = stage / "bin"
         binaries.mkdir()
         for package, name in (("musicx-webauth", "musicx-webauth"),
@@ -155,7 +159,7 @@ def main():
                     raise SystemExit("App Store builds must not include Sparkle")
             path.write_bytes(plistlib.dumps(info))
         if profile:
-            shutil.copyfile(args.profile, app / "Contents/embedded.provisionprofile")
+            shutil.copyfile(staged_profile, app / "Contents/embedded.provisionprofile")
         normalize_permissions(app)
         remove_quarantine(app)
         inherited = {"com.apple.security.app-sandbox": True, "com.apple.security.inherit": True}
@@ -191,7 +195,10 @@ def main():
             if args.keychain:
                 command.extend(("--keychain", str(args.keychain)))
             run(*command, str(output))
-            run("pkgutil", "--check-signature", str(output))
+            installer_signature = run("pkgutil", "--check-signature", str(output)).decode()
+            if not any(prefix in installer_signature for prefix in (
+                    "3rd Party Mac Developer Installer:", "Mac Installer Distribution:")):
+                raise SystemExit("TestFlight installers require a Mac App Store installer certificate")
     receipt = {"source_sha": run("git", "rev-parse", "HEAD").decode().strip(),
                "bundle_id": args.bundle_id, "version": args.version, "build": args.build,
                "sandbox": True, "sparkle": False, "prepare_only": args.prepare_only,

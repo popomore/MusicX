@@ -18,13 +18,19 @@ manifest='release-manifest.json'
 
 title="MusicX ${tag#v}"
 notes="Download MusicX for Apple Silicon and drag the app to Applications. Requires macOS 14 or later."
+if [[ -n "${RELEASE_NOTES_FILE:-}" ]]; then
+    notes=$(cat "$RELEASE_NOTES_FILE")
+    [[ -n "$notes" ]] || { echo 'Release notes must not be empty.' >&2; exit 1; }
+fi
 prerelease=true
 if [[ "$channel" == stable ]]; then
     prerelease=false
 fi
 case "$signing_mode" in
     ad-hoc)
-        notes+=$'\n\nThis build uses ad hoc signing. macOS may block it on first launch because it lacks Apple notarization.'
+        if [[ -z "${RELEASE_NOTES_FILE:-}" ]]; then
+            notes+=$'\n\nThis build uses ad hoc signing. macOS may block it on first launch because it lacks Apple notarization.'
+        fi
         ;;
     developer-id) ;;
     *)
@@ -41,8 +47,9 @@ python3 "$script_dir/validate-appcast.py" "$dmg" "$tag" "$repo"
 files=("$dmg" "$checksum" appcast.xml)
 make_latest=false
 if [[ "$channel" == stable ]]; then
-    make_latest=true
+    make_latest=${RELEASE_MAKE_LATEST:-true}
 fi
+[[ "$make_latest" == true || "$make_latest" == false ]] || { echo 'Invalid Latest policy.' >&2; exit 1; }
 verify_tag() {
     local tag_sha
     tag_sha=$(gh api "repos/$repo/commits/refs/tags/$tag" --jq .sha)

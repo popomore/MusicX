@@ -11,8 +11,10 @@ use objc2_app_kit::{NSAlert, NSApplication};
 use objc2_foundation::{NSBundle, NSObject, NSObjectProtocol, NSSet, NSString, ns_string};
 use std::path::Path;
 
-pub const FEED_URL: &str =
-    "https://github.com/popomore/MusicX/releases/download/update-feed/appcast.xml";
+pub const FEED_URL: &str = match option_env!("MUSICX_UPDATE_FEED_URL") {
+    Some(url) => url,
+    None => "https://github.com/popomore/MusicX/releases/download/update-feed/appcast.xml",
+};
 
 define_class!(
     #[unsafe(super(NSObject))]

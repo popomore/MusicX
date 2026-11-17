@@ -11,6 +11,9 @@ version_pattern="$number\\.$number\\.$number"
 if [[ "$tag" =~ ^v($version_pattern)$ ]]; then
     version=${BASH_REMATCH[1]}
     channel=stable
+elif [[ "$tag" =~ ^v($version_pattern)-preview\.([1-9][0-9]*)$ ]]; then
+    version=${BASH_REMATCH[1]}
+    channel=preview
 elif [[ "$tag" =~ ^v($version_pattern)\.preview-([0-9]{14})-([0-9a-f]{4})$ ]]; then
     version=${BASH_REMATCH[1]}
     tag_timestamp=${BASH_REMATCH[5]}
@@ -22,7 +25,7 @@ elif [[ "$tag" =~ ^v($version_pattern)\.preview-([0-9]{14})-([0-9a-f]{4})$ ]]; t
     fi
     channel=preview
 else
-    echo '::error::Invalid release tag. Expected vX.Y.Z or vX.Y.Z.preview-YYYYMMDDHHMMSS-SHA4, without leading zeroes.' >&2
+    echo '::error::Invalid release tag. Expected vX.Y.Z or vX.Y.Z-preview.N (legacy timestamp previews are also accepted), without leading zeroes.' >&2
     exit 1
 fi
 
