@@ -17,6 +17,12 @@ from urllib.request import Request, urlopen
 API = 'https://api.appstoreconnect.apple.com'
 
 
+class AppleAPIError(RuntimeError):
+    def __init__(self, method, path, status, codes):
+        self.method, self.path, self.status = method, path.split('?')[0], status
+        super().__init__(f'Apple API {method} {self.path} failed: HTTP {status}, codes {codes}')
+
+
 def api_path(url):
     parsed = urlsplit(url)
     if parsed.scheme != 'https' or parsed.netloc != 'api.appstoreconnect.apple.com':
@@ -74,7 +80,7 @@ class Apple:
                     codes = [entry.get('code', 'UNKNOWN') for entry in json.loads(error.read()).get('errors', [])]
                 except (ValueError, KeyError):
                     codes = []
-                raise RuntimeError(f'Apple API {method} {path.split("?")[0]} failed: HTTP {error.code}, codes {codes}') from None
+                raise AppleAPIError(method, path, error.code, codes) from None
             except (URLError, TimeoutError):
                 if method == 'GET' and attempt < 2:
                     time.sleep(5 * (attempt + 1))
@@ -173,17 +179,25 @@ def main():
                 if state in ('INVALID', 'FAILED') or build['attributes']['expired']:
                     raise SystemExit('Apple rejected or expired the build; check App Store Connect')
                 if state == 'VALID':
-                    if not assigned:
-                        distribute(apple, build, os.environ['TESTFLIGHT_GROUP_ID'])
-                        assigned = True
-                    detail = apple.request(api_path(build['relationships']['buildBetaDetail']['links']['related']))['data']
-                    internal = detail['attributes']['internalBuildState']
-                    members = apple.collection('/v1/betaGroups/' + os.environ['TESTFLIGHT_GROUP_ID'] + '/relationships/builds')
-                    save(internal_state=internal, group_id=os.environ['TESTFLIGHT_GROUP_ID'])
-                    if internal == 'IN_BETA_TESTING' and build['id'] in {item['id'] for item in members}:
-                        save(state='internal_available')
-                        print(f'TestFlight {plan["shortVersion"]} ({plan["bundleVersion"]}) is available in the existing Internal group')
-                        return
+                    try:
+                        if not assigned:
+                            distribute(apple, build, os.environ['TESTFLIGHT_GROUP_ID'])
+                            assigned = True
+                        detail = apple.request(api_path(build['relationships']['buildBetaDetail']['links']['related']))['data']
+                        internal = detail['attributes']['internalBuildState']
+                        members = apple.collection('/v1/betaGroups/' + os.environ['TESTFLIGHT_GROUP_ID'] + '/relationships/builds')
+                        save(internal_state=internal, group_id=os.environ['TESTFLIGHT_GROUP_ID'])
+                        if internal == 'IN_BETA_TESTING' and build['id'] in {item['id'] for item in members}:
+                            save(state='internal_available')
+                            print(f'TestFlight {plan["shortVersion"]} ({plan["bundleVersion"]}) is available in the existing Internal group')
+                            return
+                    except AppleAPIError as error:
+                        if error.method != 'GET' or error.status != 404:
+                            raise
+                        # Apple can temporarily hide existing Internal resources
+                        # after processing. Reconcile reads within this deadline;
+                        # writes retain their existing fail-and-resume behavior.
+                        save(state='waiting_internal_metadata', pending_path=error.path)
             time.sleep(30)
         save(state='processing_timeout')
         raise SystemExit('Upload has not reached Internal availability; retry this job to reconcile the existing build')
