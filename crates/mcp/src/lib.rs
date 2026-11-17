@@ -401,6 +401,7 @@ struct Volume {
 #[derive(Clone, Copy, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 enum LibraryOperation {
+    Radio,
     List,
     Get,
     Create,
@@ -552,7 +553,7 @@ impl PlayerTools {
     }
 
     #[tool(
-        description = "管理播放器本地歌单。action=list/get/create/rename/pin/unpin/add_current/add_queue/remove/delete/import_source/play。import_source需要source=mygo:插件ID和source_playlist_id。pin和unpin需要playlist_id。歌曲按来源去重，播放为独立快照；导入创建本地副本，不修改第三方歌单。remove需index和当前revision。"
+        description = "Manage local playlists. action=list/get/create/rename/pin/unpin/add_current/add_queue/remove/delete/import_source/play/radio. radio fetches personal recommendations from connected music accounts and appends unique tracks to the local Radio playlist without starting playback; it returns the playlist, added count and per-source results. import_source requires source and source_playlist_id. Other playlist edits use playlist_id; remove also requires index and the current revision. Imports and playback use independent local snapshots."
     )]
     async fn manage_local_playlists(
         &self,
@@ -590,6 +591,7 @@ impl PlayerTools {
                 .await;
         }
         let edit = match input.action {
+            LibraryOperation::Radio => Edit::RefreshRadio {},
             LibraryOperation::Create => Edit::Create { name: title()? },
             LibraryOperation::Rename => Edit::Rename {
                 id: id()?,

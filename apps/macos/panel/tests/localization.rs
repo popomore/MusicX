@@ -450,6 +450,196 @@ fn player_entry_checks() {
     }
 }
 
+#[component]
+fn RadioScreen() -> impl IntoElement {
+    let model = model::Model::new();
+    view()
+        .flex_1()
+        .child(library::library_view(model))
+        .child(controls::action(
+            "Simulate library revision",
+            || false,
+            move || {
+                model.status.update(|status| status.library_revision += 1);
+            },
+        ))
+}
+
+fn radio_flow() {
+    use std::io::{Read, Write};
+    use std::sync::{
+        Condvar,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let requests = Arc::new(AtomicUsize::new(0));
+    let plays = Arc::new(AtomicUsize::new(0));
+    let gate = Arc::new((Mutex::new(false), Condvar::new()));
+    let listener = std::net::TcpListener::bind(protocol::address()).unwrap();
+    std::fs::write(
+        protocol::data_dir().unwrap().join("mcp-token"),
+        "radio-fixture",
+    )
+    .unwrap();
+    let server_requests = requests.clone();
+    let server_plays = plays.clone();
+    let server_gate = gate.clone();
+    std::thread::spawn(move || {
+        for connection in listener.incoming() {
+            let mut socket = connection.unwrap();
+            let requests = server_requests.clone();
+            let plays = server_plays.clone();
+            let gate = server_gate.clone();
+            std::thread::spawn(move || {
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut bytes = Vec::new();
+                let (header_end, length) = loop {
+                    let mut buffer = [0u8; 2048];
+                    let count = socket.read(&mut buffer).unwrap();
+                    assert!(count > 0);
+                    bytes.extend_from_slice(&buffer[..count]);
+                    if let Some(at) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let headers = String::from_utf8_lossy(&bytes[..at]);
+                        assert!(
+                            headers
+                                .to_ascii_lowercase()
+                                .contains("authorization: bearer radio-fixture")
+                        );
+                        let length = headers
+                            .lines()
+                            .find_map(|line| {
+                                line.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .map(|v| v.trim().parse::<usize>().unwrap())
+                            })
+                            .unwrap_or(0);
+                        break (at + 4, length);
+                    }
+                };
+                while bytes.len() < header_end + length {
+                    let mut buffer = [0u8; 2048];
+                    let count = socket.read(&mut buffer).unwrap();
+                    assert!(count > 0);
+                    bytes.extend_from_slice(&buffer[..count]);
+                }
+                let first = String::from_utf8_lossy(&bytes[..header_end]);
+                let body = &bytes[header_end..header_end + length];
+                let mut status = "200 OK";
+                let playlist = serde_json::json!({"id":"radio","name":"Radio","revision":1,"tracks":[{"id":1,"title":"Personal fixture song","artist":"Fixture artist","duration":180,"source":{"plugin":"fixture","id":"personal-1"}}],"imported_from":null});
+                let response = if first.starts_with("GET /ui/local-playlists?id=radio") {
+                    playlist
+                } else if first.starts_with("GET /ui/local-playlists") {
+                    serde_json::json!([])
+                } else if first.starts_with("POST /ui/local-playlists") {
+                    let value: serde_json::Value = serde_json::from_slice(body).unwrap();
+                    assert_eq!(value["action"], "refresh_radio");
+                    let at = requests.fetch_add(1, Ordering::SeqCst) % 3;
+                    if at == 0 {
+                        let (lock, ready) = &*gate;
+                        drop(
+                            ready
+                                .wait_while(lock.lock().unwrap(), |released| !*released)
+                                .unwrap(),
+                        );
+                    }
+                    if at == 2 {
+                        status = "503 Service Unavailable";
+                        serde_json::json!({"error":"fixture connection failed"})
+                    } else {
+                        serde_json::json!({"playlist":playlist,"added":if at==0 {1}else{0},"sources":[{"source":"mygo:fixture","name":"Fixture","tracks":1,"error":null},{"source":"mygo:broken","name":"Broken source","tracks":0,"error":if at==0{Some("fixture provider failed")}else{None}}]})
+                    }
+                } else if first.starts_with("POST /ui/action") {
+                    let value: serde_json::Value = serde_json::from_slice(body).unwrap();
+                    assert_eq!(value["action"], "play_local_playlist");
+                    assert_eq!(value["id"], "radio");
+                    plays.fetch_add(1, Ordering::SeqCst);
+                    serde_json::to_value(protocol::Status::default()).unwrap()
+                } else {
+                    panic!(
+                        "unexpected Radio UI request: {}",
+                        first.lines().next().unwrap()
+                    );
+                };
+                let response = response.to_string();
+                write!(socket, "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).unwrap();
+            });
+        }
+    });
+    remote::start().unwrap();
+    for (language, iteration) in [("en", 0), ("zh-CN", 1)] {
+        std::fs::write(protocol::data_dir().unwrap().join("language"), language).unwrap();
+        protocol::i18n::refresh();
+        *gate.0.lock().unwrap() = false;
+        let mut config = EngineConfig::new(Root::of::<RadioScreen>());
+        config.viewport = Size::new(px(272.0), px(430.0));
+        config.environment.window = config.viewport;
+        let mut app = Headless::start(config).unwrap();
+        app.first_render().unwrap();
+        app.wait_for(protocol::tr!("No playlists yet")).unwrap();
+        assert!(app.shows(protocol::tr!("Radio")));
+        assert_eq!(
+            requests.load(Ordering::SeqCst),
+            iteration * 3,
+            "opening Radio must not fetch recommendations"
+        );
+        app.press(protocol::tr!("Add recommendations")).unwrap();
+        app.wait_for(protocol::tr!("Getting recommendations…"))
+            .unwrap();
+        assert!(
+            app.screen()
+                .press_target(&format!("label:{}", protocol::tr!("Add recommendations")))
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(plays.load(Ordering::SeqCst), iteration);
+        *gate.0.lock().unwrap() = true;
+        gate.1.notify_all();
+        app.wait_for("Personal fixture song").unwrap();
+        assert!(app.shows(protocol::tr!("Radio")));
+        assert!(app.shows("Broken source: fixture provider failed"));
+        assert!(app.shows(&protocol::tr!(
+            "Added {} to Radio.",
+            protocol::i18n::tracks(1)
+        )));
+        app.press("Simulate library revision").unwrap();
+        app.wait(Duration::from_millis(100)).unwrap();
+        assert!(
+            app.shows("Broken source: fixture provider failed"),
+            "a library revision refresh must preserve per-source failures"
+        );
+        assert_eq!(
+            plays.load(Ordering::SeqCst),
+            iteration,
+            "fetching must not start playback"
+        );
+        app.press(protocol::tr!("Add recommendations")).unwrap();
+        app.wait_for(protocol::tr!("No new recommendations. Try again later."))
+            .unwrap();
+        assert!(!app.shows("fixture provider failed"));
+        assert!(app.shows("Personal fixture song"));
+        app.press(protocol::tr!("Add recommendations")).unwrap();
+        app.wait_for("fixture connection failed").unwrap();
+        assert!(
+            app.shows("Personal fixture song"),
+            "failed refresh must preserve the visible playlist"
+        );
+        app.press(protocol::tr!("Play playlist")).unwrap();
+        for _ in 0..50 {
+            if plays.load(Ordering::SeqCst) == iteration + 1 {
+                break;
+            }
+            app.wait(Duration::from_millis(20)).unwrap();
+        }
+        assert_eq!(plays.load(Ordering::SeqCst), iteration + 1);
+    }
+    assert_eq!(
+        requests.load(Ordering::SeqCst),
+        6,
+        "busy controls must not send duplicate requests"
+    );
+}
+
 fn exercise() {
     let directory = protocol::data_dir().unwrap();
     assert_eq!(
@@ -528,6 +718,7 @@ fn exercise() {
     settings_escape();
     setup_navigation();
     player_entries();
+    radio_flow();
     println!(
         "localization: real App layout, settings sidebar, resizing, language refresh, system default, manual switching, Model preservation, reopen, scoped Escape closing and setup navigation passed"
     );
@@ -539,10 +730,16 @@ fn main() {
         return;
     }
     let directory = std::env::temp_dir().join(format!("musicx-ui-language-{}", std::process::id()));
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
     std::fs::create_dir_all(&directory).unwrap();
     let result = std::process::Command::new(std::env::current_exe().unwrap())
         .env("MUSICX_LOCALIZATION_CHILD", "1")
         .env("MUSICX_DATA_DIR", &directory)
+        .env("MUSICX_PORT", port.to_string())
         .env_remove("MUSICX_LANGUAGE")
         .status()
         .unwrap();

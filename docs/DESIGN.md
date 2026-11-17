@@ -38,6 +38,8 @@ Use full-row buttons with a title and secondary metadata for track lists. Use sm
 
 My Playlists opens in browse mode. Show the name, track count, and common play or add actions. Put rename, remove, and delete in management mode, with a clear way to finish. Show an inline name field when creating a playlist. The heart beside the track title toggles Liked Songs and remains in sync with edits to that playlist.
 
+Name the feature Radio and show Add recommendations beside its heading above the playlist browser, with a short explanation that it combines personal picks from connected music accounts. The resulting Radio playlist uses the normal track list and playback controls, with the same Add recommendations action above Play. Fetch only after this explicit action or an agent request. Disable repeated submissions and show an inline fetching state, added-track count, empty-result guidance and per-source errors. Fetching never starts playback. Preserve playlist edits and append only new source identities.
+
 On macOS, settings uses a separate 704 × 520-point native window with a 184-point sidebar and a 640 × 440-point minimum content size. Its sidebar orders Language, Playback, Music Sources, Agent, and Version & Updates. Show one group at a time, with a clear selected row, a 20-point heading, and 28-point content insets. Repeated opens reuse the window; each window closes independently and the UI process exits after the last window closes. The empty player's add-source and Agent actions open the corresponding settings group without expanding details. The iPhone keeps its existing scrollable settings flow.
 
 Escape closes Settings when the focused control does not consume it. Keep this shortcut available after language changes and leave the player open.

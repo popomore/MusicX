@@ -218,6 +218,9 @@ impl PluginSource for MyGo {
     ) -> Result<SourcePlaylistSnapshot> {
         discovery::personal_collection(source, collection)
     }
+    fn radio_tracks(&self, source: &str) -> Result<Vec<Track>> {
+        crate::radio::tracks(source)
+    }
     fn page(&self, source: &str, request: SourcePageRequest) -> Result<SourcePage> {
         let mut page = discovery::page(source, request)?;
         page.playable = get_source(source)?.supports(SourceCapability::Playback);

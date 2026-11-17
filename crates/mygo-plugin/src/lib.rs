@@ -17,6 +17,7 @@ mod plugin_files;
 pub mod plugin_updates;
 mod process;
 mod quality;
+mod radio;
 mod repository;
 mod requests;
 mod script;
