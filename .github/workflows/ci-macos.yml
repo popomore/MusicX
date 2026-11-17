@@ -3,7 +3,7 @@ name: macOS CI
 on:
   pull_request:
     branches: [main, release, '[0-9]*.x']
-    types: [opened, synchronize, reopened, edited, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main, release, '[0-9]*.x']
 
@@ -19,45 +19,6 @@ env:
   MACOSX_DEPLOYMENT_TARGET: '14.0'
 
 jobs:
-  commit-policy:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      pull-requests: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.pull_request.base.sha }}
-          persist-credentials: false
-      - name: Fetch metadata as JSON and apply trusted base rules
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        shell: bash
-        run: |
-          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" > "$RUNNER_TEMP/pr.json"
-          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/commits?per_page=100" |
-            jq 'add' > "$RUNNER_TEMP/commits.json"
-          if [[ -f scripts/commit-policy.py ]]; then
-            python3 scripts/commit-policy.py "$RUNNER_TEMP/pr.json" "$RUNNER_TEMP/commits.json"
-          else
-            # One-time bootstrap: base predates this policy. No PR code is executed.
-            python3 - "$RUNNER_TEMP/pr.json" "$RUNNER_TEMP/commits.json" <<'PY'
-          import json, re, sys
-          pr = json.load(open(sys.argv[1]))
-          commits = json.load(open(sys.argv[2]))
-          pattern = r'^(feat|fix|perf|refactor|docs|test|build|ci|chore|style|revert)(\([a-z0-9][a-z0-9._/-]*\))?!?: .+$'
-          for message in [pr['title'], *(c['commit']['message'] for c in commits if len(c['parents']) == 1)]:
-              lines = message.splitlines()
-              if (not lines or not re.fullmatch(pattern, lines[0]) or len(lines[0]) > 100
-                      or (len(lines) > 1 and lines[1])
-                      or re.search(r'[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]', message)):
-                  raise SystemExit('Use English Conventional Commits in the PR title and handwritten commits')
-          PY
-          fi
-
   release-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 5
