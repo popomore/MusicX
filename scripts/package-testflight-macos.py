@@ -21,6 +21,13 @@ def run(*args, env=None):
     return subprocess.run(args, cwd=ROOT, env=env, check=True, stdout=subprocess.PIPE).stdout
 
 
+def normalize_permissions(app):
+    # Installer payloads are owned by root after installation; users must read them.
+    for path in (app, *app.rglob("*")):
+        if not path.is_symlink():
+            path.chmod(0o755 if path.is_dir() or path.stat().st_mode & 0o111 else 0o644)
+
+
 def build(package, binary, destination, env):
     executable = None
     with subprocess.Popen(
@@ -94,6 +101,8 @@ def main():
     profile, team = (None, None) if args.prepare_only else load_profile(
         args.profile.resolve(), args.bundle_id, args.app_identity,
     )
+    # Public bundle metadata and newly generated code-signature resources are readable.
+    os.umask(0o022)
     env = dict(os.environ)
     for key in ("MUSICX_CODESIGN_IDENTITY", "MUSICX_SPARKLE_PUBLIC_KEY", "MUSICX_SPARKLE_FRAMEWORK"):
         env.pop(key, None)
@@ -142,6 +151,7 @@ def main():
             path.write_bytes(plistlib.dumps(info))
         if profile:
             shutil.copyfile(args.profile, app / "Contents/embedded.provisionprofile")
+        normalize_permissions(app)
         inherited = {"com.apple.security.app-sandbox": True, "com.apple.security.inherit": True}
         parent = {"com.apple.security.app-sandbox": True,
                   "com.apple.security.network.client": True, "com.apple.security.network.server": True,

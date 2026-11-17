@@ -102,6 +102,26 @@ class TestFlightPackagingTests(unittest.TestCase):
                 PACKAGER.build("musicx", "musicx", destination, env)
             self.assertEqual(list(destination.iterdir()), [])
 
+    def test_installed_bundle_is_readable_by_non_root_users(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = Path(directory) / "MusicX.app"
+            contents = app / "Contents"
+            contents.mkdir(parents=True)
+            binary = contents / "musicx"
+            binary.write_bytes(b"executable")
+            binary.chmod(0o700)
+            resource = contents / "Info.plist"
+            resource.write_bytes(b"public metadata")
+            resource.chmod(0o600)
+            for folder in (app, contents):
+                folder.chmod(0o700)
+            PACKAGER.normalize_permissions(app)
+            for path in (app, contents, binary, resource):
+                self.assertTrue(path.stat().st_mode & 0o004, path)
+            for path in (app, contents, binary):
+                self.assertTrue(path.stat().st_mode & 0o001, path)
+            self.assertFalse(resource.stat().st_mode & 0o111)
+
 
 if __name__ == "__main__":
     unittest.main()
