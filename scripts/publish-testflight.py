@@ -41,8 +41,7 @@ class Apple:
     def authenticate(self):
         if self.token and self.expires > time.time() + 60:
             return
-        result = subprocess.run(['xcrun', 'altool', '--generate-jwt', '--apiKey', os.environ['APPLE_API_KEY'],
-                                 '--apiIssuer', os.environ['APPLE_API_ISSUER'], '--p8-file-path', str(self.key)],
+        result = subprocess.run(['node', str(Path(__file__).with_name('app-store-token.mjs')), str(self.key)],
                                 capture_output=True, text=True)
         for token in re.findall(r'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+', result.stdout + result.stderr):
             payload = token.split('.')[1]
@@ -149,12 +148,14 @@ def main():
         find = lambda: apple.build(os.environ['TESTFLIGHT_APP_ID'], plan['shortVersion'], plan['bundleVersion'])
         build = find()
         if build is None:
-            auth = ['--apiKey', os.environ['APPLE_API_KEY'], '--apiIssuer', os.environ['APPLE_API_ISSUER'],
-                    '--p8-file-path', str(key)]
+            # Key discovery is supported by older altool versions, unlike the
+            # newer --p8-file-path/--generate-jwt options.
+            auth = ['--apiKey', os.environ['APPLE_API_KEY'], '--apiIssuer', os.environ['APPLE_API_ISSUER']]
+            upload_env = {**os.environ, 'API_PRIVATE_KEYS_DIR': str(key.parent)}
             for operation in ('--validate-app', '--upload-app'):
                 # Plain output avoids altool's JSON formatter crash after an accepted delivery.
                 result = subprocess.run(['xcrun', 'altool', operation, '--type', 'macos', '-f', str(args.package), *auth],
-                                        capture_output=True, text=True)
+                                        capture_output=True, text=True, env=upload_env)
                 if result.returncode and operation == '--validate-app':
                     save(state='validation_failed')
                     raise SystemExit('Apple package validation failed; upload was not attempted')

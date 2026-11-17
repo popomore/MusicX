@@ -262,11 +262,17 @@ jobs:
     env:
       SOURCE_SHA: ${{ needs.plan.outputs.source-sha }}
       RELEASE_BRANCH: ${{ needs.plan.outputs.branch }}
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.plan.outputs.source-sha }}
           persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '26.13.0'
+      - name: Verify the pinned App Store toolchain
+        run: xcodebuild -version
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: release-plan
