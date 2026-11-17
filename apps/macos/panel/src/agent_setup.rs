@@ -9,6 +9,10 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+pub fn automatic_setup_available() -> bool {
+    option_env!("MUSICX_APP_SANDBOX") != Some("1")
+}
+
 #[derive(Clone, Copy)]
 pub enum Agent {
     Codex,
@@ -31,6 +35,11 @@ impl Agent {
     }
 
     pub fn configure(self) -> Result<()> {
+        if !automatic_setup_available() {
+            bail!(tr!(
+                "Use the MCP settings below to configure your agent manually."
+            ));
+        }
         let token = crate::remote::mcp_token().context(tr!("Start the background player first"))?;
         configure_at(
             self,

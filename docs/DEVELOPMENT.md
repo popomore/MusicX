@@ -73,7 +73,7 @@ The legacy stable URL `https://github.com/popomore/MusicX/releases/latest/downlo
 
 Feed replacement uploads a uniquely named `appcast-next-*` asset and verifies its digest before touching `appcast.xml`. The publisher then renames the old asset to `appcast-previous-<asset-id>.xml` and promotes the staged asset. Failed promotion restores the old name; a lost API response never causes an already published newer feed to be rolled back. Signed remote copies are retained for recovery rather than deleted. If a runner stops between renames, the next generation/publication can recover fully uploaded signed metadata and the live entry before continuing. The two renames are not an atomic operation; a brief interruption can still occur between them.
 
-Configure repository variable `SPARKLE_PUBLIC_KEY` and repository secret `SPARKLE_PRIVATE_KEY` before the next Developer ID release. Generate and export a dedicated key with Sparkle's `bin/generate_keys --account musicx` and `bin/generate_keys --account musicx -x <private-file>`. Preserve this key for future releases; keep the private value out of Git. The packager embeds only the public key. The workflow passes the private key to `generate_appcast` through stdin, verifies the enclosure signature against the configured public key, and uploads the feed with the installer. A signed stable release fails if this configuration or feed is missing.
+Configure repository variable `SPARKLE_PUBLIC_KEY` and Environment secret `SPARKLE_PRIVATE_KEY` in both `macos-preview` and `macos-stable` before the next Developer ID release. Generate and export a dedicated key with Sparkle's `bin/generate_keys --account musicx` and `bin/generate_keys --account musicx -x <private-file>`. Preserve this key for future releases; keep the private value out of Git. The packager embeds only the public key. The workflow passes the private key to `generate_appcast` through stdin, verifies the enclosure signature against the configured public key, and uploads the feed with the installer. A signed stable release fails if this configuration or feed is missing.
 
 For local packaging with updates enabled, set `MUSICX_SPARKLE_PUBLIC_KEY` to the public key before running `scripts/package-macos.sh`. The script downloads a pinned, checksum-verified Sparkle distribution and signs its nested framework components before signing the outer bundle. Omit the key for local builds with updates disabled. The CLI's private development cache is never configured as an update target.
 
@@ -93,37 +93,104 @@ xcrun stapler validate target/distribution/MusicX-release.dmg
 
 ## Build and publish with GitHub Actions
 
-The macOS CI workflow runs formatting, workspace tests, and release automation tests on pull requests and pushes to `main`. [macOS CI](../.github/workflows/ci-macos.yml)
+### macOS TestFlight
 
-Workspace tests use Cargo's test profile with debug information disabled (`CARGO_PROFILE_TEST_DEBUG=0 cargo test --locked --workspace`) to avoid release size optimization and LTO on every change. Rust dependencies and their compiled artifacts are cached by toolchain, target, manifests, lockfile, and compiler environment. Stable releases still run the workspace tests with `--release` before packaging.
+TestFlight uses a Mac App Distribution certificate, a Mac Installer Distribution certificate, and a macOS App Store provisioning profile for `com.popomore.musicx`. Developer ID signing is for the separate direct-download installer. Preserve each certificate's private key, encrypted P12 export and export password in the credential vault.
 
-After CI passes for a push to `main`, the Tag macOS Preview workflow creates a tag on the tested commit. It increments the patch of the latest published stable tag and appends the commit's UTC timestamp and first four characters: after `v1.0.0`, the next preview is `v1.0.1.preview-<YYYYMMDDHHMMSS>-<commit>`. A rerun reuses the tag when it points to the same commit. [Tag macOS Preview](../.github/workflows/tag-macos-preview.yml)
+The TestFlight packager builds the three components separately and follows Cargo's reported executable paths. It enables App Sandbox, embeds the provisioning profile, signs the child helpers with inherited sandbox permissions, and creates a signed `.pkg`. It omits Sparkle. The Mac application uses Foundation to resolve its sandbox container for storage. The store build's MCP listener uses port `45969`.
 
-Tag macOS Preview dispatches Release macOS with the new tag as its ref because [tags created using `GITHUB_TOKEN` do not trigger another push workflow](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow#triggering-a-workflow-from-a-workflow). Manually pushing a version tag starts Release macOS through the tag push event. [Release workflow](../.github/workflows/release-macos.yml)
+Choose the display version from the intended release tag and an increasing App Store Connect build number; Cargo package versions stay unchanged. For example:
 
-Release macOS builds an ad hoc signed DMG with Sparkle for preview tags and publishes it as a GitHub Pre-release. macOS may block it on first launch because it lacks notarization. Stable tags use Developer ID signing and notarization when all six repository Actions secrets are configured. With all six unset, a stable tag also produces an ad hoc signed regular release with a signed update feed. A partial configuration fails before the build of a stable tag.
+```sh
+python3 scripts/package-testflight-macos.py \
+  --version 1.0.0 --build 1 \
+  --profile /secure/MusicX.provisionprofile \
+  --app-identity APPLICATION_CERTIFICATE_SHA1 \
+  --installer-identity INSTALLER_CERTIFICATE_SHA1 \
+  --keychain /secure/signing.keychain-db \
+  --output target/distribution/MusicX-TestFlight.pkg
+```
+
+Validate and upload using an App Store Connect team API key. The private key remains outside the repository:
+
+```sh
+export API_PRIVATE_KEYS_DIR=/secure/private-keys
+xcrun altool --validate-app target/distribution/MusicX-TestFlight.pkg \
+  --api-key KEY_ID --api-issuer ISSUER_ID
+xcrun altool --upload-package target/distribution/MusicX-TestFlight.pkg --wait \
+  --api-key KEY_ID --api-issuer ISSUER_ID
+```
+
+Verify the processed build in App Store Connect and enable it for the intended internal testing group. Upload, processing, installation through TestFlight, and actual device testing are separate acceptance steps. External beta review and public App Store publication need their own authorization.
+
+For isolated local sandbox QA, `--prepare-only` creates an ad hoc app using `local.musicx.testflightqa`, its own container, and port `45974`:
+
+```sh
+python3 scripts/package-testflight-macos.py --prepare-only \
+  --version 1.0.0 --build 1 --output target/distribution/MusicX-Sandbox-QA.app
+```
+
+### Automatic release branches
+
+| Branch | Version / notes | GitHub | Apple distribution |
+| --- | --- | --- | --- |
+| `main` | `vX.Y.Z-preview.N`; changes since the previous semantic Preview | Pre-release, ad hoc signed DMG | Separate sandboxed PKG to the existing Internal TestFlight group |
+| `release` | `vX.Y.Z`; cumulative changes since the previous stable tag | Developer ID signed, notarized, stapled; Latest | No automatic public App Store submission |
+| `N.x` / `N.N.x` | Stable versions constrained by semantic-release's maintenance range | Signed maintenance release; never Latest | No automatic store submission |
+
+The [Conventional Commit rules](../AGENTS.md#contributions) control versions: `feat` is minor, `fix`/`perf` are patch, and `!` or `BREAKING CHANGE:` is major. Other types do not publish by themselves. semantic-release 26.0.1 and the conventional-commits preset generate grouped English notes with commit/issue links, followed by installation and signing information. Preview notes are incremental; stable notes include changes across the Preview cycle. The npm package is private tooling only: no npm publication, release commits, version-file updates or automatic PR/issue comments. Cargo versions stay unchanged. Existing `v1.0.0` establishes the stable baseline; old timestamp Preview tags remain usable but are no longer generated.
+
+[macOS CI](../.github/workflows/ci-macos.yml) runs formatting, locked workspace/iOS metadata checks, and Python/Node release tests on PRs and pushes to all release branches. The separate [Commit Policy workflow](../.github/workflows/commit-policy.yml) checks the PR title and handwritten commits from JSON fetched through a read-only token. PR title/body edits rerun only this metadata check, so bot-written release summaries cannot cancel a queued build. It checks out only the trusted base SHA. The initial policy migration uses a small inline bootstrap check when the base predates the validator; subsequent PRs use the base revision's rules. This is a structural/character check; reviewers still assess English quality, accurate change types and the final merge method. Business PRs use Squash; cross-branch synchronization PRs use Merge commit. GitHub-generated merge/revert messages and historical commits carried by trusted synchronization are allowed.
+
+After successful push CI, [Queue macOS Release](../.github/workflows/tag-macos-preview.yml) verifies the CI workflow ID/path, repository, event, branch, SHA and current tip, then dispatches [Release macOS](../.github/workflows/release-macos.yml) on that exact branch. A PR run or fork cannot enter this path. The release workflow verifies provenance again before checking out source. Dispatching on the tested branch makes the Environment deployment policy check the correct ref; a `workflow_run` job itself uses the default branch ref. The dispatcher creates no tags. Explicit dispatch is needed because ordinary pushes made with `GITHUB_TOKEN` do not trigger another push workflow.
+
+Release macOS is globally serialized and retains its existing workflow identity and run counter. The plan job uses semantic-release dry-run to save the next version, notes, source SHA, CI/release run IDs, branch, feed and build number before any tag is created. Planning has `contents: write` because semantic-release verifies Git push authorization even in dry-run mode, but receives no signing credentials. The macOS build jobs have read-only tokens and no PR caches/artifacts. The publisher has `contents: write` and no Apple/Sparkle private credentials. Only the dispatcher needs `actions: write`; no PAT is required.
+
+### Signing Environments
+
+Use selected deployment branches, not a policy allowing every protected branch:
+
+| Environment | Allowed branches | Secrets |
+| --- | --- | --- |
+| `macos-preview` | `main` | `SPARKLE_PRIVATE_KEY` |
+| `macos-stable` | `release`, explicitly enabled maintenance branches | Developer ID and Apple API fields below, `SPARKLE_PRIVATE_KEY` |
+| `macos-testflight` | `main` | Store application/installer P12s and passwords, profile, Apple API fields |
 
 | Secret | Value |
 | --- | --- |
-| `APPLE_CERTIFICATE` | Base64-encoded Developer ID Application certificate and private key exported as a `.p12` |
-| `APPLE_CERTIFICATE_PASSWORD` | Password used to export the `.p12` |
-| `APPLE_SIGNING_IDENTITY` | Full Developer ID Application signing identity |
-| `APPLE_API_PRIVATE_KEY` | Contents of the App Store Connect team API private key `.p8` |
-| `APPLE_API_KEY` | App Store Connect API key ID |
-| `APPLE_API_ISSUER` | App Store Connect API issuer ID |
+| `APPLE_CERTIFICATE` | Base64 Developer ID Application P12, including private key and certificate chain |
+| `APPLE_CERTIFICATE_PASSWORD` | Developer ID P12 export password |
+| `APPLE_SIGNING_IDENTITY` | Full Developer ID Application common name |
+| `APPLE_API_PRIVATE_KEY` | App Store Connect team API `.p8` contents |
+| `APPLE_API_KEY` / `APPLE_API_ISSUER` | API key ID / issuer ID |
+| `STORE_APP_CERTIFICATE` / `STORE_APP_CERTIFICATE_PASSWORD` | Base64 Mac App Distribution P12 / export password |
+| `STORE_INSTALLER_CERTIFICATE` / `STORE_INSTALLER_CERTIFICATE_PASSWORD` | Base64 Mac Installer Distribution P12 / export password |
+| `STORE_PROVISION_PROFILE` | Base64 macOS App Store provisioning profile for `com.popomore.musicx` |
+| `SPARKLE_PRIVATE_KEY` | Existing Sparkle Ed25519 key; preserve continuity |
 
-Formal releases use manual stable `vX.Y.Z` tags on tested commits on `main`; package versions are independent. Stable tags become regular releases and Latest regardless of Apple signing mode. Preview tags remain **Pre-release**. Both require the Sparkle signing configuration.
+Keep `SPARKLE_PUBLIC_KEY` as a repository variable. Configure `TESTFLIGHT_APP_ID` and `TESTFLIGHT_GROUP_ID` as variables in `macos-testflight`, pointing to the existing app and Internal group. The uploader verifies the group belongs to this app and is internal, never adds testers, checks export compliance, and waits for `VALID`, group association and `IN_BETA_TESTING`. It reconciles an existing build before attempting an upload, so a processing timeout can resume without a duplicate delivery. Installation through TestFlight and real audio playback remain separate acceptance steps. Store builds disable automatic writes to external agent configuration; users can copy the existing MCP settings manually.
+
+Signing in to Xcode does not configure Actions. A paid Apple Developer Program distribution team is required. App Store and Developer ID certificates serve different distributions. Import certificates only into disposable job keychains and expose API/Sparkle keys only to the steps that need them. Never log private keys, passwords or raw JWT output. Pin Actions to full SHAs and install the committed npm lockfile with `npm ci --ignore-scripts`; there is no release-job restore of PR dependency/build caches. Migrate repository secrets only after Environment values and actual builds are verified, then remove the repository copies. Require PRs, resolved review conversations, and the official GitHub Actions checks `commit-policy`, `release-tests` and `test` on protected release branches. CODEOWNERS identifies release files for owner review. With one maintainer, the configured approval count is zero because an author cannot approve their own PR; owner review remains a documented merge responsibility. Allow Merge and Squash, and keep Rebase disabled.
+
+### Promotion, maintenance and recovery
+
+Bootstrap `release` from the existing stable tag before activating the first semantic Preview, so semantic-release has a stable release branch. After Preview and Internal TestFlight verification, open a PR from `main` to `release`, for example `chore(release): promote main to stable`, and use Merge commit. CI must succeed on the resulting `release` SHA before automatic stable publication. Merge release fixes back to `main` with another Merge commit PR. Never squash these synchronization PRs: losing ancestry causes repeated commits and incorrect release ranges. Create maintenance branches only on explicit request, from the appropriate stable tag, and add that exact branch to `macos-stable`'s deployment policy. Backport with PRs, then merge fixes forward.
+
+Maintenance builds embed `MUSICX_UPDATE_FEED_URL` pointing to `update-feed-N.x` or `update-feed-N.N.x`. Their feed starts independently and cannot overwrite `update-feed` or Latest. The current stable/Preview feed keeps the existing global URL; old installations retain their configured feed. The publisher preserves checksum, source-tag, signed feed and GitHub asset-digest checks. Stable publication requires an Accepted notarization result and a validated stapled ticket before uploading a draft and publishing it. Every release includes the installer, checksum, signed appcast and source/build/signing manifest.
+
+Plans, validated DMGs, signed feeds and TestFlight PKGs are retained as immutable artifacts for 90 days. Each artifact is bound to its original plan and SHA-256 digests. Rerun **the original run's failed jobs** after a transient failure. Rerunning all jobs also restores the same plan, build number and signed bytes. Do not dispatch a fresh run to rebuild an existing tag. If semantic-release pushed the tag before publication failed, recovery verifies the tag/source and original artifact receipt, repairs only a missing semantic-release channel note, and resumes the idempotent publisher. Conflicting tags, channel notes or digests stop recovery; moving a pushed tag still requires approval. An expired/missing artifact for an already tagged version requires manual recovery, never an automatic rebuild. A newer feed is never replaced by a stale retry.
+
+The TestFlight job is independent of GitHub publication: its failure does not undo an already verified GitHub Release. Check the per-attempt `testflight-status` receipt and rerun the failed job to reconcile processing. It does not submit an external beta or public App Store release. Retain the `Release macOS` workflow file and identity; recreating it would reset the build counter and requires a migration.
+
+Local verification requires Python 3.11+, Node 26.13+, Git, Bash, Cargo, `jq`, and GNU `sha256sum` on `PATH`:
 
 ```sh
-git tag -a v0.2.0 -m "MusicX 0.2.0"
-git push origin v0.2.0
+npm ci --ignore-scripts --no-audit --no-fund
+npm test
+python3 -m unittest discover -s scripts/tests -v
 ```
 
-The macOS job validates the tagged commit, allocates its build number, packages the DMG, and signs both the release appcast and combined feed. Developer ID builds also notarize and staple the installer. The publish job verifies the checksum and update signature and uploads the installer, checksum, single-release appcast, and `release-manifest.json` to a draft. After verifying GitHub asset digests and publishing the installer, it updates the dedicated signed feed. The manifest records the display version, build number and signing mode and is retained for 90 days.
-
-If publication fails after a successful build, rerun the failed jobs to reuse the same installer. Preview installers are retained for 14 days; tagged release installers are retained for seven days. The publisher reuses matching uploads and stops if the draft contains conflicting assets. After configuring Apple credentials, use the next version tag for the signed release.
-
-The local release automation tests require Python 3.9 or later, Git, Bash, Cargo, `jq`, and `sha256sum` (GNU coreutils) on `PATH`; the GitHub CLI fixture uses `jq` to filter responses. Run them with `python3 -m unittest discover -s scripts/tests -v`. They use a local Git repository and a file-backed GitHub CLI fixture, without creating remote tags or releases.
+Node tests use local bare Git repositories with the real semantic-release engine to check incremental Preview, cumulative stable, maintenance, breaking changes and no-release behavior. Python tests use a file-backed GitHub service fixture to verify signing, asset/feed integrity and failed-publication recovery. Neither test suite publishes remote releases.
 
 ## Repository layout
 

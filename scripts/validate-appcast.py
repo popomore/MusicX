@@ -22,7 +22,7 @@ def validate(dmg, tag, repository, combined=False):
     expected_version = os.environ["MUSICX_BUNDLE_VERSION"]
     if item.findtext(SPARKLE + "version") != expected_version:
         raise ValueError("Appcast build version does not match the packaged build")
-    expected_channel = "preview" if ".preview-" in tag else None
+    expected_channel = "preview" if ".preview-" in tag or "-preview." in tag else None
     if item.findtext(SPARKLE + "channel") != expected_channel:
         raise ValueError("Appcast channel does not match the release tag")
     for candidate in items:

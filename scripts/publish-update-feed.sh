@@ -4,12 +4,14 @@ script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 dmg=${1:?}
 repo=${GITHUB_REPOSITORY:?}
 tag=${RELEASE_TAG:-${GITHUB_REF_NAME:?}}
+feed_tag=${UPDATE_FEED_TAG:-update-feed}
+[[ "$feed_tag" =~ ^update-feed(-[0-9]+(\.[0-9]+)?\.x)?$ ]] || { echo 'Invalid update feed tag.' >&2; exit 1; }
 python3 "$script_dir/validate-appcast.py" "$dmg" "$tag" "$repo" --all
 directory=$(dirname "$dmg")
 base=$(cat "$directory/appcast-all.base")
 digest=$(sha256sum "$directory/appcast-all.xml" | cut -d ' ' -f 1)
 release=$(gh api --paginate "repos/$repo/releases?per_page=100" |
-    jq -rs '[.[][] | select(.tag_name == "update-feed")] |
+    jq -rs --arg feed "$feed_tag" '[.[][] | select(.tag_name == $feed)] |
         if length > 1 then error("Multiple update feeds") else .[0] end')
 stage=$(mktemp -d "${TMPDIR:-/tmp}/musicx-publish-feed.XXXXXX")
 restore_live=false
@@ -51,7 +53,7 @@ trap finish EXIT
 cp "$directory/appcast-all.xml" "$stage/appcast.xml"
 if [[ "$release" == null ]]; then
     [[ "$base" == missing ]] || { echo 'Update feed was removed; refusing to recreate it.' >&2; exit 1; }
-    gh release create update-feed --repo "$repo" --target "${SOURCE_SHA:?}" \
+    gh release create "$feed_tag" --repo "$repo" --target "${SOURCE_SHA:?}" \
         --prerelease --latest=false --title 'MusicX Update Feed' \
         --notes 'Signed update metadata for MusicX. Download installers from the versioned releases.' \
         "$stage/appcast.xml"
@@ -88,7 +90,7 @@ else
         name="appcast-next-$digest-${stage##*.}.xml"
         cp "$stage/appcast.xml" "$stage/$name"
         # Upload and authenticate the replacement before touching the live asset.
-        gh release upload update-feed --repo "$repo" "$stage/$name"
+        gh release upload "$feed_tag" --repo "$repo" "$stage/$name"
         candidate=$(release_assets | jq -ec --arg name "$name" --arg digest "sha256:$digest" '
             .[] | select(.name == $name and .state == "uploaded" and .digest == $digest)')
     fi
@@ -99,7 +101,7 @@ else
     rename_asset "$live_id" "appcast-previous-$live_id.xml"
     rename_asset "$(jq -er .id <<< "$candidate")" appcast.xml
 fi
-published=$(gh api "repos/$repo/releases/tags/update-feed" --jq .id)
+published=$(gh api "repos/$repo/releases/tags/$feed_tag" --jq .id)
 gh api --paginate "repos/$repo/releases/$published/assets?per_page=100" |
     jq -es --arg digest "sha256:$digest" 'any(.[][]; .name == "appcast.xml" and .state == "uploaded" and .digest == $digest)' >/dev/null
 restore_live=false

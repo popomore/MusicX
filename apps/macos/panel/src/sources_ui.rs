@@ -509,6 +509,14 @@ fn agent_settings() -> impl IntoElement {
         .gap(px(12.0))
         .child(settings_heading(tr!("Agent")))
         .child(caption(tr!("Set up music control in your agent.")))
+        .child(when(
+            || !crate::agent_setup::automatic_setup_available(),
+            || {
+                caption(tr!(
+                    "Use the MCP settings below to configure your agent manually."
+                ))
+            },
+        ))
         .child(agent_setup_row(crate::agent_setup::Agent::Codex))
         .child(agent_setup_row(crate::agent_setup::Agent::ClaudeCode))
         .child(view().my(px(8.0)).child(settings_separator()))
@@ -527,7 +535,7 @@ fn agent_setup_row(agent: crate::agent_setup::Agent) -> impl IntoElement {
                     .text_color(move || theme().foreground)))
                 .child(
                     button().accessibility_label(Some(agent.setup_label().into()))
-                        .disabled(move || busy.get() || remote::mcp_token().is_none())
+                        .disabled(move || !crate::agent_setup::automatic_setup_available() || busy.get() || remote::mcp_token().is_none())
                         .on_press(move || {
                             if busy.get() { return; }
                             busy.set(true);

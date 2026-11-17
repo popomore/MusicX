@@ -1,48 +1,32 @@
-name: Tag macOS Preview
+name: Queue macOS Release
 
 on:
   workflow_run:
     workflows: [macOS CI]
     types: [completed]
-    branches: [main]
+    branches: [main, release, '[0-9]*.x']
 
 permissions: {}
 
 jobs:
-  tag:
+  dispatch:
     if: >-
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    concurrency:
-      group: tag-macos-preview-${{ github.event.workflow_run.head_sha }}
-      cancel-in-progress: false
+    timeout-minutes: 5
     permissions:
-      contents: write
+      contents: read
       actions: write
     steps:
+      # workflow_run executes trusted default-branch code; never checkout PR heads.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ github.workflow_sha }}
           persist-credentials: false
-
-      - name: Create preview tag
-        id: tag
+      - name: Verify the successful push and dispatch its own branch
         env:
           GH_TOKEN: ${{ github.token }}
-          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
-        run: |
-          if [[ -f scripts/dispatch-preview-release.sh ]]; then
-            bash scripts/create-preview-tag.sh
-          else
-            echo 'This commit predates the current preview release workflow.'
-          fi
-
-      - name: Dispatch release for the preview tag
-        if: steps.tag.outputs.tag != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PREVIEW_TAG: ${{ steps.tag.outputs.tag }}
-        run: bash scripts/dispatch-preview-release.sh "$PREVIEW_TAG"
+          CI_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: python3 scripts/release-source.py "$CI_RUN_ID" --dispatch
