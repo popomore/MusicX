@@ -13,6 +13,7 @@ pub use update_channel::UpdateChannel;
 
 /// Maximum size of a playback queue that can be persisted and restored.
 pub const MAX_QUEUE_TRACKS: usize = 10_000;
+pub const RADIO_PLAYLIST_ID: &str = "radio";
 
 /// Build-time identity keeps separately packaged QA apps independent of MusicX.
 pub const APP_NAME: &str = match option_env!("MUSICX_BUILD_APP_NAME") {
@@ -471,6 +472,8 @@ impl LocalPlaylist {
     pub fn display_name(&self) -> &str {
         if self.favorite {
             tr!("Liked Songs")
+        } else if self.id == RADIO_PLAYLIST_ID && self.name == "Radio" {
+            tr!("Radio")
         } else {
             &self.name
         }
@@ -481,6 +484,8 @@ impl LocalPlaylistSummary {
     pub fn display_name(&self) -> &str {
         if self.favorite {
             tr!("Liked Songs")
+        } else if self.id == RADIO_PLAYLIST_ID && self.name == "Radio" {
+            tr!("Radio")
         } else {
             &self.name
         }
@@ -490,6 +495,7 @@ impl LocalPlaylistSummary {
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum LocalLibraryAction {
+    RefreshRadio {},
     SetFavorite {
         track: Box<Track>,
         liked: bool,
@@ -521,6 +527,21 @@ pub enum LocalLibraryAction {
         source: String,
         playlist_id: String,
     },
+}
+
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RadioRefresh {
+    pub playlist: Option<LocalPlaylist>,
+    pub added: usize,
+    pub sources: Vec<RadioSourceResult>,
+}
+
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RadioSourceResult {
+    pub source: String,
+    pub name: String,
+    pub tracks: usize,
+    pub error: Option<String>,
 }
 
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]

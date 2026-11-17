@@ -246,24 +246,25 @@ pub fn recent(limit: u64) -> Result<Vec<Entry>> {
 /// Only this device's append-only log is exported; received history never gets
 /// a new local identity. The active play's progress overlays its latest checkpoint.
 pub(crate) fn sync_entries(device: &str) -> Result<BTreeMap<String, Entry>> {
-    let active = HISTORY
-        .lock()
-        .map_err(|_| anyhow::anyhow!(tr!("Listening history lock unavailable")))?;
-    let Some(file) = open()? else {
-        return Ok(BTreeMap::new());
+    let (file, len, active) = {
+        let active = HISTORY
+            .lock()
+            .map_err(|_| anyhow::anyhow!(tr!("Listening history lock unavailable")))?;
+        let Some(file) = open()? else {
+            return Ok(BTreeMap::new());
+        };
+        let len = file.metadata()?.len();
+        (file, len, active.as_ref().map(|a| (a.offset, a.progress)))
     };
-    let len = file.metadata()?.len();
     anyhow::ensure!(
         len <= crate::cloud_sync::MAX_BYTES,
         "Listening history is too large to sync"
     );
     let mut entries = read_recent(BufReader::new(file.take(len)), usize::MAX)?;
-    if let Some(active) = active.as_ref()
-        && let Some((_, entry)) = entries
-            .iter_mut()
-            .find(|(offset, _)| *offset == active.offset)
+    if let Some((offset, progress)) = active
+        && let Some((_, entry)) = entries.iter_mut().find(|(id, _)| *id == offset)
     {
-        entry.progress = active.progress;
+        entry.progress = progress;
     }
     Ok(entries
         .into_iter()

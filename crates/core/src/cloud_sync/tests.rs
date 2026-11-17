@@ -198,3 +198,28 @@ fn untrusted_preferences_and_invalid_revisions_are_rejected() {
     damaged.records.get_mut("s/language").unwrap().value = Some(json!("zh-CN"));
     assert!(replica.merge(&damaged).is_err());
 }
+
+#[test]
+fn radio_identity_and_user_playlist_names_survive_sync() {
+    let mut radio = playlist();
+    radio.id = crate::protocol::RADIO_PLAYLIST_ID.into();
+    radio.name = "Radio".into();
+    let mut liked = playlist();
+    liked.id = "liked".into();
+    liked.name = "我喜欢".into();
+    liked.favorite = true;
+    let mut custom = playlist();
+    custom.name = "我喜欢".into();
+    let lists = snapshot::playlists(&capture(&[radio, liked, custom]), &[]).unwrap();
+    assert_eq!(lists.len(), 3);
+    assert!(
+        lists
+            .iter()
+            .any(|p| p.id == crate::protocol::RADIO_PLAYLIST_ID && p.name == "Radio")
+    );
+    assert!(
+        lists
+            .iter()
+            .any(|p| p.id == "mix" && !p.favorite && p.name == "我喜欢")
+    );
+}

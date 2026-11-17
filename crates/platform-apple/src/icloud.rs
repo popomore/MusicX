@@ -334,6 +334,10 @@ fn exchange() -> Result<()> {
             waiting = true;
             continue;
         }
+        ensure!(
+            file.symlink_metadata()?.is_file(),
+            "Invalid iCloud sync file"
+        );
         let replica = read_replica(&file_url)?;
         ensure!(
             replica.device == device,

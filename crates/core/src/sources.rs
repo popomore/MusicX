@@ -5,15 +5,18 @@ use musicx_plugin::PluginSource;
 use serde_json::{Value, json};
 
 pub fn change_library(sources: &dyn PluginSource, action: LocalLibraryAction) -> Result<Value> {
-    if let LocalLibraryAction::ImportSource {
-        source,
-        playlist_id,
-    } = action
-    {
-        let snapshot = sources.playlist(&source, &playlist_id)?;
-        local_library::import(snapshot.origin, snapshot.tracks)
-    } else {
-        local_library::change(action)
+    match action {
+        LocalLibraryAction::RefreshRadio {} => {
+            Ok(serde_json::to_value(crate::radio::refresh(sources)?)?)
+        }
+        LocalLibraryAction::ImportSource {
+            source,
+            playlist_id,
+        } => {
+            let snapshot = sources.playlist(&source, &playlist_id)?;
+            local_library::import(snapshot.origin, snapshot.tracks)
+        }
+        action => local_library::change(action),
     }
 }
 
