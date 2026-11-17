@@ -43,6 +43,8 @@ Each device publishes its own versioned replica under `MusicXSync/v1`. Registers
 
 Local `icloud-state.json` stores merge state and a recoverable apply journal. Library edits and preference writes are serialized during capture and application. Received history is materialized separately in `icloud-history.json`; the local append-only history and its byte-offset play identifiers are preserved. Corrupt or unsupported replicas stop that exchange without replacing the local library. Corrupt received-history caches leave local history readable. File sizes and collection limits are checked before application. Tombstones and history are not automatically pruned; exceeding a sync limit reports an error rather than truncating data.
 
+An apply marker prevents local preference changes until an interrupted update is recovered. Startup performs this recovery before exposing UI/MCP mutations, and playlist edits finish pending recovery first, including when iCloud is disabled or unavailable. This prevents a post-apply deletion or a preference reverted to its previous value from being mistaken for an unapplied update. Device-local artwork paths are omitted from shared tracks and history so the receiving source can replenish artwork locally.
+
 ## Verification
 
 Automated checks cover convergent merges, concurrent additions and field edits, deletion/re-like behavior, repeated plays and individual progress, interrupted-apply recovery, malformed data, two isolated device processes, no-op retries, account changes, disabled sync, credential exclusion, native file coordination, and English/Chinese settings controls. macOS workspace tests and an iOS target compile check cover the shared integration.
