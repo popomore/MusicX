@@ -336,6 +336,72 @@ fn setup_navigation() {
 }
 
 #[component]
+fn CloudSyncScreen() -> impl IntoElement {
+    use protocol::{CloudSyncPhase as Phase, CloudSyncStatus};
+    let status = signal(Some(CloudSyncStatus {
+        enabled: true,
+        phase: Phase::AccountChanged,
+        ..Default::default()
+    }));
+    view().flex_1().child(sources_ui::cloud_sync_content(
+        status,
+        signal(false),
+        signal(String::new()),
+        move |action| {
+            status.set(Some(match action {
+                protocol::CloudSyncAction::SetEnabled { enabled } => CloudSyncStatus {
+                    enabled,
+                    phase: if enabled {
+                        Phase::Waiting
+                    } else {
+                        Phase::Disabled
+                    },
+                    ..Default::default()
+                },
+                protocol::CloudSyncAction::SyncNow => CloudSyncStatus {
+                    enabled: true,
+                    phase: Phase::Syncing,
+                    ..Default::default()
+                },
+            }));
+        },
+    ))
+}
+
+fn cloud_sync_controls() {
+    for language in [
+        protocol::i18n::Language::English,
+        protocol::i18n::Language::SimplifiedChinese,
+    ] {
+        language.save().unwrap();
+        let mut config = EngineConfig::new(Root::of::<CloudSyncScreen>());
+        config.viewport = Size::new(px(440.0), px(600.0));
+        config.environment.window = config.viewport;
+        let mut app = Headless::start(config).unwrap();
+        app.first_render().unwrap();
+        assert!(app.shows(protocol::tr!("iCloud account changed")));
+        assert!(app.shows(protocol::tr!(
+            "Turn sync off and on to use this iCloud account. Your local data will be kept."
+        )));
+        app.press(protocol::tr!("Sync with iCloud")).unwrap();
+        assert!(app.shows(protocol::tr!("Stored on this device")));
+        assert!(
+            app.press(protocol::tr!("Sync now")).is_err(),
+            "Disabled sync cannot be requested"
+        );
+        app.press(protocol::tr!("Sync with iCloud")).unwrap();
+        assert!(app.shows(protocol::tr!("Waiting for iCloud")));
+        app.press(protocol::tr!("Sync now")).unwrap();
+        assert!(app.shows(protocol::tr!("Syncing…")));
+        assert!(
+            app.press(protocol::tr!("Sync now")).is_err(),
+            "An active exchange must not be duplicated"
+        );
+    }
+    protocol::i18n::Language::English.save().unwrap();
+}
+
+#[component]
 fn PlayerEntryScreen() -> impl IntoElement {
     let model = model::Model::new();
     model.status_ready.set(true);
@@ -527,6 +593,7 @@ fn exercise() {
     source_playback_capability();
     settings_escape();
     setup_navigation();
+    cloud_sync_controls();
     player_entries();
     println!(
         "localization: real App layout, settings sidebar, resizing, language refresh, system default, manual switching, Model preservation, reopen, scoped Escape closing and setup navigation passed"

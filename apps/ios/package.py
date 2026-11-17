@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Package the native Rust app; enable background playback before final signing."""
 from pathlib import Path
-import argparse, os, plistlib, subprocess
+import argparse, importlib.util, os, plistlib, subprocess
 
 root = Path(__file__).resolve().parent
 args = argparse.ArgumentParser()
@@ -27,4 +27,17 @@ else:
     binary = str(app / info['CFBundleExecutable'])
     if subprocess.run(['codesign', '--display', binary], capture_output=True).returncode == 0:
         subprocess.run(['codesign', '--remove-signature', binary], check=True)
+    spec = importlib.util.spec_from_file_location('icloud_signing', root / '../../scripts/icloud-signing.py')
+    icloud_signing = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(icloud_signing)
+    entitlements = icloud_signing.from_environment(app, 'ios')
+    identity = os.environ.get('MUSICX_CODESIGN_IDENTITY')
+    if identity:
+        command = ['codesign', '--force', '--sign', identity]
+        if entitlements:
+            if identity == '-':
+                raise ValueError('iCloud requires an Apple signing identity')
+            command += ['--entitlements', str(entitlements)]
+        subprocess.run(command + [str(app)], check=True)
+        subprocess.run(['codesign', '--verify', '--strict', str(app)], check=True)
 print(f'{target}: {app}')

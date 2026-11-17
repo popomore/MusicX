@@ -1,6 +1,6 @@
 use musicx_mcp as mcp;
 use musicx_mygo_plugin::{MYGO, configure_web_auth, mygo};
-use musicx_platform_apple::{desktop, player};
+use musicx_platform_apple::{desktop, icloud, player};
 use musicx_protocol::tr;
 
 use anyhow::{Context, Result, bail};
@@ -55,6 +55,7 @@ fn run() -> Result<ExitCode> {
                 quit: desktop::quit,
                 sources: &MYGO,
             })?;
+            icloud::start()?;
             return Ok(desktop::run(runtime));
         }
         Some("mcp-token") => {

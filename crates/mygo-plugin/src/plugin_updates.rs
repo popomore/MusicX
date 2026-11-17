@@ -51,17 +51,26 @@ fn lock() -> Result<MutexGuard<'static, ()>> {
 }
 
 fn load() -> Result<State> {
-    match fs::read(storage::state_dir()?.join(FILE)) {
+    let mut state: State = match fs::read(storage::state_dir()?.join(FILE)) {
         Ok(bytes) => {
             ensure!(
                 bytes.len() <= 2 * 1024 * 1024,
                 tr!("Plugin update record is too large")
             );
-            Ok(serde_json::from_slice(&bytes)?)
+            serde_json::from_slice(&bytes)?
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(State::default()),
-        Err(error) => Err(error.into()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => State::default(),
+        Err(error) => return Err(error.into()),
+    };
+    match fs::read(storage::state_dir()?.join("plugin-auto-update.json")) {
+        Ok(bytes) => {
+            ensure!(bytes.len() < 4096, tr!("Plugin update record is too large"));
+            state.enabled = serde_json::from_slice(&bytes)?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
     }
+    Ok(state)
 }
 
 fn save(state: &State) -> Result<()> {
@@ -76,9 +85,12 @@ pub fn settings() -> Result<PluginUpdateSettings> {
 
 pub fn set_enabled(enabled: bool) -> Result<PluginUpdateSettings> {
     let _guard = lock()?;
-    let mut state = load()?;
-    state.enabled = enabled;
-    save(&state)?;
+    load()?;
+    // Sync the preference without exporting device-local repository checks.
+    musicx_core::protocol::preferences::save(
+        "plugin-auto-update.json",
+        &serde_json::to_vec(&enabled)?,
+    )?;
     Ok(PluginUpdateSettings { enabled })
 }
 

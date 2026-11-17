@@ -295,6 +295,7 @@ impl Model {
         Self::slot(self.page.get()).is_some_and(|slot| self.jobs.with(|jobs| jobs[slot]))
     }
     pub fn update(self, status: Status) {
+        let history_changed = self.status.with(|s| s.history_revision) != status.history_revision;
         #[cfg(target_os = "macos")]
         let library_changed = self.status.with(|s| s.library_revision) != status.library_revision;
         #[cfg(target_os = "macos")]
@@ -307,6 +308,9 @@ impl Model {
             self.cover_failed.set(false);
         }
         self.status.set(status);
+        if history_changed && self.page.get() == Page::History {
+            self.load();
+        }
         #[cfg(target_os = "macos")]
         self.status_ready.set(true);
         #[cfg(target_os = "macos")]
@@ -438,7 +442,11 @@ impl Model {
     }
     #[cfg(target_os = "macos")]
     pub fn refresh_mini_lyrics(self) {
-        let value = mini_lyrics_preference().load(std::sync::atomic::Ordering::SeqCst);
+        let value = crate::protocol::data_dir()
+            .and_then(|dir| std::fs::read(dir.join("panel-preferences.json")).ok())
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or(true);
+        mini_lyrics_preference().store(value, std::sync::atomic::Ordering::SeqCst);
         if self.show_mini_lyrics.get() != value {
             self.show_mini_lyrics.set(value);
         }
@@ -454,29 +462,16 @@ impl Model {
         static WRITER: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let generation = GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
         std::thread::spawn(move || {
-            use std::{io::Write, os::unix::fs::OpenOptionsExt};
             let Ok(_guard) = WRITER.lock() else {
                 return;
             };
             if GENERATION.load(std::sync::atomic::Ordering::SeqCst) != generation {
                 return;
             }
-            if let Some(dir) = crate::protocol::data_dir() {
-                let temp = dir.join(format!(".panel-preferences.{}", std::process::id()));
-                let result = (|| -> std::io::Result<()> {
-                    let mut f = std::fs::OpenOptions::new()
-                        .write(true)
-                        .create(true)
-                        .truncate(true)
-                        .mode(0o600)
-                        .open(&temp)?;
-                    write!(f, "{value}")?;
-                    std::fs::rename(&temp, dir.join("panel-preferences.json"))
-                })();
-                if result.is_err() {
-                    let _ = std::fs::remove_file(temp);
-                }
-            }
+            let _ = crate::protocol::preferences::save(
+                "panel-preferences.json",
+                if value { b"true" } else { b"false" },
+            );
         });
     }
     pub fn play_local(self, id: String, index: usize) {

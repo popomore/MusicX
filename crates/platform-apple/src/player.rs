@@ -49,6 +49,10 @@ pub fn submit(action: Action, reply: Reply) {
     dispatch(Message::Action(action, reply));
 }
 
+pub(crate) fn reload_preferences() {
+    dispatch(Message::PreferencesChanged);
+}
+
 fn dispatch(message: Message) {
     dispatch2::DispatchQueue::main().exec_async(move || {
         autoreleasepool(|_| PLAYER.with_borrow_mut(|player| player.handle(message)));

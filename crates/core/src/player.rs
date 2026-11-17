@@ -64,6 +64,7 @@ pub struct AutoAdvance {
 }
 
 pub enum Message {
+    PreferencesChanged,
     StationReady {
         revision: u64,
         serial: u64,
@@ -227,6 +228,7 @@ impl<A: AudioOutput> Player<A> {
                 queue_length: self.queue.len(),
                 queue_revision: self.queue_revision,
                 library_revision: crate::local_library::revision(),
+                history_revision: crate::history::revision(),
                 queue_context: self.queue_context.clone(),
                 preferred_quality: crate::audio_quality::preferred(),
                 normalization_enabled: crate::audio_quality::normalization_enabled(),
@@ -279,6 +281,7 @@ impl<A: AudioOutput> Player<A> {
             queue_length: self.queue.len(),
             queue_revision: self.queue_revision,
             library_revision: crate::local_library::revision(),
+            history_revision: crate::history::revision(),
             queue_context: self.queue_context.clone(),
             preferred_quality: crate::audio_quality::preferred(),
             normalization_enabled: crate::audio_quality::normalization_enabled(),
@@ -604,6 +607,12 @@ impl<A: AudioOutput> Player<A> {
     }
 
     pub fn handle(&mut self, message: Message) {
+        if matches!(message, Message::PreferencesChanged) {
+            if let Some(audio) = &self.audio {
+                audio.set_normalization(crate::audio_quality::normalization_enabled());
+            }
+            return;
+        }
         if let Message::Action(action, _) = &message
             && !matches!(
                 action,
@@ -624,6 +633,7 @@ impl<A: AudioOutput> Player<A> {
         let dispatch = self.dispatch;
         let source = self.source;
         match message {
+            Message::PreferencesChanged => unreachable!(),
             Message::Action(Action::PlayTrack(track), reply) => {
                 if self.switching {
                     self.respond(Err(anyhow!(tr!("Changing track"))), reply);

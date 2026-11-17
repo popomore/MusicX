@@ -1,5 +1,6 @@
 //! Streamable HTTP MCP and authenticated panel routes.
 use musicx_core::protocol::tr;
+mod cloud_sync_ui;
 mod local_library_ui;
 mod source_ui;
 
@@ -111,6 +112,7 @@ pub fn start(services: Services) -> Result<()> {
                 .route("/ui/action", post(ui_action))
                 .route("/ui/session/restore", post(ui_restore))
                 .merge(local_library_ui::routes())
+                .merge(cloud_sync_ui::routes())
                 .merge(source_ui::routes())
                 .with_state(services)
                 .layer(middleware::from_fn_with_state(auth, authorize));

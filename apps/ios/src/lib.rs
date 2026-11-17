@@ -35,7 +35,7 @@ fn native(registry: &mut Registry) {
 fn initialize() -> anyhow::Result<()> {
     artwork::install();
     nsh_core::image::budget().set_limit(4 * 1024 * 1024);
-    use musicx_platform_apple::{mobile, player};
+    use musicx_platform_apple::{icloud, mobile, player};
     static STARTED: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
     STARTED
         .get_or_init(|| {
@@ -46,6 +46,7 @@ fn initialize() -> anyhow::Result<()> {
                     quit: || player::submit(player::Action::Pause, None),
                     sources: &musicx_mygo_plugin::MYGO,
                 })?;
+                icloud::start()?;
                 mobile::start()
             };
             start().map_err(|error| error.to_string())
