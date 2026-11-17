@@ -5,7 +5,7 @@ use crate::{
     model::Model,
     protocol::{Quality, State},
 };
-use nsh_base::{button, popover, theme};
+use nsh_base::{SelectEntry, SelectGroup, SelectItem, select, theme};
 use nsh_core::prelude::*;
 
 fn actual(model: Model) -> String {
@@ -16,12 +16,31 @@ fn actual(model: Model) -> String {
     })
 }
 pub(super) fn badge(model: Model) -> impl IntoElement {
-    let open = signal(false);
-    popover()
-        .open(move || Some(open.get()))
-        .on_open_change(move |event: &nsh_base::PopoverEvent| {
-            if let nsh_base::PopoverEvent::OpenChange(value, _) = event {
-                open.set(*value);
+    select()
+        .accessibility_label(move || {
+            Some(SharedString::from(tr!(
+                "Audio quality: {}, click to choose",
+                actual(model)
+            )))
+        })
+        .disabled(move || model.status.with(|s| s.track.is_none()))
+        .items(move || {
+            let busy = model.quality_busy.get()
+                || model.starting.get()
+                || model.status.with(|s| s.switching);
+            Quality::choices(true)
+                .iter()
+                .map(|quality| {
+                    SelectItem::new(quality.plugin_quality(), quality.label())
+                        .group(tr!("Playback preference"))
+                        .disabled(busy)
+                })
+                .collect::<Vec<_>>()
+        })
+        .value(move || model.status.with(|s| s.preferred_quality.plugin_quality()))
+        .on_change(move |value: &Option<SharedString>| {
+            if let Some(quality) = value.as_deref().and_then(|value| value.parse().ok()) {
+                model.set_quality(quality);
             }
         })
         .placement(Placement::Top)
@@ -30,21 +49,14 @@ pub(super) fn badge(model: Model) -> impl IntoElement {
         .margin(px(12.0))
         .popup_style(move |s| {
             s.w(px(252.0))
-                .p(px(12.0))
+                .p(px(8.0))
                 .bg(theme().background)
                 .border_1()
                 .border_color(theme().muted)
                 .rounded(px(10.0))
         })
         .trigger(
-            button()
-                .accessibility_label(move || {
-                    Some(SharedString::from(tr!(
-                        "Audio quality: {}, click to choose",
-                        actual(model)
-                    )))
-                })
-                .disabled(move || model.status.with(|s| s.track.is_none()))
+            view()
                 .px(px(6.0))
                 .py(px(4.0))
                 .rounded(px(4.0))
@@ -63,10 +75,40 @@ pub(super) fn badge(model: Model) -> impl IntoElement {
                     .text_color(move || theme().muted_foreground),
                 ),
         )
-        .child(controls(model))
+        .group_style(|s| s.px(px(4.0)).pt(px(4.0)).pb(px(8.0)))
+        .render_group(move |_: &SelectGroup| preference_header(model))
+        .item_class("focus:bg-muted")
+        .item_style(|s| {
+            s.px(px(8.0))
+                .py(px(7.0))
+                .rounded(px(4.0))
+                .text_size(px(12.0))
+                .text_color(theme().foreground)
+        })
+        .render_item(move |entry: &SelectEntry| {
+            let value = entry.value.clone();
+            view()
+                .flex_row()
+                .items_center()
+                .gap(px(8.0))
+                .child(text(entry.title.clone()).flex_1().number_of_lines(1))
+                .child(
+                    text(move || {
+                        if model
+                            .status
+                            .with(|s| s.preferred_quality.plugin_quality() == value.as_ref())
+                        {
+                            "✓"
+                        } else {
+                            ""
+                        }
+                    })
+                    .w(px(12.0)),
+                )
+        })
 }
 
-pub(super) fn controls(model: Model) -> impl IntoElement {
+fn preference_header(model: Model) -> impl IntoElement {
     view()
         .gap(px(8.0))
         .child(
@@ -81,43 +123,6 @@ pub(super) fn controls(model: Model) -> impl IntoElement {
                         .text_color(move || theme().foreground),
                 ),
         )
-        .child(section(tr!("Playback preference")))
-        .child(view().flex_row().gap(px(4.0)).child(each(
-            || Quality::choices(true).to_vec(),
-            |quality| *quality as u8,
-            move |quality, _| {
-                button()
-                    .accessibility_label(move || {
-                        Some(SharedString::from(tr!(
-                            "Switch quality to {}",
-                            quality.get().label()
-                        )))
-                    })
-                    .disabled(move || {
-                        model.quality_busy.get()
-                            || model.starting.get()
-                            || model.status.with(|s| s.switching)
-                    })
-                    .selected(move || {
-                        model
-                            .status
-                            .with(|s| s.preferred_quality.for_plugin() == quality.get())
-                    })
-                    .selected_style(|s| {
-                        s.bg(theme().primary).text_color(theme().primary_foreground)
-                    })
-                    .on_press(move || model.set_quality(quality.get()))
-                    .flex_1()
-                    .items_center()
-                    .justify_center()
-                    .px(px(8.0))
-                    .py(px(6.0))
-                    .rounded(px(5.0))
-                    .hover(|s| s.opacity(0.75))
-                    .disabled_style(|s| s.opacity(0.45))
-                    .child(text(move || quality.get().label()).text_size(px(11.0)))
-            },
-        )))
         .child(
             text(move || {
                 if model.error.with(|e| !e.is_empty()) {
@@ -145,4 +150,5 @@ pub(super) fn controls(model: Model) -> impl IntoElement {
             .number_of_lines(2)
             .text_color(move || theme().muted_foreground),
         )
+        .child(section(tr!("Playback preference")))
 }

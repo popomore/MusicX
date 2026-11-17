@@ -3,7 +3,10 @@ use crate::controls::{action, caption, heading, primary};
 use crate::protocol::tr;
 use crate::{
     model::Model,
-    protocol::{LocalLibraryAction as Edit, LocalPlaylist, LocalPlaylistSummary, Status},
+    protocol::{
+        LocalLibraryAction as Edit, LocalPlaylist, LocalPlaylistSummary, RADIO_PLAYLIST_ID,
+        RadioRefresh, Status,
+    },
     remote,
 };
 use nsh_base::{button, input, theme};
@@ -15,6 +18,9 @@ struct Browser {
     owner: Owner,
     busy: Signal<bool>,
     error: Signal<String>,
+    notice: Signal<String>,
+    source_errors: Signal<String>,
+    refreshing: Signal<bool>,
     name: Signal<String>,
     lists: Signal<Vec<LocalPlaylistSummary>>,
     selected: Signal<Option<LocalPlaylist>>,
@@ -26,6 +32,46 @@ struct Browser {
     importing: Signal<bool>,
 }
 impl Browser {
+    fn radio(self) {
+        if self.busy.get() {
+            return;
+        }
+        self.notice.set(String::new());
+        self.source_errors.set(String::new());
+        self.refreshing.set(true);
+        self.work(
+            || remote::post_json::<_, RadioRefresh>("/ui/local-playlists", &Edit::RefreshRadio {}),
+            |this, result| {
+                let message = if result.sources.is_empty() {
+                    tr!("Connect a music account in Music sources to get personal recommendations.")
+                        .to_owned()
+                } else if result.added > 0 {
+                    tr!(
+                        "Added {} to Radio.",
+                        crate::protocol::i18n::tracks(result.added)
+                    )
+                } else {
+                    tr!("No new recommendations. Try again later.").to_owned()
+                };
+                this.notice.set(message);
+                let errors: Vec<_> = result
+                    .sources
+                    .iter()
+                    .filter_map(|source| {
+                        source
+                            .error
+                            .as_ref()
+                            .map(|error| format!("{}: {error}", source.name))
+                    })
+                    .collect();
+                this.source_errors.set(errors.join("\n"));
+                if let Some(list) = result.playlist {
+                    this.name.set(list.name.clone());
+                    this.selected.set(Some(list));
+                }
+            },
+        );
+    }
     fn work<T: Send + 'static>(
         self,
         run: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
@@ -46,6 +92,7 @@ impl Browser {
                 // Publish the result before the revision watcher can refresh the selection.
                 batch(|| {
                     self.busy.set(false);
+                    self.refreshing.set(false);
                     match result {
                         Ok(Ok(value)) => done(self, value),
                         Ok(Err(e)) => self.error.set(e.to_string()),
@@ -58,6 +105,8 @@ impl Browser {
         });
     }
     fn lists(self) {
+        self.notice.set(String::new());
+        self.source_errors.set(String::new());
         self.creating.set(false);
         self.editing.set(false);
         self.managing.set(false);
@@ -71,6 +120,8 @@ impl Browser {
         );
     }
     fn select(self, id: String) {
+        self.notice.set(String::new());
+        self.source_errors.set(String::new());
         self.creating.set(false);
         self.editing.set(false);
         self.managing.set(false);
@@ -149,6 +200,9 @@ pub fn library_view(model: Model) -> impl IntoElement {
         owner: Owner::current(),
         busy: signal(false),
         error: signal(String::new()),
+        notice: signal(String::new()),
+        source_errors: signal(String::new()),
+        refreshing: signal(false),
         name: signal(String::new()),
         lists: signal(Vec::new()),
         selected: signal(None),
@@ -201,6 +255,26 @@ pub fn library_view(model: Model) -> impl IntoElement {
                     .flex_1()
                     .min_h(px(0.0))
                     .gap(px(12.0))
+                    .child(when(
+                        move || !this.creating.get(),
+                        move || {
+                            view()
+                                .gap(px(4.0))
+                                .child(
+                                    view()
+                                        .flex_row()
+                                        .items_center()
+                                        .justify_between()
+                                        .child(heading(tr!("Radio")))
+                                        .child(primary(
+                                            tr!("Add recommendations"),
+                                            move || this.busy.get(),
+                                            move || this.radio(),
+                                        )),
+                                )
+                                .child(caption(tr!("Songs picked for you from connected music accounts.")))
+                        },
+                    ))
                     .child(when(
                         move || !this.creating.get() && this.lists.with(|v| !v.is_empty()),
                         move || {
@@ -503,6 +577,14 @@ pub fn library_view(model: Model) -> impl IntoElement {
                         move || {
                             view()
                                 .gap(px(6.0))
+                                .child(when(
+                                    move || this.selected.with(|p| p.as_ref().is_some_and(|p| p.id == RADIO_PLAYLIST_ID)),
+                                    move || action(
+                                        tr!("Add recommendations"),
+                                        move || this.busy.get(),
+                                        move || this.radio(),
+                                    ),
+                                ))
                                 .child(
                                     view()
                                         .flex_row()
@@ -777,7 +859,15 @@ pub fn library_view(model: Model) -> impl IntoElement {
         ))
         .child(when(
             move || this.busy.get() && !this.importing.get(),
-            || caption(tr!("Loading or saving…")),
+            move || caption(move || if this.refreshing.get() { tr!("Getting recommendations…") } else { tr!("Loading or saving…") }),
+        ))
+        .child(when(
+            move || this.notice.with(|v| !v.is_empty()) && !this.importing.get(),
+            move || caption(move || this.notice.get()),
+        ))
+        .child(when(
+            move || this.source_errors.with(|v| !v.is_empty()) && !this.importing.get(),
+            move || caption(move || this.source_errors.get()),
         ))
         .child(when(
             move || this.error.with(|v| !v.is_empty()),

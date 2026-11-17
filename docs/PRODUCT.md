@@ -20,10 +20,13 @@ Search and discovery are exposed through MCP. Use Agent in macOS settings to set
 | --- | --- |
 | Current queue | Tracks added individually or captured from an album, playlist, or history snapshot. Previous, next, and automatic advance follow the queue order. |
 | My Playlists | Saved local collections. Create, rename, pin, or delete playlists and add or remove tracks. Editing a saved playlist leaves the current queue intact. |
+| Radio | Personal recommendations from connected music accounts, collected into a local Radio playlist. Get another batch to append new tracks, deduplicated by source identity. Fetching recommendations leaves playback and the current queue intact. |
 | Playback history | A chronological log with separate progress for each play and a completion indicator. |
 | Liked Songs | A local playlist managed by the heart button. Track edits persist across launches. The playlist name and collection are protected. |
 
 Changing sources, liking a track, and editing a playlist are independent of queue progression. A failed track selection preserves the existing queue. Quality changes keep the current track and playback position while requesting a new stream.
+
+The feature is named Radio. Use Add recommendations in My Playlists or in the Radio playlist to append a personal batch. Fetching happens only when the listener presses this button or an agent invokes `manage_local_playlists(action=radio)`; opening the player or playlist browser never fetches automatically. MusicX prefers a source's personal FM and falls back to an explicitly advertised daily recommendation page. Public charts, new releases, and listening history are excluded. Accounts are checked before fetching; one unavailable source does not discard the others. Empty or failed fetches preserve the existing playlist. Radio is an editable local collection: renaming, pinning and deleting use the normal playlist controls. Its default name follows the interface language, while custom names are preserved. Playback starts only when the listener chooses Play.
 
 MusicX remembers the current track, queue, playback position, and volume across restarts. It restores the session paused, so opening the app does not start audio. Press Play to request a fresh stream and continue from the saved position. Playback progress is checkpointed every five seconds and saved on playback actions and normal quit.
 

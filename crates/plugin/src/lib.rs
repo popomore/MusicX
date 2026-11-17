@@ -105,6 +105,11 @@ pub trait PluginSource: DataSource {
     ) -> Result<SourcePlaylistSnapshot> {
         unsupported()
     }
+    /// A fresh batch chosen for the connected listener, excluding public charts,
+    /// new releases and listening history. Never resolves audio or edits a library.
+    fn radio_tracks(&self, _source: &str) -> Result<Vec<Track>> {
+        unsupported()
+    }
     fn page(&self, _source: &str, _request: SourcePageRequest) -> Result<SourcePage> {
         unsupported()
     }

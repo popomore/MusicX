@@ -391,6 +391,7 @@ pub fn run_panel() -> ExitCode {
                 .register::<nsh_base::Button>()
                 .register::<nsh_base::Slider>()
                 .register::<nsh_base::Sheet>()
+                .register::<nsh_base::Select>()
                 .register::<nsh_base::Popover>();
         }) as nsh_base::parts::Part,
     ])]);

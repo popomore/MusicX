@@ -766,5 +766,13 @@
   "The source did not provide audio for MusicX playback": "The source did not provide audio for MusicX playback",
   "This source provides device controls but no audio for MusicX playback": "This source provides device controls but no audio for MusicX playback",
   "Source search information is incomplete": "Source search information is incomplete",
-  "Source search exceeds 10,000 items": "Source search exceeds 10,000 items"
+  "Source search exceeds 10,000 items": "Source search exceeds 10,000 items",
+  "Sign in to this source to get personal recommendations": "Sign in to this source to get personal recommendations",
+  "Radio is already getting recommendations": "Radio is already getting recommendations",
+  "Connect a music account in Music sources to get personal recommendations.": "Connect a music account in Music sources to get personal recommendations.",
+  "Added {} to Radio.": "Added {} to Radio.",
+  "No new recommendations. Try again later.": "No new recommendations. Try again later.",
+  "Add recommendations": "Add recommendations",
+  "Songs picked for you from connected music accounts.": "Songs picked for you from connected music accounts.",
+  "Getting recommendations…": "Getting recommendations…"
 }
