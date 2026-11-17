@@ -92,17 +92,15 @@ impl Language {
     }
 
     fn write(self, dir: &Path) -> std::io::Result<()> {
-        crate::preferences::locked(dir, || {
-            crate::preferences::write_locked(
-                dir,
-                "language",
-                match self {
-                    Self::System => b"system\n",
-                    Self::SimplifiedChinese => b"zh-CN\n",
-                    Self::English => b"en\n",
-                },
-            )
-        })
+        crate::preferences::save_at(
+            dir,
+            "language",
+            match self {
+                Self::System => b"system\n",
+                Self::SimplifiedChinese => b"zh-CN\n",
+                Self::English => b"en\n",
+            },
+        )
     }
 }
 

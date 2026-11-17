@@ -25,6 +25,7 @@ pub const MAX_BYTES: u64 = 128 * 1024 * 1024;
 const STATE_FILE: &str = "icloud-state.json";
 const SETTINGS_FILE: &str = "icloud-settings.json";
 pub const HISTORY_FILE: &str = "icloud-history.json";
+const APPLY_MARKER: &str = ".icloud-applying";
 static CONTROL: Mutex<()> = Mutex::new(());
 static STATUS: Mutex<Option<CloudSyncStatus>> = Mutex::new(None);
 static WAKE: OnceLock<fn()> = OnceLock::new();
@@ -213,7 +214,53 @@ pub fn synchronize(incoming: &[Replica]) -> Result<Option<Replica>> {
     let _guard = CONTROL
         .lock()
         .map_err(|_| anyhow::anyhow!("iCloud settings unavailable"))?;
-    if !enabled() {
+    synchronize_locked(incoming, false)
+}
+
+pub fn has_pending_apply() -> bool {
+    protocol::data_dir().is_some_and(|dir| dir.join(APPLY_MARKER).exists())
+}
+
+/// Run before accepting local mutations, even with sync disabled/unavailable.
+pub fn recover_pending() -> Result<()> {
+    let _guard = CONTROL
+        .lock()
+        .map_err(|_| anyhow::anyhow!("iCloud settings unavailable"))?;
+    recover_pending_locked()
+}
+
+fn recover_pending_locked() -> Result<()> {
+    let dir = storage::state_dir()?;
+    let state: Option<State> = read_json(&dir.join(STATE_FILE))?;
+    if state.is_some_and(|state| state.pending.is_some()) {
+        synchronize_locked(&[], true)?;
+    } else {
+        clear_apply_marker(&dir)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn local_edit<T>(edit: impl FnOnce() -> Result<T>) -> Result<T> {
+    let _guard = CONTROL
+        .lock()
+        .map_err(|_| anyhow::anyhow!("iCloud settings unavailable"))?;
+    if has_pending_apply() {
+        recover_pending_locked()?;
+    }
+    edit()
+}
+
+fn clear_apply_marker(dir: &Path) -> Result<()> {
+    protocol::preferences::locked(dir, || match fs::remove_file(dir.join(APPLY_MARKER)) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    })?;
+    Ok(())
+}
+
+fn synchronize_locked(incoming: &[Replica], recovering: bool) -> Result<Option<Replica>> {
+    if !recovering && !enabled() {
         return Ok(None);
     }
     let dir = storage::state_dir()?;
@@ -260,6 +307,7 @@ pub fn synchronize(incoming: &[Replica]) -> Result<Option<Replica>> {
                     before: actual,
                     after: after.clone(),
                 });
+                storage::save_private(APPLY_MARKER, "1")?;
                 save_state(&state)?;
                 snapshot::apply_settings(&all, &dir)?;
                 let encoded = serde_json::to_string(&history)?;
@@ -277,6 +325,7 @@ pub fn synchronize(incoming: &[Replica]) -> Result<Option<Replica>> {
     })?;
     state.pending = None;
     save_state(&state)?;
+    clear_apply_marker(&dir)?;
     crate::audio_quality::reload();
     protocol::i18n::refresh();
     Ok(Some(state.replica))

@@ -32,11 +32,11 @@ else:
     spec.loader.exec_module(icloud_signing)
     entitlements = icloud_signing.from_environment(app, 'ios')
     identity = os.environ.get('MUSICX_CODESIGN_IDENTITY')
+    if entitlements and (not identity or identity == '-'):
+        raise ValueError('iCloud requires an Apple signing identity')
     if identity:
         command = ['codesign', '--force', '--sign', identity]
         if entitlements:
-            if identity == '-':
-                raise ValueError('iCloud requires an Apple signing identity')
             command += ['--entitlements', str(entitlements)]
         subprocess.run(command + [str(app)], check=True)
         subprocess.run(['codesign', '--verify', '--strict', str(app)], check=True)

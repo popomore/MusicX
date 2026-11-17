@@ -134,17 +134,19 @@ fn discover(directory: &Path) -> (Vec<PathBuf>, bool) {
                 };
                 observers.push(observer);
             }
-            if !query.startQuery() {
+            let discovery = Discovery {
+                directory: requested,
+                query,
+                observers,
+            };
+            if !discovery.query.startQuery() {
                 cloud_sync::set_phase(
                     Phase::Error,
                     Some("Could not discover iCloud sync files".into()),
                 );
+                return;
             }
-            *watch = Some(Discovery {
-                directory: requested,
-                query,
-                observers,
-            });
+            *watch = Some(discovery);
         });
     });
     DISCOVERED
@@ -169,6 +171,13 @@ pub fn start() -> Result<()> {
         .name("musicx-icloud".into())
         .spawn(move || {
             loop {
+                if cloud_sync::has_pending_apply()
+                    && let Err(error) = cloud_sync::recover_pending()
+                {
+                    cloud_sync::set_phase(Phase::Error, Some(error.to_string()));
+                    let _ = receive.recv_timeout(Duration::from_secs(30));
+                    continue;
+                }
                 if cloud_sync::enabled() {
                     autoreleasepool(|_| {
                         if let Err(error) = exchange() {

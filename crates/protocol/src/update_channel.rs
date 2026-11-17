@@ -40,16 +40,14 @@ impl UpdateChannel {
     }
 
     fn write(self, dir: &Path) -> std::io::Result<()> {
-        crate::preferences::locked(dir, || {
-            crate::preferences::write_locked(
-                dir,
-                "update-channel",
-                match self {
-                    Self::Stable => b"stable\n",
-                    Self::All => b"all\n",
-                },
-            )
-        })
+        crate::preferences::save_at(
+            dir,
+            "update-channel",
+            match self {
+                Self::Stable => b"stable\n",
+                Self::All => b"all\n",
+            },
+        )
     }
 }
 

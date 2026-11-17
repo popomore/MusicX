@@ -5,6 +5,9 @@ import plistlib
 import subprocess
 import tempfile
 import unittest
+import runpy
+import shutil
+import os
 from unittest import mock
 
 spec = importlib.util.spec_from_file_location("icloud_signing", Path(__file__).resolve().parents[1] / "icloud-signing.py")
@@ -80,3 +83,18 @@ class ICloudSigningTests(unittest.TestCase):
         with mock.patch.dict(signing.os.environ, {"MUSICX_ICLOUD_CONTAINER": "iCloud.test.musicx", "MUSICX_ICLOUD_PROVISIONING_PROFILE": ""}):
             with self.assertRaisesRegex(ValueError, "Set both"):
                 signing.from_environment(Path("unused.app"), "macos")
+
+    def test_icloud_device_packaging_requires_a_signing_identity(self):
+        for identity in [None,"-"]:
+            with self.subTest(identity=identity), tempfile.TemporaryDirectory() as temp:
+                root=Path(temp); ios=root/"apps/ios";ios.mkdir(parents=True)
+                source=Path(__file__).resolve().parents[2]/"apps/ios/package.py"
+                shutil.copyfile(source,ios/"package.py")
+                app=ios/".nsh/out/ios/MusicX.app";app.mkdir(parents=True)
+                (app/"Info.plist").write_bytes(plistlib.dumps({"CFBundleExecutable":"MusicX"}))
+                (root/"scripts").mkdir()
+                (root/"scripts/icloud-signing.py").write_text("from pathlib import Path\ndef from_environment(app,platform): return Path(app)/'iCloud.entitlements'\n")
+                env={} if identity is None else {"MUSICX_CODESIGN_IDENTITY":identity}
+                with mock.patch.dict(os.environ,env,clear=True), mock.patch("sys.argv",["package.py","--target","ios"]), mock.patch("subprocess.run",return_value=subprocess.CompletedProcess([],0)):
+                    with self.assertRaisesRegex(ValueError,"Apple signing identity"):
+                        runpy.run_path(str(ios/"package.py"),run_name="__main__")

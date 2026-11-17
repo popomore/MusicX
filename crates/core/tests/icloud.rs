@@ -62,6 +62,18 @@ fn two_devices_merge_offline_changes_and_history_without_syncing_secrets() {
 }
 
 #[test]
+fn pending_apply_is_resolved_before_accepting_local_deletion() {
+    let root = std::env::temp_dir().join(format!(
+        "musicx-icloud-recovery-{}",
+        storage::random_hex::<12>()
+    ));
+    fs::create_dir_all(&root).unwrap();
+    child(&root, "a", "seed");
+    child(&root, "a", "delete-after-apply");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn icloud_child() {
     let Ok(step) = std::env::var("MUSICX_ICLOUD_TEST_STEP") else {
         return;
@@ -271,6 +283,49 @@ fn icloud_child() {
             let state: serde_json::Value =
                 serde_json::from_slice(&fs::read(dir.join("icloud-state.json")).unwrap()).unwrap();
             assert!(state["pending"].is_null());
+        }
+        "delete-after-apply" => {
+            use musicx_core::cloud_sync::merge::Snapshot;
+            let dir = storage::state_dir().unwrap();
+            let list = local_library::change(Edit::Create {
+                name: "Received before crash".into(),
+            })
+            .unwrap();
+            let id = list["id"].as_str().unwrap().to_owned();
+            let mut before_state: serde_json::Value =
+                serde_json::from_slice(&fs::read(dir.join("icloud-state.json")).unwrap()).unwrap();
+            let before: Snapshot =
+                serde_json::from_value(before_state["baseline"].clone()).unwrap();
+            protocol::i18n::Language::SimplifiedChinese.save().unwrap();
+            cloud_sync::synchronize(&[]).unwrap();
+            let applied_state: serde_json::Value =
+                serde_json::from_slice(&fs::read(dir.join("icloud-state.json")).unwrap()).unwrap();
+            let after = applied_state["baseline"].clone();
+            before_state["replica"] = applied_state["replica"].clone();
+            before_state["pending"] = json!({"before":before,"after":after});
+            storage::save_private(
+                "icloud-state.json",
+                &serde_json::to_string(&before_state).unwrap(),
+            )
+            .unwrap();
+            storage::save_private(".icloud-applying", "1").unwrap();
+            cloud_sync::set_enabled(false).unwrap();
+            assert!(
+                protocol::i18n::Language::English.save().is_err(),
+                "Local preferences must wait for recovery rather than overwrite an ambiguous applied state"
+            );
+            local_library::change(Edit::Delete { id: id.clone() }).unwrap();
+            protocol::i18n::Language::English.save().unwrap();
+            cloud_sync::set_enabled(true).unwrap();
+            cloud_sync::synchronize(&[]).unwrap();
+            assert_eq!(
+                protocol::i18n::Language::load(),
+                protocol::i18n::Language::English
+            );
+            assert!(
+                local_library::playlist(&id).is_err(),
+                "Recovery must not restore a playlist deleted after materialization"
+            );
         }
         "corrupt" => {
             let dir = storage::state_dir().unwrap();

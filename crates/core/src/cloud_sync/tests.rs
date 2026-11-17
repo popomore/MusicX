@@ -223,3 +223,28 @@ fn radio_identity_and_user_playlist_names_survive_sync() {
             .any(|p| p.id == "mix" && !p.favorite && p.name == "我喜欢")
     );
 }
+
+#[test]
+fn local_artwork_is_not_exported_in_playlists_or_history() {
+    let mut list = playlist();
+    list.tracks[0].cover_url =
+        Some("file:///Users/device-a/Library/MusicX/plugin/cover.jpg".into());
+    let entry = HistoryEntry {
+        track: list.tracks[0].clone(),
+        played_at_unix: 123,
+        progress: None,
+    };
+    let history = BTreeMap::from([(format!("{A}/0"), entry)]);
+    let snapshot = snapshot::capture(
+        &[list],
+        &history,
+        &std::env::temp_dir().join("musicx-no-artwork-preferences"),
+    )
+    .unwrap();
+    assert!(
+        !serde_json::to_string(&snapshot)
+            .unwrap()
+            .contains("file:///Users/device-a"),
+        "Device-local artwork must be replenished by the receiving source"
+    );
+}

@@ -312,13 +312,15 @@ pub fn playlist(id: &str) -> Result<LocalPlaylist> {
 }
 
 fn update<T>(edit: impl FnOnce(&mut Library) -> Result<T>) -> Result<T> {
-    let _guard = WRITER
-        .lock()
-        .map_err(|_| anyhow::anyhow!(tr!("Local playlists unavailable")))?;
-    let mut library = read()?;
-    let result = edit(&mut library)?;
-    save(&library)?;
-    Ok(result)
+    crate::cloud_sync::local_edit(|| {
+        let _guard = WRITER
+            .lock()
+            .map_err(|_| anyhow::anyhow!(tr!("Local playlists unavailable")))?;
+        let mut library = read()?;
+        let result = edit(&mut library)?;
+        save(&library)?;
+        Ok(result)
+    })
 }
 
 pub fn change(action: LocalLibraryAction) -> Result<Value> {

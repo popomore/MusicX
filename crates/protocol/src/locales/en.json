@@ -792,5 +792,6 @@
   "iCloud transfers changes in the background. You can keep listening while offline.": "iCloud transfers changes in the background. You can keep listening while offline.",
   "Sync now": "Sync now",
   "Accounts, sign-in credentials, plugins, and the current playback queue stay on each device.": "Accounts, sign-in credentials, plugins, and the current playback queue stay on each device.",
-  "This build does not include iCloud support. Install a build signed for iCloud.": "This build does not include iCloud support. Install a build signed for iCloud."
+  "This build does not include iCloud support. Install a build signed for iCloud.": "This build does not include iCloud support. Install a build signed for iCloud.",
+  "A sync update is being recovered; try again in a moment": "A sync update is being recovered; try again in a moment"
 }

@@ -19,6 +19,18 @@ fn encode(value: &str) -> String {
     URL_SAFE_NO_PAD.encode(value)
 }
 
+fn portable_track(track: &Track) -> Track {
+    let mut track = track.clone();
+    if track
+        .cover_url
+        .as_deref()
+        .is_some_and(|value| url::Url::parse(value).is_ok_and(|url| url.scheme() == "file"))
+    {
+        track.cover_url = None;
+    }
+    track
+}
+
 pub fn capture(
     playlists: &[LocalPlaylist],
     history: &BTreeMap<String, HistoryEntry>,
@@ -49,11 +61,13 @@ pub fn capture(
         for track in &list.tracks {
             result.insert(
                 format!("{prefix}t/{}", encode(&track_key(track))),
-                serde_json::to_value(track)?,
+                serde_json::to_value(portable_track(track))?,
             );
         }
     }
     for (id, entry) in history {
+        let mut entry = entry.clone();
+        entry.track = portable_track(&entry.track);
         result.insert(format!("h/{id}"), serde_json::to_value(entry)?);
     }
     for name in SETTINGS {
@@ -132,7 +146,7 @@ pub fn playlists(snapshot: &Snapshot, previous: &[LocalPlaylist]) -> Result<Vec<
             .range(track_prefix.clone()..)
             .take_while(|(key, _)| key.starts_with(&track_prefix))
         {
-            let track: Track = serde_json::from_value(value.clone())?;
+            let track: Track = portable_track(&serde_json::from_value(value.clone())?);
             let identity = track_key(&track);
             ensure!(
                 *key == format!("{track_prefix}{}", encode(&identity)),
@@ -161,6 +175,24 @@ pub fn playlists(snapshot: &Snapshot, previous: &[LocalPlaylist]) -> Result<Vec<
             .iter()
             .find(|p| p.id == id || (favorite && p.favorite))
         {
+            // Keep this device's own usable artwork while omitting its path
+            // from the portable replica sent to other devices.
+            for track in &mut list.tracks {
+                if track.cover_url.is_none()
+                    && let Some(cover) = old
+                        .tracks
+                        .iter()
+                        .find(|old| track_key(old) == track_key(track))
+                        .and_then(|old| old.cover_url.as_ref())
+                    && url::Url::parse(cover)
+                        .ok()
+                        .filter(|url| url.scheme() == "file")
+                        .and_then(|url| url.to_file_path().ok())
+                        .is_some_and(|path| path.is_file())
+                {
+                    track.cover_url = Some(cover.clone());
+                }
+            }
             list.revision = old.revision;
             let mut comparable = old.clone();
             comparable.id = id.into();
@@ -193,7 +225,8 @@ pub fn history(snapshot: &Snapshot) -> Result<BTreeMap<String, HistoryEntry>> {
             super::merge::valid_device(device) && offset.parse::<u64>().is_ok(),
             "Invalid synced history identifier"
         );
-        let entry: HistoryEntry = serde_json::from_value(value.clone())?;
+        let mut entry: HistoryEntry = serde_json::from_value(value.clone())?;
+        entry.track = portable_track(&entry.track);
         crate::local_library::validate_track(&entry.track)?;
         if let Some(progress) = entry.progress {
             ensure!(

@@ -127,7 +127,9 @@ pub fn valid_device(value: &str) -> bool {
     value.len() == 32 && value.bytes().all(|c| c.is_ascii_hexdigit())
 }
 
-/// Replay an interrupted apply, retaining edits made after its input was captured.
+/// Replay an interrupted apply. Callers block local library/preference mutations
+/// until replay finishes: snapshot equality cannot detect a post-apply edit that
+/// restores the pre-apply value.
 pub fn recover(before: &Snapshot, after: &Snapshot, current: &Snapshot) -> Snapshot {
     let mut recovered = after.clone();
     for key in before.keys().chain(current.keys()).collect::<BTreeSet<_>>() {

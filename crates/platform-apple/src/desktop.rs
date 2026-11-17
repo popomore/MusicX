@@ -199,8 +199,9 @@ fn package(
     )?;
     let mut codesign = std::process::Command::new("/usr/bin/codesign");
     if binary == "musicx"
-        && (std::env::var_os("MUSICX_ICLOUD_CONTAINER").is_some()
-            || std::env::var_os("MUSICX_ICLOUD_PROVISIONING_PROFILE").is_some())
+        && (std::env::var_os("MUSICX_ICLOUD_CONTAINER").is_some_and(|value| !value.is_empty())
+            || std::env::var_os("MUSICX_ICLOUD_PROVISIONING_PROFILE")
+                .is_some_and(|value| !value.is_empty()))
     {
         anyhow::ensure!(
             signing_identity.is_some_and(|identity| identity != "-"),

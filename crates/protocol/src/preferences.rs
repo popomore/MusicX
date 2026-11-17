@@ -47,5 +47,16 @@ pub fn write_locked(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
 pub fn save(name: &str, bytes: &[u8]) -> io::Result<()> {
     let dir =
         crate::data_dir().ok_or_else(|| io::Error::other("Configuration directory not found"))?;
-    locked(&dir, || write_locked(&dir, name, bytes))
+    save_at(&dir, name, bytes)
+}
+
+pub fn save_at(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
+    locked(dir, || {
+        if dir.join(".icloud-applying").exists() {
+            return Err(io::Error::other(crate::tr!(
+                "A sync update is being recovered; try again in a moment"
+            )));
+        }
+        write_locked(dir, name, bytes)
+    })
 }

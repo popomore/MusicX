@@ -792,5 +792,6 @@
   "iCloud transfers changes in the background. You can keep listening while offline.": "iCloud 会在后台传输更改，离线时也可继续使用。",
   "Sync now": "立即同步",
   "Accounts, sign-in credentials, plugins, and the current playback queue stay on each device.": "账号、登录凭据、插件和当前播放队列由各设备单独管理。",
-  "This build does not include iCloud support. Install a build signed for iCloud.": "此构建未配置 iCloud 权限，请安装具有 iCloud 签名权限的版本。"
+  "This build does not include iCloud support. Install a build signed for iCloud.": "此构建未配置 iCloud 权限，请安装具有 iCloud 签名权限的版本。",
+  "A sync update is being recovered; try again in a moment": "正在完成同步更新，请稍后重试"
 }
