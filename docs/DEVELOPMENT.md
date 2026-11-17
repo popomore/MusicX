@@ -93,6 +93,45 @@ xcrun stapler validate target/distribution/MusicX-release.dmg
 
 ## Build and publish with GitHub Actions
 
+### macOS TestFlight
+
+TestFlight uses a Mac App Distribution certificate, a Mac Installer Distribution certificate, and a macOS App Store provisioning profile for `com.popomore.musicx`. Developer ID signing is for the separate direct-download installer. Preserve each certificate's private key, encrypted P12 export and export password in the credential vault.
+
+The TestFlight packager builds the three components separately and follows Cargo's reported executable paths. It enables App Sandbox, embeds the provisioning profile, signs the child helpers with inherited sandbox permissions, and creates a signed `.pkg`. It omits Sparkle. The Mac application uses Foundation to resolve its sandbox container for storage. The store build's MCP listener uses port `45969`.
+
+Choose the display version from the intended release tag and an increasing App Store Connect build number; Cargo package versions stay unchanged. For example:
+
+```sh
+python3 scripts/package-testflight-macos.py \
+  --version 1.0.0 --build 1 \
+  --profile /secure/MusicX.provisionprofile \
+  --app-identity APPLICATION_CERTIFICATE_SHA1 \
+  --installer-identity INSTALLER_CERTIFICATE_SHA1 \
+  --keychain /secure/signing.keychain-db \
+  --output target/distribution/MusicX-TestFlight.pkg
+```
+
+Validate and upload using an App Store Connect team API key. The private key remains outside the repository:
+
+```sh
+export API_PRIVATE_KEYS_DIR=/secure/private-keys
+xcrun altool --validate-app target/distribution/MusicX-TestFlight.pkg \
+  --api-key KEY_ID --api-issuer ISSUER_ID
+xcrun altool --upload-package target/distribution/MusicX-TestFlight.pkg --wait \
+  --api-key KEY_ID --api-issuer ISSUER_ID
+```
+
+Verify the processed build in App Store Connect and enable it for the intended internal testing group. Upload, processing, installation through TestFlight, and actual device testing are separate acceptance steps. External beta review and public App Store publication need their own authorization.
+
+For isolated local sandbox QA, `--prepare-only` creates an ad hoc app using `local.musicx.testflightqa`, its own container, and port `45974`:
+
+```sh
+python3 scripts/package-testflight-macos.py --prepare-only \
+  --version 1.0.0 --build 1 --output target/distribution/MusicX-Sandbox-QA.app
+```
+
+### Direct-download releases
+
 The macOS CI workflow runs formatting, workspace tests, and release automation tests on pull requests and pushes to `main`. [macOS CI](../.github/workflows/ci-macos.yml)
 
 Workspace tests use Cargo's test profile with debug information disabled (`CARGO_PROFILE_TEST_DEBUG=0 cargo test --locked --workspace`) to avoid release size optimization and LTO on every change. Rust dependencies and their compiled artifacts are cached by toolchain, target, manifests, lockfile, and compiler environment. Stable releases still run the workspace tests with `--release` before packaging.
