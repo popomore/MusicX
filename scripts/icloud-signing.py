@@ -33,9 +33,8 @@ def entitlements(profile, container, bundle_id, platform):
     if "com.apple.developer.icloud-container-environment" in allowed:
         result["com.apple.developer.icloud-container-environment"] = allowed["com.apple.developer.icloud-container-environment"]
     # Device development profiles need these for installation/debugging.
-    for key in ["get-task-allow", "aps-environment", "com.apple.developer.aps-environment"]:
-        if key in allowed:
-            result[key] = allowed[key]
+    if "get-task-allow" in allowed:
+        result["get-task-allow"] = allowed["get-task-allow"]
     return result
 
 

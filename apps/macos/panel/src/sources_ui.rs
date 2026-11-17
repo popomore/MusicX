@@ -894,6 +894,19 @@ fn flow(
 }
 
 fn source_settings(this: Sources, importing: bool) -> impl IntoElement {
+    set_interval(std::time::Duration::from_secs(1), move || {
+        if importing || this.busy.get() {
+            return;
+        }
+        let synced = crate::protocol::data_dir()
+            .and_then(|dir| std::fs::read(dir.join("plugin-auto-update.json")).ok())
+            .and_then(|bytes| serde_json::from_slice::<bool>(&bytes).ok());
+        if let Some(enabled) = synced
+            && this.auto_update.get() != Some(enabled)
+        {
+            this.auto_update.set(Some(enabled));
+        }
+    });
     view()
         .gap(px(4.0))
         .child(when(
