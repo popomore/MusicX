@@ -341,7 +341,8 @@ length="{self.dmg.stat().st_size}" sparkle:edSignature="{base64.b64encode(signat
         tag = "v1.3.0-preview.1"
         self.prepare_appcast(tag)
         self.env.update(RELEASE_TAG=tag, SIGNING_MODE="ad-hoc", RELEASE_BRANCH="main", CI_RUN_ID="41",
-                        GITHUB_RUN_ID="42", GITHUB_REF="refs/heads/main", GITHUB_EVENT_NAME="workflow_dispatch")
+                        GITHUB_RUN_ID="42", GITHUB_REF="refs/heads/main", GITHUB_EVENT_NAME="workflow_dispatch",
+                        GITHUB_ACTIONS="true", GITHUB_ACTION="__run")
         self.git('branch', '-M', 'main')
         remote = self.root / 'origin.git'
         self.git('init', '--bare', '--quiet', str(remote))

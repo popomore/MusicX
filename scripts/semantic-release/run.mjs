@@ -6,10 +6,11 @@ import { dirname, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { git, readJSON, writeJSON, validatePlan, validateAssets, route } from './state.mjs';
 import { publishPlan } from './macos.mjs';
+import { semanticEnvironment } from './auth.mjs';
 
 const mode = process.argv[2];
 if (!['plan', 'publish'].includes(mode)) throw new Error('Use plan or publish');
-const env = { ...process.env, RELEASE_MODE: mode };
+const env = semanticEnvironment({ ...process.env, RELEASE_MODE: mode });
 const planFile = env.RELEASE_PLAN = resolve(env.RELEASE_PLAN || 'target/release-plan/plan.json');
 const expected = { branch: env.RELEASE_BRANCH, sourceSha: env.SOURCE_SHA,
   runId: env.GITHUB_RUN_ID, ciRunId: env.CI_RUN_ID, runNumber: env.GITHUB_RUN_NUMBER };
@@ -39,7 +40,7 @@ function recover(plan) {
   const authEnv = { ...env, GIT_AUTHOR_NAME: 'semantic-release-bot', GIT_AUTHOR_EMAIL: 'semantic-release-bot@martynus.net',
     GIT_COMMITTER_NAME: 'semantic-release-bot', GIT_COMMITTER_EMAIL: 'semantic-release-bot@martynus.net',
     GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.https://github.com/.extraheader',
-    GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${env.GH_TOKEN}`).toString('base64')}` };
+    GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${env.GITHUB_TOKEN || env.GH_TOKEN}`).toString('base64')}` };
   const command = args => {
     try { return execFileSync('git', args, { env: authEnv, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim(); }
     catch { throw new Error('Release note recovery failed; credentials and remote output were suppressed'); }
