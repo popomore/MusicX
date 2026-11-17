@@ -77,6 +77,90 @@ fn start() -> Headless {
 }
 
 #[component]
+fn MiniPreviewRaceScreen() -> impl IntoElement {
+    let model = model::Model::new();
+    let mirror = model::Model::new();
+    model.refresh_mini_lyrics();
+    mirror.refresh_mini_lyrics();
+    view()
+        .child(text(move || {
+            format!(
+                "mini:{} mirror:{}",
+                model.show_mini_lyrics.get(),
+                mirror.show_mini_lyrics.get()
+            )
+        }))
+        .child(controls::action(
+            "Toggle preview",
+            || false,
+            move || model.toggle_mini_lyrics(),
+        ))
+        .child(controls::action(
+            "Refresh previews",
+            || false,
+            move || {
+                model.refresh_mini_lyrics();
+                mirror.refresh_mini_lyrics();
+            },
+        ))
+}
+
+fn mini_preview_race() {
+    let dir = protocol::data_dir().unwrap();
+    std::fs::write(dir.join("panel-preferences.json"), "true").unwrap();
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(dir.join(".preferences.lock"))
+        .unwrap();
+    lock.lock().unwrap();
+    let mut app = Headless::start(EngineConfig::new(Root::of::<MiniPreviewRaceScreen>())).unwrap();
+    app.first_render().unwrap();
+    app.press("Toggle preview").unwrap();
+    app.press("Refresh previews").unwrap();
+    assert!(
+        app.shows("mini:false mirror:false"),
+        "A delayed local write must keep the selected preview value across models"
+    );
+    app.press("Toggle preview").unwrap();
+    app.press("Refresh previews").unwrap();
+    assert!(app.shows("mini:true mirror:true"));
+    drop(lock);
+    app.wait(Duration::from_millis(200)).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(dir.join("panel-preferences.json")).unwrap(),
+        "true"
+    );
+}
+
+#[component]
+fn HistoryRaceScreen() -> impl IntoElement {
+    let model = model::Model::new();
+    model.page.set(model::Page::History);
+    model.load();
+    view()
+        .child(text(move || {
+            model.history.with(|rows| {
+                rows.first()
+                    .map(|(_, entry)| entry.track.title.clone())
+                    .unwrap_or_else(|| "Loading history".into())
+            })
+        }))
+        .child(controls::action(
+            "History changed",
+            || false,
+            move || {
+                model.update(protocol::Status {
+                    history_revision: 1,
+                    ..Default::default()
+                })
+            },
+        ))
+}
+
+#[component]
 fn VerifiedSourceScreen() -> impl IntoElement {
     source_browser::sources_view(
         |_| {},
@@ -336,6 +420,72 @@ fn setup_navigation() {
 }
 
 #[component]
+fn CloudSyncScreen() -> impl IntoElement {
+    use protocol::{CloudSyncPhase as Phase, CloudSyncStatus};
+    let status = signal(Some(CloudSyncStatus {
+        enabled: true,
+        phase: Phase::AccountChanged,
+        ..Default::default()
+    }));
+    view().flex_1().child(sources_ui::cloud_sync_content(
+        status,
+        signal(false),
+        signal(String::new()),
+        move |action| {
+            status.set(Some(match action {
+                protocol::CloudSyncAction::SetEnabled { enabled } => CloudSyncStatus {
+                    enabled,
+                    phase: if enabled {
+                        Phase::Waiting
+                    } else {
+                        Phase::Disabled
+                    },
+                    ..Default::default()
+                },
+                protocol::CloudSyncAction::SyncNow => CloudSyncStatus {
+                    enabled: true,
+                    phase: Phase::Syncing,
+                    ..Default::default()
+                },
+            }));
+        },
+    ))
+}
+
+fn cloud_sync_controls() {
+    for language in [
+        protocol::i18n::Language::English,
+        protocol::i18n::Language::SimplifiedChinese,
+    ] {
+        language.save().unwrap();
+        let mut config = EngineConfig::new(Root::of::<CloudSyncScreen>());
+        config.viewport = Size::new(px(440.0), px(600.0));
+        config.environment.window = config.viewport;
+        let mut app = Headless::start(config).unwrap();
+        app.first_render().unwrap();
+        assert!(app.shows(protocol::tr!("iCloud account changed")));
+        assert!(app.shows(protocol::tr!(
+            "Turn sync off and on to use this iCloud account. Your local data will be kept."
+        )));
+        app.press(protocol::tr!("Sync with iCloud")).unwrap();
+        assert!(app.shows(protocol::tr!("Stored on this device")));
+        assert!(
+            app.press(protocol::tr!("Sync now")).is_err(),
+            "Disabled sync cannot be requested"
+        );
+        app.press(protocol::tr!("Sync with iCloud")).unwrap();
+        assert!(app.shows(protocol::tr!("Waiting for iCloud")));
+        app.press(protocol::tr!("Sync now")).unwrap();
+        assert!(app.shows(protocol::tr!("Syncing…")));
+        assert!(
+            app.press(protocol::tr!("Sync now")).is_err(),
+            "An active exchange must not be duplicated"
+        );
+    }
+    protocol::i18n::Language::English.save().unwrap();
+}
+
+#[component]
 fn PlayerEntryScreen() -> impl IntoElement {
     let model = model::Model::new();
     model.status_ready.set(true);
@@ -474,6 +624,8 @@ fn radio_flow() {
     let requests = Arc::new(AtomicUsize::new(0));
     let plays = Arc::new(AtomicUsize::new(0));
     let gate = Arc::new((Mutex::new(false), Condvar::new()));
+    let history_gate = Arc::new((Mutex::new(false), Condvar::new()));
+    let history_requests = Arc::new(AtomicUsize::new(0));
     let listener = std::net::TcpListener::bind(protocol::address()).unwrap();
     std::fs::write(
         protocol::data_dir().unwrap().join("mcp-token"),
@@ -483,12 +635,16 @@ fn radio_flow() {
     let server_requests = requests.clone();
     let server_plays = plays.clone();
     let server_gate = gate.clone();
+    let server_history_gate = history_gate.clone();
+    let server_history_requests = history_requests.clone();
     std::thread::spawn(move || {
         for connection in listener.incoming() {
             let mut socket = connection.unwrap();
             let requests = server_requests.clone();
             let plays = server_plays.clone();
             let gate = server_gate.clone();
+            let history_gate = server_history_gate.clone();
+            let history_requests = server_history_requests.clone();
             std::thread::spawn(move || {
                 socket
                     .set_read_timeout(Some(Duration::from_secs(5)))
@@ -527,7 +683,18 @@ fn radio_flow() {
                 let body = &bytes[header_end..header_end + length];
                 let mut status = "200 OK";
                 let playlist = serde_json::json!({"id":"radio","name":"Radio","revision":1,"tracks":[{"id":1,"title":"Personal fixture song","artist":"Fixture artist","duration":180,"source":{"plugin":"fixture","id":"personal-1"}}],"imported_from":null});
-                let response = if first.starts_with("GET /ui/local-playlists?id=radio") {
+                let response = if first.starts_with("GET /ui/history") {
+                    let at = history_requests.fetch_add(1, Ordering::SeqCst);
+                    if at == 0 {
+                        let (lock, ready) = &*history_gate;
+                        drop(
+                            ready
+                                .wait_while(lock.lock().unwrap(), |released| !*released)
+                                .unwrap(),
+                        );
+                    }
+                    serde_json::json!([{"id":1,"title":if at==0 {"Stale history"} else {"Fresh history"},"artist":"Fixture","duration":90,"played_at_unix":1}])
+                } else if first.starts_with("GET /ui/local-playlists?id=radio") {
                     playlist
                 } else if first.starts_with("GET /ui/local-playlists") {
                     serde_json::json!([])
@@ -638,9 +805,32 @@ fn radio_flow() {
         6,
         "busy controls must not send duplicate requests"
     );
+    let mut history = Headless::start(EngineConfig::new(Root::of::<HistoryRaceScreen>())).unwrap();
+    history.first_render().unwrap();
+    for _ in 0..50 {
+        if history_requests.load(Ordering::SeqCst) == 1 {
+            break;
+        }
+        history.wait(Duration::from_millis(10)).unwrap();
+    }
+    assert_eq!(history_requests.load(Ordering::SeqCst), 1);
+    history.press("History changed").unwrap();
+    *history_gate.0.lock().unwrap() = true;
+    history_gate.1.notify_all();
+    history.wait_for("Fresh history").unwrap();
+    assert_eq!(history_requests.load(Ordering::SeqCst), 2);
 }
 
 fn exercise() {
+    if std::env::var("MUSICX_LOCALIZATION_CASE").as_deref() == Ok("history-race") {
+        radio_flow();
+        return;
+    }
+    if std::env::var("MUSICX_LOCALIZATION_CASE").as_deref() == Ok("mini-race") {
+        mini_preview_race();
+        return;
+    }
+    mini_preview_race();
     let directory = protocol::data_dir().unwrap();
     assert_eq!(
         protocol::i18n::Language::load(),
@@ -717,6 +907,7 @@ fn exercise() {
     source_playback_capability();
     settings_escape();
     setup_navigation();
+    cloud_sync_controls();
     player_entries();
     radio_flow();
     println!(

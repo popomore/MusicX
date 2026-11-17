@@ -79,16 +79,24 @@ enum Loaded {
 }
 
 #[cfg(target_os = "macos")]
+static MINI_LYRICS_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+#[cfg(target_os = "macos")]
+static MINI_LYRICS_SAVED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+#[cfg(target_os = "macos")]
+static MINI_LYRICS_TOGGLE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(target_os = "macos")]
+fn mini_lyrics_disk_preference() -> bool {
+    crate::protocol::data_dir()
+        .and_then(|d| std::fs::read(d.join("panel-preferences.json")).ok())
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or(true)
+}
+
+#[cfg(target_os = "macos")]
 fn mini_lyrics_preference() -> &'static std::sync::atomic::AtomicBool {
     static VALUE: std::sync::OnceLock<std::sync::atomic::AtomicBool> = std::sync::OnceLock::new();
-    VALUE.get_or_init(|| {
-        std::sync::atomic::AtomicBool::new(
-            crate::protocol::data_dir()
-                .and_then(|d| std::fs::read_to_string(d.join("panel-preferences.json")).ok())
-                .and_then(|s| serde_json::from_str::<bool>(&s).ok())
-                .unwrap_or(true),
-        )
-    })
+    VALUE.get_or_init(|| std::sync::atomic::AtomicBool::new(mini_lyrics_disk_preference()))
 }
 
 pub fn key(track: Option<&Track>) -> String {
@@ -224,6 +232,7 @@ impl Model {
         }
         self.jobs.update(|jobs| jobs[slot] = true);
         let requested_key = self.status.with(|s| key(s.track.as_ref()));
+        let requested_history_revision = self.status.with(|s| s.history_revision);
         let (send, receive) = oneshot::channel();
         std::thread::spawn(move || {
             let result = match page {
@@ -253,6 +262,12 @@ impl Model {
                     if self.page.get() == page {
                         self.load();
                     }
+                    return;
+                }
+                if page == Page::History
+                    && self.status.with(|s| s.history_revision) != requested_history_revision
+                {
+                    self.load();
                     return;
                 }
                 match result {
@@ -295,6 +310,7 @@ impl Model {
         Self::slot(self.page.get()).is_some_and(|slot| self.jobs.with(|jobs| jobs[slot]))
     }
     pub fn update(self, status: Status) {
+        let history_changed = self.status.with(|s| s.history_revision) != status.history_revision;
         #[cfg(target_os = "macos")]
         let library_changed = self.status.with(|s| s.library_revision) != status.library_revision;
         #[cfg(target_os = "macos")]
@@ -307,6 +323,9 @@ impl Model {
             self.cover_failed.set(false);
         }
         self.status.set(status);
+        if history_changed && self.page.get() == Page::History {
+            self.load();
+        }
         #[cfg(target_os = "macos")]
         self.status_ready.set(true);
         #[cfg(target_os = "macos")]
@@ -438,7 +457,13 @@ impl Model {
     }
     #[cfg(target_os = "macos")]
     pub fn refresh_mini_lyrics(self) {
-        let value = mini_lyrics_preference().load(std::sync::atomic::Ordering::SeqCst);
+        use std::sync::atomic::Ordering;
+        let _toggle = MINI_LYRICS_TOGGLE.lock().unwrap();
+        if MINI_LYRICS_GENERATION.load(Ordering::SeqCst) == MINI_LYRICS_SAVED.load(Ordering::SeqCst)
+        {
+            mini_lyrics_preference().store(mini_lyrics_disk_preference(), Ordering::SeqCst);
+        }
+        let value = mini_lyrics_preference().load(Ordering::SeqCst);
         if self.show_mini_lyrics.get() != value {
             self.show_mini_lyrics.set(value);
         }
@@ -446,36 +471,28 @@ impl Model {
     #[cfg(target_os = "macos")]
     pub fn toggle_mini_lyrics(self) {
         use std::sync::atomic::Ordering;
-        static TOGGLE: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _toggle = TOGGLE.lock().unwrap();
+        let _toggle = MINI_LYRICS_TOGGLE.lock().unwrap();
         let value = !mini_lyrics_preference().fetch_xor(true, Ordering::SeqCst);
         self.show_mini_lyrics.set(value);
-        static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         static WRITER: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let generation = GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        let generation = MINI_LYRICS_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
         std::thread::spawn(move || {
-            use std::{io::Write, os::unix::fs::OpenOptionsExt};
             let Ok(_guard) = WRITER.lock() else {
                 return;
             };
-            if GENERATION.load(std::sync::atomic::Ordering::SeqCst) != generation {
+            if MINI_LYRICS_GENERATION.load(Ordering::SeqCst) != generation {
                 return;
             }
-            if let Some(dir) = crate::protocol::data_dir() {
-                let temp = dir.join(format!(".panel-preferences.{}", std::process::id()));
-                let result = (|| -> std::io::Result<()> {
-                    let mut f = std::fs::OpenOptions::new()
-                        .write(true)
-                        .create(true)
-                        .truncate(true)
-                        .mode(0o600)
-                        .open(&temp)?;
-                    write!(f, "{value}")?;
-                    std::fs::rename(&temp, dir.join("panel-preferences.json"))
-                })();
-                if result.is_err() {
-                    let _ = std::fs::remove_file(temp);
+            let saved = crate::protocol::preferences::save(
+                "panel-preferences.json",
+                if value { b"true" } else { b"false" },
+            );
+            let _toggle = MINI_LYRICS_TOGGLE.lock().unwrap();
+            if MINI_LYRICS_GENERATION.load(Ordering::SeqCst) == generation {
+                if saved.is_err() {
+                    mini_lyrics_preference().store(mini_lyrics_disk_preference(), Ordering::SeqCst);
                 }
+                MINI_LYRICS_SAVED.store(generation, Ordering::SeqCst);
             }
         });
     }

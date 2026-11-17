@@ -42,4 +42,6 @@ The app is packaged as `MusicX.app` with bundle identifier `local.musicx.iphone`
 
 The app stores account data, playlists, playback history, and its MCP token in the sandbox's `Library/Application Support/MusicX/`. Open **Music Sources** to add a plugin and use its supported sign-in and playlist import actions. **My Playlists** contains local snapshots. There is no default source or provider-specific link/ID playback.
 
+An entitled, signed device build can optionally sync liked songs, playlists, application preferences and playback history through the same iCloud container as the Mac app. Enable **Sync with iCloud** in settings. [iCloud signing, behavior and verification](../../docs/ICLOUD.md)
+
 The Streamable HTTP endpoint listens on the phone's loopback interface at `http://127.0.0.1:45968/mcp`. It uses the device's own bearer token and playback session.

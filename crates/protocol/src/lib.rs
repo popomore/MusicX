@@ -3,6 +3,9 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 pub mod i18n;
+pub mod preferences;
+mod sync;
+pub use sync::*;
 mod sources;
 pub use sources::*;
 mod update_channel;
@@ -285,6 +288,8 @@ pub struct Status {
     pub queue_revision: u64,
     #[serde(default)]
     pub library_revision: u64,
+    #[serde(default)]
+    pub history_revision: u64,
     #[serde(default)]
     pub queue_context: Option<QueueContext>,
     #[serde(default)]

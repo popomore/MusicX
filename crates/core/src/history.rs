@@ -2,11 +2,14 @@ use anyhow::{Context, Result};
 use musicx_protocol::tr;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     fs::{File, OpenOptions},
     io::{BufRead, BufReader, ErrorKind, Read, Seek, SeekFrom, Write},
     os::unix::fs::OpenOptionsExt,
-    sync::Mutex,
+    sync::{
+        Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -16,6 +19,14 @@ use crate::{protocol::Track, storage::state_dir};
 const CHECKPOINT_INTERVAL: Duration = Duration::from_secs(60);
 const FILE: &str = "playback-history.jsonl";
 static HISTORY: Mutex<Option<Active>> = Mutex::new(None);
+static REVISION: AtomicU64 = AtomicU64::new(0);
+
+pub fn revision() -> u64 {
+    REVISION.load(Ordering::Relaxed)
+}
+pub(crate) fn changed() {
+    REVISION.fetch_add(1, Ordering::Relaxed);
+}
 
 pub use crate::protocol::HistoryEntry as Entry;
 
@@ -81,6 +92,7 @@ fn append(value: &impl Serialize) -> Result<u64> {
         }
     }
     file.write_all(&line)?;
+    changed();
     Ok(offset)
 }
 
@@ -126,7 +138,7 @@ fn open() -> Result<Option<File>> {
 }
 
 fn read_recent(mut reader: impl BufRead, limit: usize) -> Result<VecDeque<(u64, Entry)>> {
-    let mut entries = VecDeque::with_capacity(limit);
+    let mut entries = VecDeque::with_capacity(limit.min(100));
     let mut line = Vec::new();
     let mut offset = 0;
     loop {
@@ -176,22 +188,88 @@ pub fn recent(limit: u64) -> Result<Vec<Entry>> {
         let active = HISTORY
             .lock()
             .map_err(|_| anyhow::anyhow!(tr!("Listening history lock unavailable")))?;
-        let Some(file) = open()? else {
-            return Ok(Vec::new());
-        };
-        let len = file.metadata()?.len();
+        let file = open()?;
+        let len = file
+            .as_ref()
+            .map(|f| f.metadata().map(|m| m.len()))
+            .transpose()?
+            .unwrap_or(0);
         (
-            file.take(len),
+            file.map(|file| file.take(len)),
             active.as_ref().map(|a| (a.offset, a.progress)),
         )
     };
-    let mut entries = read_recent(BufReader::new(file), limit.clamp(1, 100) as usize)?;
+    let limit = limit.clamp(1, 100) as usize;
+    let mut entries = match file {
+        Some(file) => read_recent(BufReader::new(file), limit)?,
+        None => VecDeque::new(),
+    };
     if let Some((offset, progress)) = active
         && let Some((_, entry)) = entries.iter_mut().rev().find(|(id, _)| *id == offset)
     {
         entry.progress = progress;
     }
-    Ok(entries.into_iter().rev().map(|(_, entry)| entry).collect())
+    let dir = state_dir()?;
+    let device = std::fs::read_to_string(dir.join("icloud-device")).ok();
+    let mut combined: BTreeMap<String, Entry> =
+        match crate::cloud_sync::read_json(&dir.join(crate::cloud_sync::HISTORY_FILE)) {
+            Ok(rows) => rows.unwrap_or_default(),
+            Err(error) => {
+                crate::cloud_sync::set_phase(
+                    crate::protocol::CloudSyncPhase::Error,
+                    Some(error.to_string()),
+                );
+                BTreeMap::new()
+            }
+        };
+    // Byte offsets distinguish repeated plays even within the same second.
+    for (offset, entry) in entries {
+        let id = device.as_ref().map_or_else(
+            || format!("local/{offset:020}"),
+            |device| format!("{device}/{offset:020}"),
+        );
+        combined.insert(id, entry);
+    }
+    let mut entries: Vec<_> = combined.into_iter().collect();
+    entries.sort_by(|a, b| {
+        b.1.played_at_unix
+            .cmp(&a.1.played_at_unix)
+            .then_with(|| b.0.cmp(&a.0))
+    });
+    Ok(entries
+        .into_iter()
+        .take(limit)
+        .map(|(_, entry)| entry)
+        .collect())
+}
+
+/// Only this device's append-only log is exported; received history never gets
+/// a new local identity. The active play's progress overlays its latest checkpoint.
+pub(crate) fn sync_entries(device: &str) -> Result<BTreeMap<String, Entry>> {
+    let (file, len, active) = {
+        let active = HISTORY
+            .lock()
+            .map_err(|_| anyhow::anyhow!(tr!("Listening history lock unavailable")))?;
+        let Some(file) = open()? else {
+            return Ok(BTreeMap::new());
+        };
+        let len = file.metadata()?.len();
+        (file, len, active.as_ref().map(|a| (a.offset, a.progress)))
+    };
+    anyhow::ensure!(
+        len <= crate::cloud_sync::MAX_BYTES,
+        "Listening history is too large to sync"
+    );
+    let mut entries = read_recent(BufReader::new(file.take(len)), usize::MAX)?;
+    if let Some((offset, progress)) = active
+        && let Some((_, entry)) = entries.iter_mut().find(|(id, _)| *id == offset)
+    {
+        entry.progress = progress;
+    }
+    Ok(entries
+        .into_iter()
+        .map(|(offset, entry)| (format!("{device}/{offset:020}"), entry))
+        .collect())
 }
 
 #[cfg(test)]
