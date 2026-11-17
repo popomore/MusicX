@@ -67,6 +67,15 @@ test('preview increments, stable accumulates, and maintenance stays isolated', a
   assert.equal(stable.nextRelease.version, '1.1.0');
   assert.match(stable.nextRelease.notes, /gapless playback/);
   assert.match(stable.nextRelease.notes, /queue after pause/);
+  git('checkout', 'main');
+  git('merge', '--no-ff', 'release', '-m', 'chore(release): synchronize the stable tag into main');
+  const sync = await release();
+  assert.ok(!sync || !sync.nextRelease);
+  commit('feat(player): add radio playback');
+  const nextCycle = await release();
+  assert.equal(nextCycle.nextRelease.version, '1.2.0-preview.1');
+  assert.match(nextCycle.nextRelease.notes, /radio playback/);
+  assert.doesNotMatch(nextCycle.nextRelease.notes, /gapless playback/);
   git('checkout', '-b', '1.0.x', 'v1.0.0');
   commit('fix(player): repair playback on the maintenance line');
   const maintenance = await release('1.0.x');
