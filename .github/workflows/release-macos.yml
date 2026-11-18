@@ -93,6 +93,7 @@ jobs:
     env:
       SOURCE_SHA: ${{ needs.plan.outputs.source-sha }}
       RELEASE_BRANCH: ${{ needs.plan.outputs.branch }}
+      NOTARY_RECEIPT: target/notary-input/submission.json
     defaults:
       run:
         shell: bash
@@ -117,6 +118,20 @@ jobs:
         with:
           artifact-ids: ${{ steps.saved.outputs.id }}
           path: target/distribution
+      - name: Find the original notarization input
+        if: steps.saved.outputs.exists != 'true' && needs.plan.outputs.channel == 'stable'
+        id: notary_input
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/find-release-artifact.py musicx-macos-notary-input
+      - if: steps.notary_input.outputs.exists == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          artifact-ids: ${{ steps.notary_input.outputs.id }}
+          path: target
+      - name: Verify the original notarization input
+        if: steps.notary_input.outputs.exists == 'true'
+        run: python3 scripts/notarize-macos.py verify "$DMG"
       - name: Refuse to rebuild an existing tag
         if: steps.saved.outputs.exists != 'true'
         run: |
@@ -125,10 +140,10 @@ jobs:
             exit 1
           }
       - name: Install Rust
-        if: steps.saved.outputs.exists != 'true'
+        if: steps.saved.outputs.exists != 'true' && steps.notary_input.outputs.exists != 'true'
         run: rustup toolchain install --no-self-update
       - name: Require production signing
-        if: steps.saved.outputs.exists != 'true' && needs.plan.outputs.channel == 'stable'
+        if: steps.saved.outputs.exists != 'true' && steps.notary_input.outputs.exists != 'true' && needs.plan.outputs.channel == 'stable'
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -138,7 +153,7 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: bash scripts/select-macos-signing.sh
       - name: Import Developer ID certificate
-        if: steps.saved.outputs.exists != 'true' && needs.plan.outputs.channel == 'stable'
+        if: steps.saved.outputs.exists != 'true' && steps.notary_input.outputs.exists != 'true' && needs.plan.outputs.channel == 'stable'
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -146,33 +161,47 @@ jobs:
         run: python3 scripts/import-release-signing.py developer-id
       # No PR caches or artifacts are restored in credential-bearing jobs.
       - name: Package Apple Silicon DMG
-        if: steps.saved.outputs.exists != 'true'
+        if: steps.saved.outputs.exists != 'true' && steps.notary_input.outputs.exists != 'true'
         env:
           MUSICX_SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
         run: |
           test "$(uname -m)" = arm64
           : "${MUSICX_SPARKLE_PUBLIC_KEY:?Configure the Sparkle public key variable}"
           sh scripts/package-macos.sh "$DMG"
-          hdiutil verify -quiet "$DMG"
-      - name: Notarize and staple the DMG
+          hdiutil verify "$DMG"
+      - name: Submit notarization and record the original input
+        if: steps.saved.outputs.exists != 'true' && steps.notary_input.outputs.exists != 'true' && needs.plan.outputs.channel == 'stable'
+        env:
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: python3 scripts/notarize-macos.py submit "$DMG"
+      - name: Preserve the signed notarization input before waiting
+        if: steps.saved.outputs.exists != 'true' && steps.notary_input.outputs.exists != 'true' && needs.plan.outputs.channel == 'stable'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: musicx-macos-notary-input
+          path: |
+            ${{ env.DMG }}
+            ${{ env.NOTARY_RECEIPT }}
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 90
+      - name: Wait for the original notarization and staple the DMG
         if: steps.saved.outputs.exists != 'true' && needs.plan.outputs.channel == 'stable'
         env:
           APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-        run: |
-          umask 077
-          notary_dir=$(mktemp -d "$RUNNER_TEMP/musicx-notary.XXXXXX")
-          trap 'rm -rf "$notary_dir"' EXIT
-          printf '%s\n' "$APPLE_API_PRIVATE_KEY" > "$notary_dir/key.p8"
-          codesign --verify --strict "$DMG"
-          xcrun notarytool submit "$DMG" \
-            --key "$notary_dir/key.p8" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER" \
-            --wait --timeout 20m --output-format json > "$notary_dir/result.json"
-          jq -er '.status' "$notary_dir/result.json"
-          jq -e '.status == "Accepted"' "$notary_dir/result.json" > /dev/null
-          xcrun stapler staple "$DMG"
-          xcrun stapler validate "$DMG"
+        run: python3 scripts/notarize-macos.py wait "$DMG"
+      - name: Preserve notarization status
+        if: always() && steps.saved.outputs.exists != 'true' && needs.plan.outputs.channel == 'stable'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: notary-status-${{ github.run_attempt }}
+          path: target/notary-input/status.json
+          if-no-files-found: warn
+          retention-days: 90
       - name: Write checksum and signed automatic update feeds
         if: steps.saved.outputs.exists != 'true'
         env:
