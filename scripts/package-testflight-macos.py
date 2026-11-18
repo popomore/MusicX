@@ -154,7 +154,9 @@ def main():
                 if info["CFBundleIdentifier"] not in (args.bundle_id, args.bundle_id + ".playback"):
                     raise SystemExit("The packaged executable has a different application identity")
                 info.update(CFBundleIdentifier=args.bundle_id, CFBundleName=env["MUSICX_BUILD_APP_NAME"],
-                            CFBundleDisplayName=env["MUSICX_BUILD_APP_NAME"], LSApplicationCategoryType="public.app-category.music")
+                            CFBundleDisplayName=env["MUSICX_BUILD_APP_NAME"], LSApplicationCategoryType="public.app-category.music",
+                            # Carry the owner's confirmed declaration in the signed bundle.
+                            ITSAppUsesNonExemptEncryption=False)
                 if any(key.startswith("SU") for key in info) or (bundle / "Contents/Frameworks/Sparkle.framework").exists():
                     raise SystemExit("App Store builds must not include Sparkle")
             path.write_bytes(plistlib.dumps(info))
