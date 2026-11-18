@@ -1,0 +1,14 @@
+{
+  "name": "musicx-release-tools",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "engines": { "node": ">=26.13.0" },
+  "scripts": { "test": "node --test scripts/semantic-release/*.test.mjs" },
+  "devDependencies": {
+    "semantic-release": "26.0.1",
+    "@semantic-release/commit-analyzer": "13.0.1",
+    "@semantic-release/release-notes-generator": "14.1.1",
+    "conventional-changelog-conventionalcommits": "9.3.1"
+  }
+}

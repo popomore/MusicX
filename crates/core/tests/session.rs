@@ -6,7 +6,7 @@ use musicx_core::{
         AlbumPage, AudioQuality, HistoryProgress, Quality, QueueContext, Status, Track, TrackInfo,
     },
 };
-use musicx_plugin_api::{DataSource, Media};
+use musicx_plugin::{DataSource, Media};
 use std::{
     cell::Cell,
     process::Command,
@@ -20,9 +20,17 @@ use std::{
 
 static MESSAGES: OnceLock<mpsc::Sender<Message>> = OnceLock::new();
 static LOADS: AtomicUsize = AtomicUsize::new(0);
+static RESOLVES: AtomicUsize = AtomicUsize::new(0);
+static PAUSES: AtomicUsize = AtomicUsize::new(0);
 static FAIL_RESOLVE: AtomicBool = AtomicBool::new(false);
 static FAIL_LOAD: AtomicBool = AtomicBool::new(false);
+static NATIVE_AUDIO_ERROR: AtomicBool = AtomicBool::new(false);
+static NATIVE_AUDIO_ENDED: AtomicBool = AtomicBool::new(false);
+static NATIVE_DURATION: AtomicU64 = AtomicU64::new(180.0_f64.to_bits());
 static PLAYBACK_ELAPSED: AtomicU64 = AtomicU64::new(0);
+static STATION_BATCH: AtomicU64 = AtomicU64::new(10);
+static FAIL_TRACK: AtomicU64 = AtomicU64::new(0);
+static EXTRA_STATION_TRACK: AtomicBool = AtomicBool::new(false);
 
 fn dispatch(message: Message) {
     MESSAGES.get().unwrap().send(message).unwrap();
@@ -31,8 +39,22 @@ fn dispatch(message: Message) {
 struct Source;
 static SOURCE: Source = Source;
 impl DataSource for Source {
+    fn station_next(&self, source: &str, id: &str) -> Result<Vec<Track>> {
+        assert_eq!(source, "mygo:station-fixture");
+        assert_eq!(id, "fm");
+        let id = STATION_BATCH.fetch_add(1, Ordering::Relaxed);
+        let mut tracks = vec![track(id)];
+        if EXTRA_STATION_TRACK.load(Ordering::Relaxed) {
+            tracks.push(track(id + 1));
+        }
+        Ok(tracks)
+    }
     fn resolve(&self, track: Track, _: Quality) -> Result<Media> {
-        if FAIL_RESOLVE.load(Ordering::Relaxed) {
+        RESOLVES.fetch_add(1, Ordering::Relaxed);
+        if FAIL_RESOLVE.load(Ordering::Relaxed)
+            || (FAIL_TRACK.load(Ordering::Relaxed) != 0
+                && FAIL_TRACK.load(Ordering::Relaxed) == track.id)
+        {
             bail!("offline");
         }
         Ok(media(track))
@@ -56,6 +78,9 @@ impl AudioOutput for Audio {
         if FAIL_LOAD.load(Ordering::Relaxed) {
             bail!("audio load failed");
         }
+        NATIVE_AUDIO_ERROR.store(false, Ordering::Relaxed);
+        NATIVE_AUDIO_ENDED.store(false, Ordering::Relaxed);
+        NATIVE_DURATION.store(180.0_f64.to_bits(), Ordering::Relaxed);
         PLAYBACK_ELAPSED.store(0, Ordering::Relaxed);
         *output = Some(Self {
             position: Cell::new(0.0),
@@ -68,14 +93,18 @@ impl AudioOutput for Audio {
         AudioSnapshot {
             position: self.position.get()
                 + f64::from_bits(PLAYBACK_ELAPSED.load(Ordering::Relaxed)),
-            duration: Some(180.0),
-            state: if self.playing.get() {
+            duration: Some(f64::from_bits(NATIVE_DURATION.load(Ordering::Relaxed))),
+            state: if NATIVE_AUDIO_ENDED.load(Ordering::Relaxed) {
+                AudioState::Ended
+            } else if self.playing.get() {
                 AudioState::Playing
             } else {
                 AudioState::Paused
             },
             volume: self.volume.get(),
-            error: None,
+            error: NATIVE_AUDIO_ERROR
+                .load(Ordering::Relaxed)
+                .then(|| "native item failed".into()),
         }
     }
     fn prepare_resume(&self) -> Result<()> {
@@ -85,12 +114,14 @@ impl AudioOutput for Audio {
         self.playing.set(true);
     }
     fn pause(&self) {
+        PAUSES.fetch_add(1, Ordering::Relaxed);
         self.playing.set(false);
     }
     fn set_volume(&self, volume: f32) {
         self.volume.set(volume);
     }
     fn seek(&self, seconds: f64, complete: impl Fn(bool) + Send + 'static) {
+        NATIVE_AUDIO_ENDED.store(false, Ordering::Relaxed);
         PLAYBACK_ELAPSED.store(0, Ordering::Relaxed);
         self.position.set(seconds);
         complete(true);
@@ -119,6 +150,7 @@ fn media(track: Track) -> Media {
             .parse()
             .unwrap(),
         user_agent: Some("private-agent".into()),
+        uses_http: false,
         quality: AudioQuality::default(),
         gain_db: None,
         peak: None,
@@ -156,6 +188,17 @@ fn command(player: &mut Player<Audio>, action: Action) -> Result<Status> {
     reply.blocking_recv().unwrap()
 }
 
+fn resolve_command(
+    player: &mut Player<Audio>,
+    action: Action,
+    messages: &mpsc::Receiver<Message>,
+) -> Result<Status> {
+    let (send, reply) = tokio::sync::oneshot::channel();
+    player.handle(Message::Action(action, Some(send)));
+    player.handle(messages.recv_timeout(Duration::from_secs(2)).unwrap());
+    reply.blocking_recv().unwrap()
+}
+
 fn run_worker(directory: &std::path::Path, phase: &str) {
     let output = Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "session_worker", "--nocapture"])
@@ -181,6 +224,51 @@ fn run_scenario(phases: &[&str]) {
         run_worker(&directory, phase);
     }
     std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn radio_refills_retry_unavailable_tracks_and_reconcile_enqueued_successors() {
+    for phase in [
+        "radio_refill_retry",
+        "radio_refill_enqueue",
+        "radio_refill_seek",
+    ] {
+        run_scenario(&[phase]);
+    }
+}
+
+#[test]
+fn radio_refills_and_discards_results_after_pause_or_a_new_queue() {
+    run_scenario(&["radio"]);
+}
+
+#[test]
+fn native_end_advances_the_queue_even_when_duration_is_inaccurate() {
+    for phase in [
+        "native_end",
+        "native_end_display",
+        "native_end_status",
+        "native_end_unknown",
+    ] {
+        run_scenario(&[phase]);
+    }
+}
+
+#[test]
+fn pause_and_seek_take_priority_over_native_end_and_pending_advance() {
+    for phase in [
+        "native_end_pause",
+        "native_end_seek",
+        "native_end_pending_pause",
+        "native_end_pending_seek",
+    ] {
+        run_scenario(&[phase]);
+    }
+}
+
+#[test]
+fn http_audio_indicator_follows_the_loaded_source() {
+    run_scenario(&["http_transport"]);
 }
 
 #[test]
@@ -211,6 +299,30 @@ fn tick_checkpoints_natural_playback_progress() {
 #[test]
 fn display_status_checkpoints_natural_playback_progress() {
     run_scenario(&["periodic_display"]);
+}
+
+#[test]
+fn selection_is_visible_before_resolution_and_keeps_failed_track_for_retry() {
+    run_scenario(&["select_resolve_failure"]);
+    run_scenario(&["select_load_failure"]);
+    run_scenario(&["list_resolve_failure"]);
+    run_scenario(&["track_resolve_failure"]);
+}
+
+#[test]
+fn pause_and_seek_during_selection_apply_to_the_new_track() {
+    run_scenario(&["select_pause"]);
+}
+
+#[test]
+fn failed_native_items_resolve_again_on_resume_and_toggle() {
+    for phase in [
+        "native_retry_resume",
+        "native_retry_toggle",
+        "native_retry_offline",
+    ] {
+        run_scenario(&[phase]);
+    }
 }
 
 #[test]
@@ -356,6 +468,470 @@ fn session_worker() {
     let mut player = Player::<Audio>::new(dispatch, &SOURCE);
     let action = |player: &mut Player<Audio>, action| player.handle(Message::Action(action, None));
     match phase.as_str() {
+        "radio_refill_retry" | "radio_refill_enqueue" | "radio_refill_seek" => {
+            resolve_command(
+                &mut player,
+                Action::ReplaceQueue {
+                    tracks: vec![track(1)],
+                    index: 0,
+                    context: QueueContext::Station {
+                        source: "mygo:station-fixture".into(),
+                        id: "fm".into(),
+                        name: "FM".into(),
+                    },
+                },
+                &receive,
+            )
+            .unwrap();
+            if phase == "radio_refill_retry" {
+                FAIL_TRACK.store(10, Ordering::Relaxed);
+                EXTRA_STATION_TRACK.store(true, Ordering::Relaxed);
+            }
+            NATIVE_AUDIO_ENDED.store(true, Ordering::Relaxed);
+            player.tick();
+            let ready = receive.recv_timeout(Duration::from_secs(2)).unwrap();
+            if phase == "radio_refill_enqueue" {
+                command(&mut player, Action::Enqueue(media(track(99)))).unwrap();
+                player.handle(ready);
+                player.tick();
+                assert!(
+                    player.status().switching,
+                    "discarding a stale refill must re-arm the enqueued successor"
+                );
+                player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+                assert_eq!(player.status().track.unwrap().id, 99);
+            } else if phase == "radio_refill_seek" {
+                player.handle(ready);
+                assert!(player.status().switching);
+                action(
+                    &mut player,
+                    Action::Seek {
+                        seconds: 42.0,
+                        track_key: None,
+                    },
+                );
+                player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+                assert_eq!(player.status().position, 42.0);
+                assert!(player.status().state == State::Playing);
+            } else {
+                player.handle(ready);
+                player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+                assert!(
+                    player.status().switching,
+                    "a failed first FM track must retry the next candidate"
+                );
+                player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+                assert_eq!(player.status().track.unwrap().id, 11);
+            }
+        }
+        "radio" => {
+            let context = QueueContext::Station {
+                source: "mygo:station-fixture".into(),
+                id: "fm".into(),
+                name: "FM".into(),
+            };
+            resolve_command(
+                &mut player,
+                Action::ReplaceQueue {
+                    tracks: vec![track(1)],
+                    index: 0,
+                    context: context.clone(),
+                },
+                &receive,
+            )
+            .unwrap();
+            // The native end notification wins over an inaccurate final timestamp.
+            PLAYBACK_ELAPSED.store(1.0_f64.to_bits(), Ordering::Relaxed);
+            NATIVE_AUDIO_ENDED.store(true, Ordering::Relaxed);
+            command(&mut player, Action::DisplayStatus).unwrap();
+            player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+            player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+            assert_eq!(player.status().track.as_ref().unwrap().id, 10);
+            assert_eq!(player.status().queue.len(), 2);
+            let (send, reply) = tokio::sync::oneshot::channel();
+            player.handle(Message::Action(Action::Next, Some(send)));
+            let late = receive.recv_timeout(Duration::from_secs(2)).unwrap();
+            command(&mut player, Action::Pause).unwrap();
+            command(&mut player, Action::Resume).unwrap();
+            player.handle(late);
+            assert!(reply.blocking_recv().unwrap().is_err());
+            assert_eq!(
+                player.status().track.as_ref().unwrap().id,
+                10,
+                "pause cancels the old radio batch even after resume"
+            );
+            let (send, reply) = tokio::sync::oneshot::channel();
+            player.handle(Message::Action(Action::Next, Some(send)));
+            let late = receive.recv_timeout(Duration::from_secs(2)).unwrap();
+            resolve_command(
+                &mut player,
+                Action::ReplaceQueue {
+                    tracks: vec![track(99)],
+                    index: 0,
+                    context: QueueContext::History,
+                },
+                &receive,
+            )
+            .unwrap();
+            player.handle(late);
+            assert!(reply.blocking_recv().unwrap().is_err());
+            assert_eq!(
+                player.status().track.as_ref().unwrap().id,
+                99,
+                "a late radio result cannot replace another queue"
+            );
+            assert!(
+                player.status().error.is_none(),
+                "a cancelled station request must not add an error to another queue"
+            );
+        }
+        "native_end" | "native_end_display" | "native_end_status" | "native_end_unknown" => {
+            let mut first = track(1);
+            if phase == "native_end_unknown" {
+                first.duration = 0.0;
+            }
+            command(&mut player, Action::Play(media(first))).unwrap();
+            command(&mut player, Action::Enqueue(media(track(2)))).unwrap();
+            if phase == "native_end_unknown" {
+                NATIVE_DURATION.store(f64::NAN.to_bits(), Ordering::Relaxed);
+            }
+            PLAYBACK_ELAPSED.store(1.0_f64.to_bits(), Ordering::Relaxed);
+            player.tick();
+            // A native end signal is authoritative even when the final timestamp
+            // falls short of the duration reported by the media container.
+            PLAYBACK_ELAPSED.store(179.5_f64.to_bits(), Ordering::Relaxed);
+            NATIVE_AUDIO_ENDED.store(true, Ordering::Relaxed);
+            match phase.as_str() {
+                "native_end_display" => {
+                    command(&mut player, Action::DisplayStatus).unwrap();
+                }
+                "native_end_status" => {
+                    command(&mut player, Action::Status).unwrap();
+                }
+                _ => {
+                    player.tick();
+                }
+            }
+            assert!(
+                player.status().switching,
+                "a completed native item must resolve the next queued track"
+            );
+            // Polling again while resolution is pending must not skip a track
+            // or start a second request for the same end notification.
+            player.tick();
+            command(&mut player, Action::DisplayStatus).unwrap();
+            player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+            let status = player.status();
+            assert_eq!(status.index, Some(1));
+            assert_eq!(status.track.as_ref().map(|track| track.id), Some(2));
+            assert!(status.state == State::Playing);
+            let history = musicx_core::history::recent(2).unwrap();
+            assert!(
+                history
+                    .iter()
+                    .find(|entry| entry.track.id == 1)
+                    .unwrap()
+                    .progress
+                    .unwrap()
+                    .completed
+            );
+            // Replacement clears the previous item's end signal. The final
+            // track may end repeatedly without starting another resolution.
+            player.tick();
+            assert!(player.status().state == State::Playing);
+            PLAYBACK_ELAPSED.store(179.5_f64.to_bits(), Ordering::Relaxed);
+            NATIVE_AUDIO_ENDED.store(true, Ordering::Relaxed);
+            player.tick();
+            player.tick();
+            assert!(player.status().state == State::Ended && !player.status().switching);
+            assert!(receive.try_recv().is_err());
+            assert_eq!(RESOLVES.load(Ordering::Relaxed), 1);
+            assert_eq!(LOADS.load(Ordering::Relaxed), 2);
+        }
+        "native_end_pause"
+        | "native_end_seek"
+        | "native_end_pending_pause"
+        | "native_end_pending_seek" => {
+            command(&mut player, Action::Play(media(track(1)))).unwrap();
+            command(&mut player, Action::Enqueue(media(track(2)))).unwrap();
+            PLAYBACK_ELAPSED.store(179.5_f64.to_bits(), Ordering::Relaxed);
+            NATIVE_AUDIO_ENDED.store(true, Ordering::Relaxed);
+            let pending = phase.contains("pending");
+            if pending {
+                player.tick();
+                assert!(player.status().switching);
+            }
+            let pause = phase.ends_with("pause");
+            command(
+                &mut player,
+                if pause {
+                    Action::Pause
+                } else {
+                    Action::Seek {
+                        seconds: 42.0,
+                        track_key: None,
+                    }
+                },
+            )
+            .unwrap();
+            for _ in 0..usize::from(pending) + usize::from(!pause) {
+                player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+            }
+            player.tick();
+            assert_eq!(player.status().index, Some(0));
+            assert!(!player.status().switching);
+            assert_eq!(LOADS.load(Ordering::Relaxed), 1);
+            if pause {
+                assert!(player.status().state == State::Paused);
+                command(&mut player, Action::Resume).unwrap();
+                player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+                assert_eq!(player.status().position, 0.0);
+            } else {
+                assert_eq!(player.status().position, 42.0);
+            }
+            assert!(player.status().state == State::Playing);
+            // Replaying or rewinding must re-arm automatic advancement.
+            PLAYBACK_ELAPSED.store(179.5_f64.to_bits(), Ordering::Relaxed);
+            NATIVE_AUDIO_ENDED.store(true, Ordering::Relaxed);
+            player.tick();
+            assert!(player.status().switching);
+            player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+            assert_eq!(player.status().index, Some(1));
+            assert!(player.status().state == State::Playing);
+        }
+        "native_retry_resume" | "native_retry_toggle" | "native_retry_offline" => {
+            let lease = Arc::new(());
+            let weak = Arc::downgrade(&lease);
+            let mut initial = media(track(1));
+            initial.lease = Some(lease);
+            command(&mut player, Action::Play(initial)).unwrap();
+            command(&mut player, Action::Pause).unwrap();
+            command(&mut player, Action::Resume).unwrap();
+            assert_eq!(LOADS.load(Ordering::Relaxed), 1);
+            assert_eq!(RESOLVES.load(Ordering::Relaxed), 0);
+            command(
+                &mut player,
+                Action::Seek {
+                    seconds: 42.0,
+                    track_key: None,
+                },
+            )
+            .unwrap();
+            player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+            player.tick();
+            NATIVE_AUDIO_ERROR.store(true, Ordering::Relaxed);
+            assert!(player.status().state == State::Error);
+            FAIL_RESOLVE.store(phase == "native_retry_offline", Ordering::Relaxed);
+            let (send, reply) = tokio::sync::oneshot::channel();
+            player.handle(Message::Action(
+                if phase == "native_retry_toggle" {
+                    Action::Toggle
+                } else {
+                    Action::Resume
+                },
+                Some(send),
+            ));
+            let loading = player.status();
+            assert!(
+                loading.state == State::Loading && loading.switching,
+                "retry must resolve new media instead of playing a failed native item"
+            );
+            assert_eq!(loading.track.as_ref().map(|t| t.id), Some(1));
+            assert_eq!(loading.position, 42.0);
+            assert!(loading.audio_quality.is_none() && loading.error.is_none());
+            assert!(
+                weak.upgrade().is_none(),
+                "retry must release the failed item's lease"
+            );
+            player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+            let result = reply.blocking_recv().unwrap();
+            let resumed = if phase == "native_retry_offline" {
+                assert!(result.is_err());
+                assert_eq!(player.status().position, 42.0);
+                FAIL_RESOLVE.store(false, Ordering::Relaxed);
+                resolve_command(&mut player, Action::Resume, &receive).unwrap()
+            } else {
+                result.unwrap()
+            };
+            assert!(resumed.state == State::Playing && resumed.error.is_none());
+            assert_eq!(resumed.track.as_ref().map(|t| t.id), Some(1));
+            assert_eq!(resumed.position, 42.0);
+            assert_eq!(LOADS.load(Ordering::Relaxed), 2);
+            assert_eq!(
+                RESOLVES.load(Ordering::Relaxed),
+                if phase == "native_retry_offline" {
+                    2
+                } else {
+                    1
+                }
+            );
+            player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+            PLAYBACK_ELAPSED.store(1.0_f64.to_bits(), Ordering::Relaxed);
+            player.tick();
+            let history = musicx_core::history::recent(10).unwrap();
+            assert_eq!(
+                history.len(),
+                1,
+                "retry must keep the existing history entry"
+            );
+            assert_eq!(history[0].progress.unwrap().position, 43.0);
+        }
+        "select_resolve_failure"
+        | "select_load_failure"
+        | "list_resolve_failure"
+        | "track_resolve_failure"
+        | "select_pause" => {
+            resolve_command(
+                &mut player,
+                Action::ReplaceQueue {
+                    tracks: vec![track(1), track(2)],
+                    index: 0,
+                    context: QueueContext::History,
+                },
+                &receive,
+            )
+            .unwrap();
+            command(
+                &mut player,
+                Action::Seek {
+                    seconds: 42.0,
+                    track_key: None,
+                },
+            )
+            .unwrap();
+            player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+            player.tick();
+            FAIL_RESOLVE.store(phase.ends_with("resolve_failure"), Ordering::Relaxed);
+            FAIL_LOAD.store(phase == "select_load_failure", Ordering::Relaxed);
+            let selection = match phase.as_str() {
+                "list_resolve_failure" => Action::ReplaceQueue {
+                    tracks: vec![track(2), track(3)],
+                    index: 0,
+                    context: QueueContext::LocalPlaylist {
+                        id: "new-list".into(),
+                        name: "New list".into(),
+                    },
+                },
+                "track_resolve_failure" => Action::PlayTrack(track(2)),
+                _ => Action::Select {
+                    index: 1,
+                    revision: player.status().queue_revision,
+                },
+            };
+            let pauses = PAUSES.load(Ordering::Relaxed);
+            let (send, reply) = tokio::sync::oneshot::channel();
+            player.handle(Message::Action(selection, Some(send)));
+            let loading = player.status();
+            assert_eq!(
+                loading.track.as_ref().map(|t| t.id),
+                Some(2),
+                "the selected track must be visible before resolving its audio"
+            );
+            assert!(loading.state == State::Loading && loading.switching);
+            assert_eq!(loading.position, 0.0);
+            assert!(loading.audio_quality.is_none() && loading.error.is_none());
+            assert_eq!(PAUSES.load(Ordering::Relaxed), pauses + 1);
+            let saved: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(
+                    musicx_core::protocol::data_dir()
+                        .unwrap()
+                        .join("playback-session.json"),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                saved["queue"][saved["index"].as_u64().unwrap() as usize]["id"],
+                2
+            );
+            assert_eq!(saved["position"], 0.0);
+            if phase == "select_pause" {
+                command(&mut player, Action::Pause).unwrap();
+                command(
+                    &mut player,
+                    Action::Seek {
+                        seconds: 17.0,
+                        track_key: None,
+                    },
+                )
+                .unwrap();
+                player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+                let paused = reply.blocking_recv().unwrap().unwrap();
+                assert!(paused.state == State::Paused && !paused.switching);
+                assert!(paused.error.is_none());
+                assert_eq!(paused.track.as_ref().map(|t| t.id), Some(2));
+                assert_eq!(paused.position, 17.0);
+                player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+                let resumed = command(&mut player, Action::Resume).unwrap();
+                assert!(resumed.state == State::Playing);
+                return;
+            }
+            player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+            assert!(reply.blocking_recv().unwrap().is_err());
+            let failed = player.status();
+            assert_eq!(failed.track.as_ref().map(|t| t.id), Some(2));
+            assert!(failed.state == State::Paused && !failed.switching);
+            assert_eq!(failed.position, 0.0);
+            assert!(failed.audio_quality.is_none());
+            assert_eq!(
+                failed.error.as_deref(),
+                Some(if phase.ends_with("resolve_failure") {
+                    "offline"
+                } else {
+                    "audio load failed"
+                })
+            );
+            let history = musicx_core::history::recent(10).unwrap();
+            assert_eq!(history.len(), 1);
+            assert_eq!(history[0].track.id, 1);
+            assert_eq!(history[0].progress.unwrap().position, 42.0);
+            FAIL_RESOLVE.store(false, Ordering::Relaxed);
+            FAIL_LOAD.store(false, Ordering::Relaxed);
+            let (send, reply) = tokio::sync::oneshot::channel();
+            player.handle(Message::Action(Action::Resume, Some(send)));
+            assert!(player.status().state == State::Loading);
+            player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+            let resumed = reply.blocking_recv().unwrap().unwrap();
+            assert_eq!(resumed.track.as_ref().map(|t| t.id), Some(2));
+            assert!(resumed.state == State::Playing && resumed.error.is_none());
+            player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+        }
+        "http_transport" => {
+            let mut http = media(track(1));
+            http.uses_http = true;
+            http.url = "http://127.0.0.1/audio".parse().unwrap();
+            assert!(
+                command(&mut player, Action::Play(http.clone()))
+                    .unwrap()
+                    .audio_uses_http
+            );
+            command(&mut player, Action::Enqueue(media(track(2)))).unwrap();
+            assert!(player.status().audio_uses_http);
+
+            let mut https_proxy = media(track(2));
+            https_proxy.url = "http://127.0.0.1/private-https-audio".parse().unwrap();
+            FAIL_LOAD.store(true, Ordering::Relaxed);
+            assert!(command(&mut player, Action::Play(https_proxy.clone())).is_err());
+            assert!(player.status().audio_uses_http);
+            FAIL_LOAD.store(false, Ordering::Relaxed);
+            assert!(
+                !command(&mut player, Action::Play(https_proxy))
+                    .unwrap()
+                    .audio_uses_http
+            );
+
+            command(&mut player, Action::Play(http)).unwrap();
+            FAIL_RESOLVE.store(true, Ordering::Relaxed);
+            let (send, reply) = tokio::sync::oneshot::channel();
+            player.handle(Message::Action(Action::PlayTrack(track(3)), Some(send)));
+            assert!(
+                !player.status().audio_uses_http,
+                "a pending selection must clear the old indicator"
+            );
+            player.handle(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+            assert!(reply.blocking_recv().unwrap().is_err());
+            assert!(!player.status().audio_uses_http);
+        }
         "media_lease" => {
             let lease = Arc::new(());
             let weak = Arc::downgrade(&lease);
@@ -397,15 +973,16 @@ fn session_worker() {
             );
         }
         "save" => {
-            action(
+            resolve_command(
                 &mut player,
                 Action::ReplaceQueue {
                     tracks: vec![track(1), track(2)],
                     index: 1,
                     context: QueueContext::History,
-                    media: media(track(2)),
                 },
-            );
+                &receive,
+            )
+            .unwrap();
             action(
                 &mut player,
                 Action::Seek {
@@ -574,14 +1151,14 @@ fn session_worker() {
             assert_eq!(status.volume, 0.8);
         }
         "queue_limit" => {
-            command(
+            resolve_command(
                 &mut player,
                 Action::ReplaceQueue {
                     tracks: (1..=9_998).map(track).collect(),
                     index: 0,
                     context: QueueContext::History,
-                    media: media(track(1)),
                 },
+                &receive,
             )
             .unwrap();
             command(&mut player, Action::Play(media(track(10_001)))).unwrap();

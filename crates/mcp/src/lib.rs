@@ -1,4 +1,5 @@
 //! Streamable HTTP MCP and authenticated panel routes.
+use musicx_core::protocol::tr;
 mod local_library_ui;
 mod source_ui;
 
@@ -29,20 +30,19 @@ use musicx_core::{
     player::{Action, Reply, Status},
     storage,
 };
-use musicx_plugin_api::DataSource;
-use musicx_plugins::{music_sources, mygo};
+use musicx_plugin::PluginSource;
 use musicx_protocol::{self as protocol, address};
 
 #[derive(Clone, Copy)]
 pub struct Services {
     pub submit: fn(Action, Reply),
     pub quit: fn(),
-    pub sources: &'static dyn DataSource,
+    pub sources: &'static dyn PluginSource,
 }
 
 pub fn read_token() -> Result<String> {
     fs::read_to_string(storage::state_dir()?.join("mcp-token"))
-        .context("请先启动播放器，再运行 musicx mcp-token")
+        .context(tr!("Start the player before running musicx mcp-token"))
 }
 
 async fn authorize(State(expected): State<Arc<String>>, request: Request, next: Next) -> Response {
@@ -66,7 +66,9 @@ async fn authorize(State(expected): State<Arc<String>>, request: Request, next: 
 
 pub fn start(services: Services) -> Result<()> {
     let address = address();
-    let listener = TcpListener::bind(address).context("无法监听 MCP，本机可能已启动播放器")?;
+    let listener = TcpListener::bind(address).context(tr!(
+        "Could not listen for MCP; the player may already be running"
+    ))?;
     listener.set_nonblocking(true)?;
     let path = storage::state_dir()?.join("mcp-token");
     let token = match fs::read_to_string(&path) {
@@ -108,16 +110,22 @@ pub fn start(services: Services) -> Result<()> {
                 .route("/ui/queue", get(ui_queue))
                 .route("/ui/action", post(ui_action))
                 .route("/ui/session/restore", post(ui_restore))
-                .with_state(services)
                 .merge(local_library_ui::routes())
                 .merge(source_ui::routes())
+                .with_state(services)
                 .layer(middleware::from_fn_with_state(auth, authorize));
             axum::serve(listener, app).await
         });
         if let Err(error) = result {
-            eprintln!("MCP 服务退出：{error}");
+            eprintln!("{}", tr!("MCP service stopped: {error}"; error = error));
         }
     });
+    if let Err(error) = services.sources.start_updates() {
+        eprintln!(
+            "{}",
+            protocol::tr!("Could not start automatic plugin updates: {error}"; error = error)
+        );
+    }
     eprintln!("Streamable HTTP MCP：http://{address}/mcp");
     Ok(())
 }
@@ -142,8 +150,8 @@ async fn ui_status(services: Services, action: Action, include_queue: bool) -> U
     (services.submit)(action, Some(send));
     let status = tokio::time::timeout(Duration::from_secs(28), receive)
         .await
-        .map_err(|_| ui_error("播放器响应超时"))?
-        .map_err(|_| ui_error("播放器已经退出"))?
+        .map_err(|_| ui_error(tr!("Player response timed out")))?
+        .map_err(|_| ui_error(tr!("Player has exited")))?
         .map_err(ui_error)?;
     let mut status = status;
     if !include_queue {
@@ -161,7 +169,7 @@ async fn current_track(
         .await?
         .0
         .track
-        .ok_or_else(|| ui_error("还没有播放歌曲"))
+        .ok_or_else(|| ui_error(tr!("Nothing playing yet")))
 }
 async fn ui_info(
     State(services): State<Services>,
@@ -186,7 +194,11 @@ async fn ui_album(
         tokio::task::spawn_blocking(move || services.sources.album(track))
             .await
             .map_err(ui_error)?
-            .map_err(|_| ui_error("当前来源暂时无法提供这张专辑的曲目，可稍后重试"))?,
+            .map_err(|_| {
+                ui_error(tr!(
+                    "This source cannot provide the album tracks right now. Try again later."
+                ))
+            })?,
     ))
 }
 async fn ui_history()
@@ -204,36 +216,24 @@ async fn ui_action(
 ) -> UiResult {
     use protocol::UiAction;
     let action = match action {
-        UiAction::PlayTrack { track } => Action::Play(
-            tokio::task::spawn_blocking(move || {
-                services.sources.resolve(track, audio_quality::preferred())
-            })
-            .await
-            .map_err(ui_error)?
-            .map_err(ui_error)?,
-        ),
+        UiAction::PlayTrack { track } => {
+            validate_list(std::slice::from_ref(&track), 0).map_err(ui_error)?;
+            Action::PlayTrack(track)
+        }
         UiAction::PlayList {
             tracks,
             index,
             context,
         } => {
             validate_list(&tracks, index).map_err(ui_error)?;
-            let track = tracks[index].clone();
-            let media = tokio::task::spawn_blocking(move || {
-                services.sources.resolve(track, audio_quality::preferred())
-            })
-            .await
-            .map_err(ui_error)?
-            .map_err(ui_error)?;
             Action::ReplaceQueue {
                 tracks,
                 index,
                 context,
-                media,
             }
         }
         UiAction::PlayLocalPlaylist { id, index } => {
-            tokio::task::spawn_blocking(move || local_queue(services, id, index))
+            tokio::task::spawn_blocking(move || local_queue(id, index))
                 .await
                 .map_err(ui_error)?
                 .map_err(ui_error)?
@@ -257,16 +257,12 @@ async fn ui_action(
     ui_player(services, action).await
 }
 
-fn local_queue(services: Services, id: String, index: usize) -> Result<Action> {
+fn local_queue(id: String, index: usize) -> Result<Action> {
     let list = local_library::playlist(&id)?;
     validate_list(&list.tracks, index)?;
-    let media = services
-        .sources
-        .resolve(list.tracks[index].clone(), audio_quality::preferred())?;
     Ok(Action::ReplaceQueue {
         tracks: list.tracks,
         index,
-        media,
         context: protocol::QueueContext::LocalPlaylist {
             id,
             name: list.name,
@@ -277,16 +273,16 @@ fn local_queue(services: Services, id: String, index: usize) -> Result<Action> {
 fn validate_list(tracks: &[protocol::Track], index: usize) -> Result<()> {
     anyhow::ensure!(
         !tracks.is_empty() && tracks.len() <= protocol::MAX_QUEUE_TRACKS,
-        "播放列表应包含1至10000首歌"
+        tr!("Playlists must contain 1 to 10,000 tracks")
     );
-    anyhow::ensure!(index < tracks.len(), "无效的播放位置");
+    anyhow::ensure!(index < tracks.len(), tr!("Invalid playback index"));
     anyhow::ensure!(
         tracks.iter().all(|t| !t.title.is_empty()
             && t.title.len() <= 2048
             && t.artist.len() <= 4096
             && t.duration.is_finite()
             && t.duration >= 0.0),
-        "无效的曲目信息"
+        tr!("Invalid track information")
     );
     Ok(())
 }
@@ -323,23 +319,23 @@ async fn ui_restore(State(services): State<Services>, Json(snapshot): Json<Statu
 fn validate_snapshot(snapshot: &Status) -> Result<()> {
     anyhow::ensure!(
         snapshot.queue.len() <= protocol::MAX_QUEUE_TRACKS,
-        "队列过长"
+        tr!("Queue is too long")
     );
     anyhow::ensure!(
         snapshot
             .index
             .is_none_or(|index| index < snapshot.queue.len()),
-        "无效的队列位置"
+        tr!("Invalid queue index")
     );
     anyhow::ensure!(
         snapshot.queue.is_empty() == snapshot.index.is_none(),
-        "会话缺少当前曲目"
+        tr!("Session has no current track")
     );
     anyhow::ensure!(
         (0.0..=1.0).contains(&snapshot.volume)
             && snapshot.position.is_finite()
             && snapshot.position >= 0.0,
-        "无效的音量或进度"
+        tr!("Invalid volume or position")
     );
     anyhow::ensure!(
         snapshot.queue.iter().all(|track| !track.title.is_empty()
@@ -347,7 +343,7 @@ fn validate_snapshot(snapshot: &Status) -> Result<()> {
             && track.artist.len() <= 4096
             && track.duration.is_finite()
             && track.duration >= 0.0),
-        "无效的曲目信息"
+        tr!("Invalid track information")
     );
     Ok(())
 }
@@ -363,7 +359,7 @@ struct PluginSearch {
     plugin: String,
     query: String,
     offset: Option<u64>,
-    kind: Option<String>,
+    kind: Option<protocol::SourceSearchKind>,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -405,6 +401,7 @@ struct Volume {
 #[derive(Clone, Copy, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 enum LibraryOperation {
+    Radio,
     List,
     Get,
     Create,
@@ -432,6 +429,8 @@ struct LibraryInput {
 #[derive(Serialize, Deserialize, schemars::JsonSchema)]
 struct SourceInput {
     action: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -467,7 +466,8 @@ async fn blocking<T: Send + 'static>(
         .map_err(|error| {
             ErrorData::internal_error(
                 error.to_string(),
-                mygo::error_code(&error).map(|code| serde_json::json!({"plugin_code":code})),
+                musicx_plugin::error_code(&error)
+                    .map(|code| serde_json::json!({"plugin_code":code})),
             )
         })
 }
@@ -495,8 +495,8 @@ impl PlayerTools {
         (self.services.submit)(action, Some(send));
         let status: Status = tokio::time::timeout(Duration::from_secs(28), receive)
             .await
-            .map_err(|_| tool_error("播放器响应超时"))?
-            .map_err(|_| tool_error("播放器已退出"))?
+            .map_err(|_| tool_error(tr!("Player response timed out")))?
+            .map_err(|_| tool_error(tr!("The player has exited")))?
             .map_err(tool_error)?;
         output(status)
     }
@@ -505,7 +505,7 @@ impl PlayerTools {
 #[tool_router]
 impl PlayerTools {
     #[tool(
-        description = "管理音乐数据源。action=list/catalog/catalog_view/refresh_catalog/get/install/check_update/update/uninstall/configure/account/sign_in/poll/cancel/sign_out/playlists/import_playlist/import_liked/import_recent/artist/album/shows/show。artist/album/show需要id，show可用offset分页。catalog_view/refresh_catalog返回sources、refreshing和warning，旧缓存立即可读；install可直接用owner/repo或GitHub仓库URL，无需在目录中。插件source为mygo:ID。configure的values按声明字段保存，敏感值不回显；sign_in返回扫码任务，poll/cancel用job。导入仅建本地副本，不回写来源歌单。"
+        description = "Manage MusicX sources: list/catalog/catalog_view/refresh_catalog/get/install/check_update/update/uninstall/configure/account/sign_in/poll/cancel/sign_out/playlists/import_playlist/import_liked/import_recent/artist/album/shows/show/auto_update_settings/set_auto_update. Sources use mygo:ID; install accepts owner/repo or a GitHub URL. Imports create independent local snapshots. Source descriptors include MusicX host capabilities and version-bound functional verification. method is only a sign-in choice: qr, web or oauth. Login uses sign_in and job polling. Runtime compatibility does not expose arbitrary plugin exports, cloud edits, device control or helper permissions through this tool."
     )]
     async fn manage_music_sources(
         &self,
@@ -513,14 +513,47 @@ impl PlayerTools {
     ) -> Result<CallToolResult, ErrorData> {
         let action: protocol::MusicSourceAction =
             serde_json::from_value(serde_json::to_value(input).map_err(tool_error)?)
-                .map_err(|_| tool_error("无效的数据源操作参数"))?;
-        blocking(move || music_sources::execute(action))
+                .map_err(|_| tool_error(tr!("Invalid source action parameters")))?;
+        // Product selection is explicit: future Rust/adapter operations do not
+        // automatically become MCP tools merely by being added to the protocol.
+        if !matches!(
+            action,
+            protocol::MusicSourceAction::List
+                | protocol::MusicSourceAction::AutoUpdateSettings
+                | protocol::MusicSourceAction::SetAutoUpdate { .. }
+                | protocol::MusicSourceAction::Catalog
+                | protocol::MusicSourceAction::CatalogView
+                | protocol::MusicSourceAction::RefreshCatalog
+                | protocol::MusicSourceAction::Get { .. }
+                | protocol::MusicSourceAction::Install { .. }
+                | protocol::MusicSourceAction::CheckUpdate { .. }
+                | protocol::MusicSourceAction::Update { .. }
+                | protocol::MusicSourceAction::Uninstall { .. }
+                | protocol::MusicSourceAction::Configure { .. }
+                | protocol::MusicSourceAction::Account { .. }
+                | protocol::MusicSourceAction::SignIn { .. }
+                | protocol::MusicSourceAction::Poll { .. }
+                | protocol::MusicSourceAction::Cancel { .. }
+                | protocol::MusicSourceAction::SignOut { .. }
+                | protocol::MusicSourceAction::Playlists { .. }
+                | protocol::MusicSourceAction::ImportLiked { .. }
+                | protocol::MusicSourceAction::ImportRecent { .. }
+                | protocol::MusicSourceAction::ImportPlaylist { .. }
+                | protocol::MusicSourceAction::Artist { .. }
+                | protocol::MusicSourceAction::Album { .. }
+                | protocol::MusicSourceAction::Shows { .. }
+                | protocol::MusicSourceAction::Show { .. }
+        ) {
+            return Err(tool_error(tr!("Invalid source action parameters")));
+        }
+        let sources = self.services.sources;
+        blocking(move || musicx_core::sources::execute(sources, action))
             .await
             .and_then(output)
     }
 
     #[tool(
-        description = "管理播放器本地歌单。action=list/get/create/rename/pin/unpin/add_current/add_queue/remove/delete/import_source/play。import_source需要source=mygo:插件ID和source_playlist_id。pin和unpin需要playlist_id。歌曲按来源去重，播放为独立快照；导入创建本地副本，不修改第三方歌单。remove需index和当前revision。"
+        description = "Manage local playlists. action=list/get/create/rename/pin/unpin/add_current/add_queue/remove/delete/import_source/play/radio. radio fetches personal recommendations from connected music accounts and appends unique tracks to the local Radio playlist without starting playback; it returns the playlist, added count and per-source results. import_source requires source and source_playlist_id. Other playlist edits use playlist_id; remove also requires index and the current revision. Imports and playback use independent local snapshots."
     )]
     async fn manage_local_playlists(
         &self,
@@ -531,10 +564,16 @@ impl PlayerTools {
             input
                 .playlist_id
                 .clone()
-                .context("需要playlist_id")
+                .context(tr!("playlist_id is required"))
                 .map_err(tool_error)
         };
-        let title = || input.name.clone().context("需要name").map_err(tool_error);
+        let title = || {
+            input
+                .name
+                .clone()
+                .context(tr!("name is required"))
+                .map_err(tool_error)
+        };
         if matches!(input.action, LibraryOperation::List) {
             return blocking(local_library::lists).await.and_then(output);
         }
@@ -547,12 +586,12 @@ impl PlayerTools {
         if matches!(input.action, LibraryOperation::Play) {
             let id = id()?;
             let index = input.index.unwrap_or(0);
-            let services = self.services;
             return self
-                .player(blocking(move || local_queue(services, id, index)).await?)
+                .player(blocking(move || local_queue(id, index)).await?)
                 .await;
         }
         let edit = match input.action {
+            LibraryOperation::Radio => Edit::RefreshRadio {},
             LibraryOperation::Create => Edit::Create { name: title()? },
             LibraryOperation::Rename => Edit::Rename {
                 id: id()?,
@@ -565,14 +604,23 @@ impl PlayerTools {
             LibraryOperation::Delete => Edit::Delete { id: id()? },
             LibraryOperation::Remove => Edit::Remove {
                 id: id()?,
-                index: input.index.context("需要index").map_err(tool_error)?,
-                revision: input.revision.context("需要revision").map_err(tool_error)?,
+                index: input
+                    .index
+                    .context(tr!("index is required"))
+                    .map_err(tool_error)?,
+                revision: input
+                    .revision
+                    .context(tr!("revision is required"))
+                    .map_err(tool_error)?,
             },
             LibraryOperation::ImportSource => Edit::ImportSource {
-                source: input.source.context("需要source").map_err(tool_error)?,
+                source: input
+                    .source
+                    .context(tr!("source is required"))
+                    .map_err(tool_error)?,
                 playlist_id: input
                     .source_playlist_id
-                    .context("需要source_playlist_id")
+                    .context(tr!("source_playlist_id is required"))
                     .map_err(tool_error)?,
             },
             LibraryOperation::AddCurrent | LibraryOperation::AddQueue => {
@@ -580,7 +628,12 @@ impl PlayerTools {
                     .await
                     .map_err(|(_, v)| tool_error(v.0))?;
                 let tracks = if matches!(input.action, LibraryOperation::AddCurrent) {
-                    vec![snapshot.track.context("当前没有歌曲").map_err(tool_error)?]
+                    vec![
+                        snapshot
+                            .track
+                            .context(tr!("No current track"))
+                            .map_err(tool_error)?,
+                    ]
                 } else {
                     snapshot.queue.as_ref().clone()
                 };
@@ -588,29 +641,37 @@ impl PlayerTools {
             }
             _ => unreachable!(),
         };
-        blocking(move || musicx_plugins::change_library(edit))
+        let sources = self.services.sources;
+        blocking(move || musicx_core::sources::change_library(sources, edit))
             .await
             .and_then(output)
     }
 
-    #[tool(description = "列出本机安装的 MyGo Music 插件和目录兼容状态。")]
+    #[tool(description = "列出本机安装的音乐来源插件和目录兼容状态。")]
     async fn list_music_plugins(&self) -> Result<CallToolResult, ErrorData> {
-        blocking(mygo::list).await.and_then(output)
+        let sources = self.services.sources;
+        blocking(move || sources.installed_plugins())
+            .await
+            .and_then(output)
     }
 
     #[tool(
-        description = "通过指定 MyGo 插件搜索。kind=tracks(默认)/albums/artists/playlists/shows，offset 分页。歌曲 tracks 返回统一 Track，duration 单位为秒，可直接传给 play_song/enqueue_song。歌手/专辑/播客 ID 可用于 manage_music_sources 的 artist/album/show。"
+        description = "通过指定来源搜索，plugin 传入来源标识（MyGo 也兼容旧插件 ID）。kind=tracks(默认)/albums/artists/playlists/shows，offset 分页，结果包含 source 和 more。歌曲 tracks 返回统一 Track，duration 单位为秒，可直接传给 play_song/enqueue_song。来源提供的布尔 unavailable 会保留，true 表示当前不可播。其他分类返回统一实体；将 source 和实体 ID 用于 manage_music_sources 的 artist/album/show。"
     )]
     async fn plugin_search(
         &self,
         Parameters(input): Parameters<PluginSearch>,
     ) -> Result<CallToolResult, ErrorData> {
+        let sources = self.services.sources;
         blocking(move || {
-            mygo::search_kind(
+            musicx_core::sources::search(
+                sources,
                 &input.plugin,
-                &input.query,
-                input.kind.as_deref().unwrap_or("tracks"),
-                input.offset.unwrap_or(0),
+                protocol::SourceSearchRequest {
+                    query: input.query,
+                    kind: input.kind.unwrap_or_default(),
+                    offset: input.offset.unwrap_or(0),
+                },
             )
         })
         .await
@@ -702,16 +763,16 @@ impl ServerHandler for PlayerTools {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("MusicX", env!("CARGO_PKG_VERSION")))
-            .with_instructions(
-                "选歌和控制本机 MusicX 播放器。导入个人歌单前，请在音乐来源设置中关联账号。",
-            )
+            .with_instructions(musicx_core::protocol::i18n::text(
+                "Choose music and control the local MusicX player. Connect an account in Music Sources settings before importing personal playlists.",
+            ))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use musicx_plugin_api::Media;
+    use musicx_plugin::{DataSource, Media};
     use std::sync::Mutex;
 
     #[test]
@@ -784,7 +845,65 @@ mod tests {
 
     struct FixtureSource {
         seen: Mutex<Vec<protocol::Track>>,
+        source_reads: Mutex<Vec<String>>,
         fail: bool,
+    }
+
+    impl musicx_plugin::PluginSource for FixtureSource {
+        fn search(
+            &self,
+            source: &str,
+            request: protocol::SourceSearchRequest,
+        ) -> Result<protocol::SourceSearchPage> {
+            assert_eq!(source, "independent:fixture");
+            assert_eq!(request.query, "fixture query");
+            assert_eq!(request.kind, protocol::SourceSearchKind::Tracks);
+            assert_eq!(request.offset, 7);
+            self.source_reads.lock().unwrap().push("search".into());
+            Ok(protocol::SourceSearchPage {
+                source: source.into(),
+                tracks: vec![protocol::SourceSearchTrack {
+                    track: track(),
+                    unavailable: Some(true),
+                }],
+                ..Default::default()
+            })
+        }
+        fn account(&self, source: &str) -> Result<protocol::SourceAccount> {
+            assert_eq!(source, "independent:fixture");
+            self.source_reads.lock().unwrap().push("account".into());
+            Ok(protocol::SourceAccount {
+                connected: true,
+                name: Some("Independent account".into()),
+            })
+        }
+        fn playlists(&self, source: &str) -> Result<Vec<protocol::SourcePlaylist>> {
+            assert_eq!(source, "independent:fixture");
+            self.source_reads.lock().unwrap().push("playlists".into());
+            Ok(vec![protocol::SourcePlaylist {
+                id: "opaque:list/one".into(),
+                name: "Independent playlist".into(),
+                track_count: 1,
+                cover_url: None,
+            }])
+        }
+        fn page(
+            &self,
+            source: &str,
+            request: protocol::SourcePageRequest,
+        ) -> Result<protocol::SourcePage> {
+            assert_eq!(source, "independent:fixture");
+            assert!(matches!(
+                request,
+                protocol::SourcePageRequest::Recommendations {}
+            ));
+            self.source_reads.lock().unwrap().push("page".into());
+            Ok(protocol::SourcePage {
+                title: "Independent page".into(),
+                tracks: vec![track()],
+                ..Default::default()
+            })
+        }
     }
     impl DataSource for FixtureSource {
         fn resolve(&self, track: protocol::Track, quality: protocol::Quality) -> Result<Media> {
@@ -796,6 +915,7 @@ mod tests {
                 peak: None,
                 track,
                 url: "https://example.com/resolved.mp3".parse().unwrap(),
+                uses_http: false,
                 user_agent: Some("Independent source fixture".into()),
                 quality: protocol::AudioQuality {
                     requested: quality,
@@ -844,9 +964,29 @@ mod tests {
         panic!("resolution failure must not change the player");
     }
 
+    fn submit_selection(action: Action, reply: Reply) {
+        let selected = match action {
+            Action::PlayTrack(track) => track,
+            Action::ReplaceQueue { tracks, index, .. } => tracks[index].clone(),
+            _ => panic!("expected an unresolved selection"),
+        };
+        assert!(selected == track());
+        reply
+            .unwrap()
+            .send(Ok(Status {
+                state: protocol::State::Loading,
+                track: Some(selected),
+                switching: true,
+                ..Default::default()
+            }))
+            .ok()
+            .unwrap();
+    }
+
     fn fixture(submit: fn(Action, Reply), fail: bool) -> (PlayerTools, &'static FixtureSource) {
         let source = Box::leak(Box::new(FixtureSource {
             seen: Mutex::new(Vec::new()),
+            source_reads: Mutex::new(Vec::new()),
             fail,
         }));
         (
@@ -860,6 +1000,102 @@ mod tests {
             },
             source,
         )
+    }
+
+    #[tokio::test]
+    async fn source_tools_use_the_injected_rust_contract_without_mygo() {
+        let (tools, source) = fixture(no_submit, true);
+        let search: PluginSearch = serde_json::from_value(serde_json::json!({"plugin":"independent:fixture","query":"fixture query","kind":"tracks","offset":7})).unwrap();
+        let response = tools.plugin_search(Parameters(search)).await.unwrap();
+        let response = serde_json::to_value(response).unwrap();
+        let page: serde_json::Value =
+            serde_json::from_str(response["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            page["tracks"][0]["source"]["id"],
+            track().source.unwrap().id
+        );
+        assert_eq!(page["tracks"][0]["unavailable"], true);
+        for (action, expected) in [
+            ("account", "Independent account"),
+            ("playlists", "Independent playlist"),
+        ] {
+            let input: SourceInput = serde_json::from_value(
+                serde_json::json!({"action":action,"source":"independent:fixture"}),
+            )
+            .unwrap();
+            let response = tools.manage_music_sources(Parameters(input)).await.unwrap();
+            let response = serde_json::to_value(response).unwrap();
+            let value: serde_json::Value =
+                serde_json::from_str(response["content"][0]["text"].as_str().unwrap()).unwrap();
+            assert_eq!(
+                if action == "account" {
+                    &value["name"]
+                } else {
+                    &value[0]["name"]
+                },
+                expected
+            );
+        }
+        let Json(page) = source_ui::source_action(
+            State(tools.services),
+            Json(protocol::MusicSourceAction::Page {
+                source: "independent:fixture".into(),
+                request: protocol::SourcePageRequest::Recommendations {},
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(page["title"], "Independent page");
+        assert_eq!(
+            page["tracks"][0]["source"]["id"],
+            track().source.unwrap().id
+        );
+        assert_eq!(
+            *source.source_reads.lock().unwrap(),
+            ["search", "account", "playlists", "page"]
+        );
+    }
+
+    #[tokio::test]
+    async fn runtime_exports_and_host_permissions_are_not_mcp_actions() {
+        let (tools, _) = fixture(no_submit, true);
+        for value in [
+            serde_json::json!({"action":"invoke","source":"mygo:fixture","method":"remoteUse","params":{"deviceId":"device"}}),
+            serde_json::json!({"action":"invoke","source":"mygo:fixture","method":"createPlaylist","params":{"name":"No cloud writes"}}),
+            serde_json::json!({"action":"page","source":"mygo:fixture","method":"home"}),
+            serde_json::json!({"action":"set_process_permission","source":"mygo:fixture","enabled":true}),
+            serde_json::json!({"action":"set_network_permission","source":"mygo:fixture","enabled":true}),
+        ] {
+            let input: SourceInput = serde_json::from_value(value).unwrap();
+            assert!(
+                tools
+                    .manage_music_sources(Parameters(input))
+                    .await
+                    .unwrap_err()
+                    .message
+                    .contains("Invalid source action parameters")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn ui_submits_selection_before_attempting_source_resolution() {
+        let (tools, source) = fixture(submit_selection, true);
+        for action in [
+            protocol::UiAction::PlayTrack { track: track() },
+            protocol::UiAction::PlayList {
+                tracks: vec![track()],
+                index: 0,
+                context: protocol::QueueContext::History,
+            },
+        ] {
+            let Json(status) = ui_action(State(tools.services), Json(action))
+                .await
+                .unwrap();
+            assert!(status.state == protocol::State::Loading && status.switching);
+            assert!(status.track == Some(track()));
+        }
+        assert!(source.seen.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

@@ -1,9 +1,13 @@
 name: Release macOS
 
+# Keep this workflow's identity: its run number allocates every channel's build number.
 on:
-  push:
-    tags: ['**']
   workflow_dispatch:
+    inputs:
+      ci_run_id:
+        description: Successful push run of macOS CI for this exact branch and SHA
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -17,65 +21,114 @@ env:
   CARGO_INCREMENTAL: '0'
   MACOSX_DEPLOYMENT_TARGET: '14.0'
   DMG: target/distribution/MusicX-macos-arm64.dmg
+  RELEASE_PLAN: target/release-plan/plan.json
+  CI_RUN_ID: ${{ inputs.ci_run_id }}
 
 jobs:
-  validate:
-    if: ${{ !github.event.deleted }}
+  plan:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
+    permissions:
+      contents: write # semantic-release verifies push access even in dry-run mode.
+      actions: read
     outputs:
-      source-sha: ${{ steps.source.outputs.sha }}
-      channel: ${{ steps.source.outputs.channel }}
-      version: ${{ steps.source.outputs.version }}
-      bundle-version: ${{ steps.source.outputs.bundle-version }}
+      branch: ${{ steps.source.outputs.branch }}
+      source-sha: ${{ steps.source.outputs.source-sha }}
+      release: ${{ steps.plan.outputs.release }}
+      tag: ${{ steps.plan.outputs.tag }}
+      channel: ${{ steps.plan.outputs.channel }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Verify CI provenance before checking out source
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/release-source.py "$CI_RUN_ID"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.source.outputs.source-sha }}
           fetch-depth: 0
           persist-credentials: false
-
-      - name: Validate release tag and source
-        id: source
-        shell: bash
-        run: |
-          if [[ "$GITHUB_REF_TYPE" != tag ]]; then
-            echo '::error::Release macOS must run on a tag.'
-            exit 1
-          fi
-          source_sha=$(git rev-parse HEAD)
-          metadata=$(bash scripts/validate-release-tag.sh "$source_sha" "$GITHUB_REF_NAME" --github-output)
-          if ! git merge-base --is-ancestor "$source_sha" origin/main; then
-            echo '::error::The tagged commit must be on main.'
-            exit 1
-          fi
-          printf '%s\n' "$metadata" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '26.13.0'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Find the original plan on retries
+        id: saved
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/find-release-artifact.py release-plan
+      - if: steps.saved.outputs.exists == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          artifact-ids: ${{ steps.saved.outputs.id }}
+          path: target/release-plan
+      - name: Plan the semantic version and release notes
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ steps.source.outputs.source-sha }}
+          RELEASE_BRANCH: ${{ steps.source.outputs.branch }}
+        run: node scripts/semantic-release/run.mjs plan
+      - if: steps.plan.outputs.release == 'true' && steps.saved.outputs.exists != 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-plan
+          path: target/release-plan/plan.json
+          if-no-files-found: error
+          retention-days: 90
 
   build:
-    needs: validate
+    needs: plan
+    if: needs.plan.outputs.release == 'true'
     runs-on: macos-15
-    timeout-minutes: 45
+    timeout-minutes: 60
+    environment: ${{ needs.plan.outputs.branch == 'main' && 'macos-preview' || 'macos-stable' }}
+    permissions:
+      contents: read
+      actions: read
     env:
-      MUSICX_RELEASE_VERSION: ${{ needs.validate.outputs.version }}
-      MUSICX_BUNDLE_VERSION: ${{ needs.validate.outputs.bundle-version }}
-    outputs:
-      artifact-id: ${{ steps.artifacts.outputs.artifact-id }}
-      source-sha: ${{ needs.validate.outputs.source-sha }}
-      signing-mode: ${{ needs.validate.outputs.channel == 'preview' && 'ad-hoc' || steps.signing.outputs.mode }}
+      SOURCE_SHA: ${{ needs.plan.outputs.source-sha }}
+      RELEASE_BRANCH: ${{ needs.plan.outputs.branch }}
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.validate.outputs.source-sha }}
+          ref: ${{ needs.plan.outputs.source-sha }}
+          fetch-depth: 0
           persist-credentials: false
-
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: release-plan
+          path: target/release-plan
+      - run: python3 scripts/release-artifacts.py env
+      - name: Find the original signed artifacts
+        id: saved
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/find-release-artifact.py musicx-macos-validated
+      - if: steps.saved.outputs.exists == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          artifact-ids: ${{ steps.saved.outputs.id }}
+          path: target/distribution
+      - name: Refuse to rebuild an existing tag
+        if: steps.saved.outputs.exists != 'true'
+        run: |
+          test -z "$(git ls-remote --tags origin "refs/tags/$RELEASE_TAG")" || {
+            echo '::error::The tag already exists. Recover the original run and its signed artifacts.'
+            exit 1
+          }
       - name: Install Rust
+        if: steps.saved.outputs.exists != 'true'
         run: rustup toolchain install --no-self-update
-
-      - name: Select signing mode
-        if: needs.validate.outputs.channel == 'stable'
-        id: signing
+      - name: Require production signing
+        if: steps.saved.outputs.exists != 'true' && needs.plan.outputs.channel == 'stable'
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -83,81 +136,36 @@ jobs:
           APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-        run: |
-          mode=$(bash scripts/select-macos-signing.sh)
-          printf 'mode=%s\n' "$mode" >> "$GITHUB_OUTPUT"
-
-      - name: Format and test
-        if: needs.validate.outputs.channel == 'stable'
-        run: |
-          cargo fmt --all -- --check
-          cargo test --release --locked --workspace
-
+        run: bash scripts/select-macos-signing.sh
       - name: Import Developer ID certificate
-        if: steps.signing.outputs.mode == 'developer-id'
+        if: steps.saved.outputs.exists != 'true' && needs.plan.outputs.channel == 'stable'
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-        run: |
-          : "${APPLE_CERTIFICATE:?Configure the Developer ID certificate secret}"
-          : "${APPLE_CERTIFICATE_PASSWORD:?Configure the Developer ID certificate password secret}"
-          : "${APPLE_SIGNING_IDENTITY:?Configure the Developer ID Application identity}"
-          if [[ "$APPLE_SIGNING_IDENTITY" != "Developer ID Application: "* ]]; then
-            echo "::error::APPLE_SIGNING_IDENTITY must be a Developer ID Application identity."
-            exit 1
-          fi
-          umask 077
-          certificate=$(mktemp "$RUNNER_TEMP/musicx-certificate.XXXXXX")
-          trap 'rm -f "$certificate"' EXIT
-          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$certificate"
-
-          keychain="$RUNNER_TEMP/musicx-signing.keychain-db"
-          password=$(openssl rand -hex 24)
-          echo "::add-mask::$password"
-          security create-keychain -p "$password" "$keychain"
-          security set-keychain-settings -lut 21600 "$keychain"
-          security unlock-keychain -p "$password" "$keychain"
-          security import "$certificate" -f pkcs12 -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain"
-          security list-keychains -d user -s "$keychain"
-
-          identity=$(security find-identity -v -p codesigning "$keychain" |
-            awk -v name="\"$APPLE_SIGNING_IDENTITY\"" 'index($0, name) { print $2 }')
-          if [[ ! "$identity" =~ ^[0-9A-Fa-f]{40}$ ]]; then
-            echo "::error::The certificate must match the configured Developer ID Application identity."
-            exit 1
-          fi
-          printf 'MUSICX_CODESIGN_IDENTITY=%s\n' "$identity" >> "$GITHUB_ENV"
-
+        run: python3 scripts/import-release-signing.py developer-id
+      # No PR caches or artifacts are restored in credential-bearing jobs.
       - name: Package Apple Silicon DMG
+        if: steps.saved.outputs.exists != 'true'
         env:
-          SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
-          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          MUSICX_SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
         run: |
           test "$(uname -m)" = arm64
-          if [[ "${{ needs.validate.outputs.channel }}" == stable ]]; then
-            : "${SPARKLE_PUBLIC_KEY:?Configure the Sparkle public key repository variable}"
-            : "${SPARKLE_PRIVATE_KEY:?Configure the Sparkle private key repository secret}"
-            export MUSICX_SPARKLE_PUBLIC_KEY="$SPARKLE_PUBLIC_KEY"
-          fi
+          : "${MUSICX_SPARKLE_PUBLIC_KEY:?Configure the Sparkle public key variable}"
           sh scripts/package-macos.sh "$DMG"
           hdiutil verify -quiet "$DMG"
-
       - name: Notarize and staple the DMG
-        if: steps.signing.outputs.mode == 'developer-id'
+        if: steps.saved.outputs.exists != 'true' && needs.plan.outputs.channel == 'stable'
         env:
           APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: |
-          : "${APPLE_API_PRIVATE_KEY:?Configure the notarization API private key}"
-          : "${APPLE_API_KEY:?Configure the notarization API key ID}"
-          : "${APPLE_API_ISSUER:?Configure the notarization API issuer ID}"
           umask 077
           notary_dir=$(mktemp -d "$RUNNER_TEMP/musicx-notary.XXXXXX")
           trap 'rm -rf "$notary_dir"' EXIT
           printf '%s\n' "$APPLE_API_PRIVATE_KEY" > "$notary_dir/key.p8"
+          codesign --verify --strict "$DMG"
           xcrun notarytool submit "$DMG" \
             --key "$notary_dir/key.p8" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER" \
             --wait --timeout 20m --output-format json > "$notary_dir/result.json"
@@ -165,64 +173,165 @@ jobs:
           jq -e '.status == "Accepted"' "$notary_dir/result.json" > /dev/null
           xcrun stapler staple "$DMG"
           xcrun stapler validate "$DMG"
-
-      - name: Write checksum
-        run: |
-          cd "$(dirname "$DMG")"
-          name=$(basename "$DMG")
-          shasum -a 256 "$name" > "$name.sha256"
-
-      - name: Generate signed automatic update feed
-        if: needs.validate.outputs.channel == 'stable'
+      - name: Write checksum and signed automatic update feeds
+        if: steps.saved.outputs.exists != 'true'
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
           MUSICX_SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
+          GH_TOKEN: ${{ github.token }}
         run: |
+          : "${SPARKLE_PRIVATE_KEY:?Configure the Sparkle private key environment secret}"
+          (cd "$(dirname "$DMG")" && shasum -a 256 "$(basename "$DMG")" > "$(basename "$DMG").sha256")
           brew list --versions openssl@3 >/dev/null || brew install openssl@3
           bash scripts/generate-appcast.sh "$DMG"
-          python3 scripts/validate-appcast.py "$DMG" "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY"
-
-      - id: artifacts
+          bash scripts/generate-update-feed.sh "$DMG"
+          python3 scripts/release-artifacts.py record
+      - run: python3 scripts/release-artifacts.py verify
+      - if: steps.saved.outputs.exists != 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: musicx-macos-validated-${{ github.run_attempt }}
+          name: musicx-macos-validated
           path: |
             ${{ env.DMG }}
             ${{ env.DMG }}.sha256
             target/distribution/appcast.xml
+            target/distribution/appcast-all.xml
+            target/distribution/appcast-all.base
+            target/distribution/validated-artifacts.json
           compression-level: 0
           if-no-files-found: error
-          retention-days: ${{ needs.validate.outputs.channel == 'preview' && 14 || 7 }}
+          retention-days: 90
+      - name: Remove signing material
+        if: always()
+        run: |
+          if [[ -n "${MUSICX_SIGNING_KEYCHAIN:-}" ]]; then security delete-keychain "$MUSICX_SIGNING_KEYCHAIN"; fi
+          rm -rf "$RUNNER_TEMP/musicx-signing"
 
   publish:
-    needs: build
+    needs: [plan, build]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: write
+      actions: read
+    env:
+      SOURCE_SHA: ${{ needs.plan.outputs.source-sha }}
+      RELEASE_BRANCH: ${{ needs.plan.outputs.branch }}
+      RELEASE_ARTIFACTS: target/distribution
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.build.outputs.source-sha }}
+          ref: ${{ needs.plan.outputs.source-sha }}
+          fetch-depth: 0
           persist-credentials: false
-
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '26.13.0'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          artifact-ids: ${{ needs.build.outputs.artifact-id }}
+          name: release-plan
+          path: target/release-plan
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: musicx-macos-validated
           path: target/distribution
-
-      - name: Verify and publish the installer
+      - name: Create semantic tag and publish verified assets
         env:
           GH_TOKEN: ${{ github.token }}
-          SOURCE_SHA: ${{ needs.build.outputs.source-sha }}
-          SIGNING_MODE: ${{ needs.build.outputs.signing-mode }}
           MUSICX_SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
-        run: bash scripts/publish-macos.sh "$DMG"
-
-      - name: Preserve the release manifest
+        run: node scripts/semantic-release/run.mjs publish
+      - name: Preserve the publication receipt
+        if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-manifest-macos-${{ github.run_attempt }}
           path: target/distribution/release-manifest.json
+          if-no-files-found: warn
+          retention-days: 90
+
+  testflight:
+    needs: plan
+    if: needs.plan.outputs.release == 'true' && needs.plan.outputs.branch == 'main'
+    runs-on: macos-15
+    timeout-minutes: 60
+    environment: macos-testflight
+    permissions:
+      contents: read
+      actions: read
+    env:
+      SOURCE_SHA: ${{ needs.plan.outputs.source-sha }}
+      RELEASE_BRANCH: ${{ needs.plan.outputs.branch }}
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.source-sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '26.13.0'
+      - name: Verify the pinned App Store toolchain
+        run: xcodebuild -version
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: release-plan
+          path: target/release-plan
+      - run: python3 scripts/release-artifacts.py env
+      - id: saved
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/find-release-artifact.py musicx-testflight
+      - if: steps.saved.outputs.exists == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          artifact-ids: ${{ steps.saved.outputs.id }}
+          path: target/testflight
+      - if: steps.saved.outputs.exists != 'true'
+        run: rustup toolchain install --no-self-update
+      - name: Import App Store distribution identities
+        if: steps.saved.outputs.exists != 'true'
+        env:
+          STORE_APP_CERTIFICATE: ${{ secrets.STORE_APP_CERTIFICATE }}
+          STORE_APP_CERTIFICATE_PASSWORD: ${{ secrets.STORE_APP_CERTIFICATE_PASSWORD }}
+          STORE_INSTALLER_CERTIFICATE: ${{ secrets.STORE_INSTALLER_CERTIFICATE }}
+          STORE_INSTALLER_CERTIFICATE_PASSWORD: ${{ secrets.STORE_INSTALLER_CERTIFICATE_PASSWORD }}
+          STORE_PROVISION_PROFILE: ${{ secrets.STORE_PROVISION_PROFILE }}
+        run: python3 scripts/import-release-signing.py testflight
+      - name: Package sandboxed TestFlight installer
+        if: steps.saved.outputs.exists != 'true'
+        run: |
+          python3 scripts/package-testflight-macos.py --output target/testflight/MusicX.pkg \
+            --version "$MUSICX_SHORT_VERSION" --build "$MUSICX_BUNDLE_VERSION" \
+            --profile "$STORE_PROFILE_PATH" --app-identity "$STORE_APP_IDENTITY" \
+            --installer-identity "$STORE_INSTALLER_IDENTITY" --keychain "$MUSICX_SIGNING_KEYCHAIN"
+      - if: steps.saved.outputs.exists != 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: musicx-testflight
+          path: target/testflight/MusicX.pkg*
+          compression-level: 0
           if-no-files-found: error
           retention-days: 90
+      - name: Upload and verify Internal TestFlight availability
+        env:
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          TESTFLIGHT_APP_ID: ${{ vars.TESTFLIGHT_APP_ID }}
+          TESTFLIGHT_GROUP_ID: ${{ vars.TESTFLIGHT_GROUP_ID }}
+        run: python3 scripts/publish-testflight.py target/testflight/MusicX.pkg
+      - name: Preserve TestFlight status
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: testflight-status-${{ github.run_attempt }}
+          path: target/testflight/testflight-status.json
+          if-no-files-found: warn
+          retention-days: 90
+      - name: Remove signing material
+        if: always()
+        shell: bash
+        run: |
+          if [[ -n "${MUSICX_SIGNING_KEYCHAIN:-}" ]]; then security delete-keychain "$MUSICX_SIGNING_KEYCHAIN"; fi
+          rm -rf "$RUNNER_TEMP/musicx-signing"

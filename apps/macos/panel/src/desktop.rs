@@ -1,4 +1,6 @@
 pub use crate::drawer::{DETAILS_GAP, DETAILS_WIDTH, EXPANDED_WIDTH, PLAYER_WIDTH};
+#[path = "desktop/menus.rs"]
+pub mod menus;
 use nsh_platform_macos::objc2_app_kit::*;
 use nsh_platform_macos::{AppOptions, AppView, Root, set_ui_sets};
 use objc2::{
@@ -11,12 +13,58 @@ use objc2_foundation::{
     NSBundle, NSDistributedNotificationCenter, NSNotification, NSNotificationSuspensionBehavior,
     NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, ns_string,
 };
-use std::{cell::RefCell, process::ExitCode, rc::Rc};
-thread_local! { static PANEL: RefCell<Option<Panel>> = const { RefCell::new(None) }; }
+use std::{
+    cell::RefCell,
+    process::ExitCode,
+    rc::Rc,
+    sync::atomic::{AtomicBool, Ordering},
+};
+thread_local! {
+    static PANEL: RefCell<Option<Panel>> = const { RefCell::new(None) };
+    static SETTINGS: RefCell<Option<SettingsPanel>> = const { RefCell::new(None) };
+}
+static PREFERRED_LEFT: AtomicBool = AtomicBool::new(false);
+
+pub fn refresh_language() {
+    dispatch2::DispatchQueue::main().exec_async(|| {
+        menus::refresh_language();
+        SETTINGS.with_borrow(|panel| {
+            if let Some(panel) = panel {
+                panel
+                    .window
+                    .setTitle(&NSString::from_str(crate::protocol::tr!("Settings")));
+            }
+        });
+    });
+}
 struct Panel {
     window: Retained<NSWindow>,
     view: Rc<AppView>,
     details_left: std::cell::Cell<bool>,
+    closed: std::cell::Cell<bool>,
+}
+struct SettingsPanel {
+    window: Retained<NSWindow>,
+    view: Rc<AppView>,
+}
+
+/// Updated by AppKit when the player moves, including between displays.
+pub fn preferred_details_left() -> bool {
+    PREFERRED_LEFT.load(Ordering::Relaxed)
+}
+
+fn update_details_side() {
+    PANEL.with_borrow(|panel| {
+        if let Some(panel) = panel {
+            let frame = panel.window.frame();
+            let left = if frame.size.width > f64::from(PLAYER_WIDTH) + 1.0 {
+                panel.details_left.get()
+            } else {
+                visible_frame(&panel.window).is_some_and(|visible| prefer_left(frame, visible))
+            };
+            PREFERRED_LEFT.store(left, Ordering::Relaxed);
+        }
+    });
 }
 
 fn visible_frame(window: &NSWindow) -> Option<NSRect> {
@@ -65,6 +113,7 @@ pub fn request_details_left() -> tokio::sync::oneshot::Receiver<bool> {
             }
             visible_frame(&panel.window).is_some_and(|visible| prefer_left(frame, visible))
         });
+        PREFERRED_LEFT.store(left, Ordering::Relaxed);
         let _ = send.send(left);
     });
     receive
@@ -102,30 +151,6 @@ define_class!(
     }
 );
 
-fn item(
-    menu: &NSMenu,
-    delegate: &AnyObject,
-    title: &str,
-    selector: Option<objc2::runtime::Sel>,
-    key: &str,
-) -> Retained<NSMenuItem> {
-    let mtm = MainThreadMarker::new().expect("main thread");
-    // Every target is held for the lifetime of the menus and uses a matching selector.
-    let item = unsafe {
-        NSMenuItem::initWithTitle_action_keyEquivalent(
-            NSMenuItem::alloc(mtm),
-            &NSString::from_str(title),
-            selector,
-            &NSString::from_str(key),
-        )
-    };
-    unsafe {
-        item.setTarget(Some(delegate));
-    }
-    menu.addItem(&item);
-    item
-}
-
 fn stop_application() {
     let mtm = MainThreadMarker::new().expect("main thread");
     let app = NSApplication::sharedApplication(mtm);
@@ -147,14 +172,41 @@ define_class!(
         fn reveal(&self, _notification: &NSNotification) {
             show_panel();
         }
-        #[unsafe(method(closePanel:))]
-        fn close(&self, _sender: Option<&AnyObject>) {
-            PANEL.with_borrow(|panel| { if let Some(panel) = panel { panel.window.performClose(None); } });
+        #[unsafe(method(showPlayer:))]
+        fn show_player(&self, _sender: Option<&AnyObject>) { show_panel(); }
+        #[unsafe(method(closeWindow:))]
+        fn close_window(&self, _sender: Option<&AnyObject>) {
+            let app = NSApplication::sharedApplication(MainThreadMarker::from(self));
+            if let Some(window) = app.keyWindow().or_else(|| app.mainWindow()) {
+                window.performClose(None);
+            } else {
+                PANEL.with_borrow(|panel| {
+                    if let Some(panel) = panel { panel.window.performClose(None); }
+                });
+            }
         }
+        #[unsafe(method(menuAction:))]
+        fn menu_action(&self, sender: &NSMenuItem) { menus::perform(sender.tag()); }
+        #[unsafe(method(showAbout:))]
+        fn show_about(&self, _sender: Option<&AnyObject>) { menus::show_about(); }
+        #[unsafe(method(showHelp:))]
+        fn show_help(&self, _sender: Option<&AnyObject>) { menus::open_help(false); }
+        #[unsafe(method(reportIssue:))]
+        fn report_issue(&self, _sender: Option<&AnyObject>) { menus::open_help(true); }
         #[unsafe(method(quit:))]
         fn quit(&self, _sender: Option<&AnyObject>) { crate::remote::quit_background(); }
         #[unsafe(method(checkForUpdates:))]
         fn check_updates(&self, _sender: Option<&AnyObject>) { crate::updates::check(); }
+    }
+    unsafe impl NSMenuItemValidation for PanelDelegate {
+        #[unsafe(method(validateMenuItem:))]
+        fn validate_menu_item(&self, item: &NSMenuItem) -> bool {
+            if item.action() == Some(sel!(checkForUpdates:)) {
+                std::env::var("MUSICX_UPDATER_PID").is_ok()
+            } else {
+                menus::enabled(item.tag())
+            }
+        }
     }
     unsafe impl NSApplicationDelegate for PanelDelegate {
         #[unsafe(method(applicationDidFinishLaunching:))]
@@ -174,9 +226,34 @@ define_class!(
         }
     }
     unsafe impl NSWindowDelegate for PanelDelegate {
+        #[unsafe(method(windowDidMove:))]
+        fn moved(&self, _notification: &NSNotification) { update_details_side(); }
+        #[unsafe(method(windowDidChangeScreen:))]
+        fn changed_screen(&self, _notification: &NSNotification) { update_details_side(); }
         #[unsafe(method(windowWillClose:))]
-        fn closed(&self, _notification: &NSNotification) {
-            dispatch2::DispatchQueue::main().exec_async(stop_panel);
+        fn closed(&self, notification: &NSNotification) {
+            let settings_closed = SETTINGS.with_borrow(|panel| {
+                panel.as_ref().is_some_and(|panel| {
+                    notification.object()
+                        .and_then(|object| object.downcast::<NSWindow>().ok())
+                        .is_some_and(|window| window.windowNumber() == panel.window.windowNumber())
+                })
+            });
+            if !settings_closed {
+                PANEL.with_borrow(|panel| {
+                    if let Some(panel) = panel { panel.closed.set(true); }
+                });
+            }
+            dispatch2::DispatchQueue::main().exec_async(move || {
+                if settings_closed {
+                    stop_settings();
+                    if PANEL.with_borrow(|panel| panel.as_ref().is_none_or(|panel| panel.closed.get())) {
+                        stop_panel();
+                    }
+                } else if SETTINGS.with_borrow(Option::is_none) {
+                    stop_panel();
+                }
+            });
         }
     }
 );
@@ -186,12 +263,84 @@ fn show_panel() {
     app.activate();
     PANEL.with_borrow(|panel| {
         if let Some(panel) = panel {
+            panel.closed.set(false);
             if panel.window.isMiniaturized() {
                 panel.window.deminiaturize(None);
             }
             panel.window.makeKeyAndOrderFront(None);
         }
     });
+}
+
+pub fn open_settings(group: crate::sources_ui::SettingsGroup) {
+    crate::sources_ui::select_settings_group(group);
+    dispatch2::DispatchQueue::main().exec_async(show_settings);
+}
+
+/// Settings is one independently focusable native window, never a drawer page.
+pub fn show_settings() {
+    let mtm = MainThreadMarker::new().expect("main thread");
+    let app = NSApplication::sharedApplication(mtm);
+    if SETTINGS.with_borrow(Option::is_none) {
+        let mut options = panel_options();
+        options.app_id = crate::protocol::component_app_id("settings");
+        options.title = crate::protocol::tr!("Settings").into();
+        options.data_dir = crate::protocol::data_dir().map(|directory| directory.join("settings"));
+        options.size = (704, 520);
+        options.transparent = false;
+        options.decorated = true;
+        let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(704.0, 520.0));
+        let window = unsafe {
+            NSWindow::initWithContentRect_styleMask_backing_defer(
+                NSWindow::alloc(mtm),
+                frame,
+                NSWindowStyleMask::Titled
+                    | NSWindowStyleMask::Closable
+                    | NSWindowStyleMask::Miniaturizable
+                    | NSWindowStyleMask::Resizable,
+                NSBackingStoreType::Buffered,
+                false,
+            )
+        };
+        unsafe {
+            window.setReleasedWhenClosed(false);
+        }
+        window.setTitle(&NSString::from_str(crate::protocol::tr!("Settings")));
+        window.setContentMinSize(NSSize::new(640.0, 440.0));
+        window.setTabbingMode(NSWindowTabbingMode::Disallowed);
+        PANEL.with_borrow(|panel| {
+            if let Some(panel) = panel {
+                window.setDelegate(panel.window.delegate().as_deref());
+            }
+        });
+        let view = AppView::new(mtm, options);
+        view.set_theme_overrides(Some(include_str!("../../../../assets/theme.json")))
+            .expect("valid player palette");
+        window.setContentView(Some(&view.view()));
+        window.center();
+        view.load(nsh_platform_macos::App::Rust(
+            Root::of::<crate::ui::Settings>().app_id(crate::protocol::component_app_id("settings")),
+        ));
+        SETTINGS.with_borrow_mut(|panel| *panel = Some(SettingsPanel { window, view }));
+    }
+    app.activate();
+    SETTINGS.with_borrow(|panel| {
+        if let Some(panel) = panel {
+            if panel.window.isMiniaturized() {
+                panel.window.deminiaturize(None);
+            }
+            panel.window.makeKeyAndOrderFront(None);
+        }
+    });
+}
+
+fn stop_settings() {
+    if let Some(panel) = SETTINGS.with_borrow_mut(Option::take) {
+        panel.window.setDelegate(None);
+        panel.window.close();
+        panel.window.setContentView(None);
+        panel.view.stop();
+    }
 }
 
 fn panel_options() -> AppOptions {
@@ -235,47 +384,14 @@ pub fn run_panel() -> ExitCode {
     }
     let delegate: Retained<PanelDelegate> = unsafe { msg_send![PanelDelegate::alloc(mtm), init] };
     app.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
-    let bar = NSMenu::new(mtm);
-    let holder = NSMenuItem::new(mtm);
-    bar.addItem(&holder);
-    let menu = NSMenu::new(mtm);
-    menu.setAutoenablesItems(false);
-    item(
-        &menu,
-        &delegate,
-        "检查更新…",
-        Some(sel!(checkForUpdates:)),
-        "",
-    );
-    menu.addItem(&NSMenuItem::separatorItem(mtm));
-    item(&menu, &delegate, "关闭面板", Some(sel!(closePanel:)), "w");
-    item(&menu, &delegate, "退出 MusicX", Some(sel!(quit:)), "q");
-    holder.setSubmenu(Some(&menu));
-    let edit_holder = NSMenuItem::new(mtm);
-    edit_holder.setTitle(ns_string!("编辑"));
-    let edit = NSMenu::new(mtm);
-    for (title, selector, key) in [
-        ("撤销", sel!(undo:), "z"),
-        ("重做", sel!(redo:), "Z"),
-        ("剪切", sel!(cut:), "x"),
-        ("复制", sel!(copy:), "c"),
-        ("粘贴", sel!(paste:), "v"),
-        ("全选", sel!(selectAll:), "a"),
-    ] {
-        // Standard AppKit text actions follow the responder chain.
-        unsafe {
-            item(&edit, &delegate, title, Some(selector), key).setTarget(None);
-        }
-    }
-    edit_holder.setSubmenu(Some(&edit));
-    bar.addItem(&edit_holder);
-    app.setMainMenu(Some(&bar));
+    menus::install(&app, &delegate);
     set_ui_sets(vec![nsh_base::registry_of([
         (|registry: &mut nsh_core::element::Registry| {
             registry
                 .register::<nsh_base::Button>()
                 .register::<nsh_base::Slider>()
                 .register::<nsh_base::Sheet>()
+                .register::<nsh_base::Select>()
                 .register::<nsh_base::Popover>();
         }) as nsh_base::parts::Part,
     ])]);
@@ -307,8 +423,10 @@ pub fn run_panel() -> ExitCode {
             window,
             view,
             details_left: std::cell::Cell::new(false),
+            closed: std::cell::Cell::new(false),
         })
     });
+    update_details_side();
     let notifications = NSDistributedNotificationCenter::defaultCenter();
     let reopen = NSString::from_str(&crate::protocol::panel_reopen_notification());
     let process_id = NSString::from_str(&std::process::id().to_string());
@@ -332,7 +450,8 @@ pub fn run_panel() -> ExitCode {
 }
 
 pub fn stop_panel() {
-    crate::source_browser::cancel_active_login();
+    crate::source_browser::cancel_active_logins();
+    stop_settings();
     let panel = PANEL.with_borrow_mut(Option::take);
     if let Some(panel) = panel {
         panel.window.setDelegate(None);

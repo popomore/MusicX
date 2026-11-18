@@ -1,0 +1,12 @@
+[package]
+name = "musicx-plugin"
+version = "0.2.0"
+edition = "2024"
+license = "MIT"
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+musicx-protocol = { path = "../protocol" }
+anyhow = "1"
+url = "2"

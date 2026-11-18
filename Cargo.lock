@@ -1844,8 +1844,9 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "musicx-mcp",
+ "musicx-mygo-plugin",
  "musicx-platform-apple",
- "musicx-plugins",
+ "musicx-protocol",
 ]
 
 [[package]]
@@ -1853,8 +1854,9 @@ name = "musicx-core"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "hex",
- "musicx-plugin-api",
+ "musicx-plugin",
  "musicx-protocol",
  "rand 0.8.8",
  "serde",
@@ -1870,13 +1872,37 @@ dependencies = [
  "anyhow",
  "axum",
  "musicx-core",
- "musicx-plugin-api",
- "musicx-plugins",
+ "musicx-plugin",
  "musicx-protocol",
  "rmcp",
  "serde",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "musicx-mygo-plugin"
+version = "0.2.0"
+dependencies = [
+ "aes",
+ "anyhow",
+ "base64 0.22.1",
+ "hex",
+ "libc",
+ "md-5",
+ "musicx-core",
+ "musicx-mcp",
+ "musicx-plugin",
+ "oxc",
+ "qrcode",
+ "reqwest",
+ "rquickjs",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2",
+ "url",
+ "zip",
 ]
 
 [[package]]
@@ -1899,6 +1925,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "toml_edit",
 ]
 
 [[package]]
@@ -1910,7 +1937,7 @@ dependencies = [
  "block2",
  "dispatch2",
  "musicx-core",
- "musicx-plugin-api",
+ "musicx-plugin",
  "objc2",
  "objc2-app-kit",
  "objc2-av-foundation",
@@ -1925,7 +1952,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "musicx-plugin-api"
+name = "musicx-plugin"
 version = "0.2.0"
 dependencies = [
  "anyhow",
@@ -1934,33 +1961,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "musicx-plugins"
-version = "0.2.0"
-dependencies = [
- "aes",
- "anyhow",
- "base64 0.22.1",
- "hex",
- "md-5",
- "musicx-core",
- "musicx-plugin-api",
- "oxc",
- "qrcode",
- "reqwest",
- "rquickjs",
- "serde",
- "serde_json",
- "sha2",
- "url",
- "zip",
-]
-
-[[package]]
 name = "musicx-protocol"
 version = "0.2.0"
 dependencies = [
+ "objc2-foundation",
  "schemars",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1969,6 +1976,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "block2",
+ "musicx-protocol",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
@@ -4318,6 +4326,7 @@ dependencies = [
  "indexmap",
  "toml_datetime",
  "toml_parser",
+ "toml_writer",
  "winnow",
 ]
 
@@ -4329,6 +4338,12 @@ checksum = "baa693a8032d7e1cada7d0041e96126df243179ff061456783ac7f12bda4744c"
 dependencies = [
  "winnow",
 ]
+
+[[package]]
+name = "toml_writer"
+version = "1.2.0+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "009dbb7700f11c55ef83aebbe4c0e9cf1f1ac0844bd8d6f00dc38f302026e13a"
 
 [[package]]
 name = "tower"

@@ -1,8 +1,12 @@
 //! Player-owned local playlists, independent of connected source accounts.
 use crate::controls::{action, caption, heading, primary};
+use crate::protocol::tr;
 use crate::{
     model::Model,
-    protocol::{LocalLibraryAction as Edit, LocalPlaylist, LocalPlaylistSummary, Status},
+    protocol::{
+        LocalLibraryAction as Edit, LocalPlaylist, LocalPlaylistSummary, RADIO_PLAYLIST_ID,
+        RadioRefresh, Status,
+    },
     remote,
 };
 use nsh_base::{button, input, theme};
@@ -14,6 +18,9 @@ struct Browser {
     owner: Owner,
     busy: Signal<bool>,
     error: Signal<String>,
+    notice: Signal<String>,
+    source_errors: Signal<String>,
+    refreshing: Signal<bool>,
     name: Signal<String>,
     lists: Signal<Vec<LocalPlaylistSummary>>,
     selected: Signal<Option<LocalPlaylist>>,
@@ -25,6 +32,46 @@ struct Browser {
     importing: Signal<bool>,
 }
 impl Browser {
+    fn radio(self) {
+        if self.busy.get() {
+            return;
+        }
+        self.notice.set(String::new());
+        self.source_errors.set(String::new());
+        self.refreshing.set(true);
+        self.work(
+            || remote::post_json::<_, RadioRefresh>("/ui/local-playlists", &Edit::RefreshRadio {}),
+            |this, result| {
+                let message = if result.sources.is_empty() {
+                    tr!("Connect a music account in Music sources to get personal recommendations.")
+                        .to_owned()
+                } else if result.added > 0 {
+                    tr!(
+                        "Added {} to Radio.",
+                        crate::protocol::i18n::tracks(result.added)
+                    )
+                } else {
+                    tr!("No new recommendations. Try again later.").to_owned()
+                };
+                this.notice.set(message);
+                let errors: Vec<_> = result
+                    .sources
+                    .iter()
+                    .filter_map(|source| {
+                        source
+                            .error
+                            .as_ref()
+                            .map(|error| format!("{}: {error}", source.name))
+                    })
+                    .collect();
+                this.source_errors.set(errors.join("\n"));
+                if let Some(list) = result.playlist {
+                    this.name.set(list.name.clone());
+                    this.selected.set(Some(list));
+                }
+            },
+        );
+    }
     fn work<T: Send + 'static>(
         self,
         run: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
@@ -45,16 +92,21 @@ impl Browser {
                 // Publish the result before the revision watcher can refresh the selection.
                 batch(|| {
                     self.busy.set(false);
+                    self.refreshing.set(false);
                     match result {
                         Ok(Ok(value)) => done(self, value),
                         Ok(Err(e)) => self.error.set(e.to_string()),
-                        Err(_) => self.error.set("请求已结束，请重试".into()),
+                        Err(_) => self
+                            .error
+                            .set(tr!("Request ended; please try again").into()),
                     }
                 });
             })
         });
     }
     fn lists(self) {
+        self.notice.set(String::new());
+        self.source_errors.set(String::new());
         self.creating.set(false);
         self.editing.set(false);
         self.managing.set(false);
@@ -68,6 +120,8 @@ impl Browser {
         );
     }
     fn select(self, id: String) {
+        self.notice.set(String::new());
+        self.source_errors.set(String::new());
         self.creating.set(false);
         self.editing.set(false);
         self.managing.set(false);
@@ -122,9 +176,13 @@ impl Browser {
                 let tracks = if queue {
                     state.queue.as_ref().clone()
                 } else {
-                    vec![state.track.ok_or_else(|| anyhow::anyhow!("当前没有歌曲"))?]
+                    vec![
+                        state
+                            .track
+                            .ok_or_else(|| anyhow::anyhow!(tr!("No current track")))?,
+                    ]
                 };
-                anyhow::ensure!(!tracks.is_empty(), "当前播放列表为空");
+                anyhow::ensure!(!tracks.is_empty(), tr!("The current queue is empty"));
                 remote::post_json::<_, LocalPlaylist>(
                     "/ui/local-playlists",
                     &Edit::Add { id, tracks },
@@ -142,6 +200,9 @@ pub fn library_view(model: Model) -> impl IntoElement {
         owner: Owner::current(),
         busy: signal(false),
         error: signal(String::new()),
+        notice: signal(String::new()),
+        source_errors: signal(String::new()),
+        refreshing: signal(false),
         name: signal(String::new()),
         lists: signal(Vec::new()),
         selected: signal(None),
@@ -195,6 +256,26 @@ pub fn library_view(model: Model) -> impl IntoElement {
                     .min_h(px(0.0))
                     .gap(px(12.0))
                     .child(when(
+                        move || !this.creating.get(),
+                        move || {
+                            view()
+                                .gap(px(4.0))
+                                .child(
+                                    view()
+                                        .flex_row()
+                                        .items_center()
+                                        .justify_between()
+                                        .child(heading(tr!("Radio")))
+                                        .child(primary(
+                                            tr!("Add recommendations"),
+                                            move || this.busy.get(),
+                                            move || this.radio(),
+                                        )),
+                                )
+                                .child(caption(tr!("Songs picked for you from connected music accounts.")))
+                        },
+                    ))
+                    .child(when(
                         move || !this.creating.get() && this.lists.with(|v| !v.is_empty()),
                         move || {
                             view()
@@ -202,14 +283,14 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                 .items_center()
                                 .justify_between()
                                 .child(caption(move || {
-                                    this.lists.with(|v| format!("{} 张歌单", v.len()))
+                                    this.lists.with(|v| crate::protocol::i18n::playlists(v.len()))
                                 }))
                                 .child(
                                     view()
                                         .flex_row()
                                         .gap(px(2.0))
                                         .child(action(
-                                            "新建歌单",
+                                            tr!("New playlist"),
                                             move || this.busy.get(),
                                             move || {
                                                 this.name.set(String::new());
@@ -217,7 +298,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                             },
                                         ))
                                         .child(action(
-                                            "导入歌单",
+                                            tr!("Import playlist"),
                                             move || this.busy.get(),
                                             move || this.importing.set(true),
                                         )),
@@ -229,12 +310,12 @@ pub fn library_view(model: Model) -> impl IntoElement {
                         move || {
                             view()
                                 .gap(px(10.0))
-                                .child(heading("新建歌单"))
+                                .child(heading(tr!("New playlist")))
                                 .child(
                                     input()
                                         .value(move || this.name.get())
-                                        .placeholder("歌单名称")
-                                        .label("新歌单名称")
+                                        .placeholder(tr!("Playlist name"))
+                                        .label(tr!("New playlist name"))
                                         .on_change(move |v: &str| this.name.set(v.into()))
                                         .h(px(36.0))
                                         .px(px(10.0))
@@ -247,7 +328,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                         .flex_row()
                                         .gap(px(6.0))
                                         .child(primary(
-                                            "创建歌单",
+                                            tr!("Create playlist"),
                                             move || {
                                                 this.busy.get()
                                                     || this.name.with(|v| v.trim().is_empty())
@@ -259,7 +340,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                             },
                                         ))
                                         .child(action(
-                                            "取消新建",
+                                            tr!("Cancel playlist creation"),
                                             move || this.busy.get(),
                                             move || {
                                                 this.creating.set(false);
@@ -283,15 +364,15 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                 .justify_center()
                                 .gap(px(10.0))
                                 .pb(px(64.0))
-                                .child(heading("还没有歌单"))
-                                .child(caption("把喜欢的歌曲收集在一起。"))
+                                .child(heading(tr!("No playlists yet")))
+                                .child(caption(tr!("Collect your favorite tracks in one place.")))
                                 .child(
                                     view()
                                         .mt(px(10.0))
                                         .gap(px(6.0))
                                         .items_center()
                                         .child(primary(
-                                            "新建歌单",
+                                            tr!("New playlist"),
                                             move || this.busy.get(),
                                             move || {
                                                 this.name.set(String::new());
@@ -299,7 +380,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                             },
                                         ))
                                         .child(action(
-                                            "导入歌单",
+                                            tr!("Import playlist"),
                                             move || this.busy.get(),
                                             move || this.importing.set(true),
                                         )),
@@ -321,10 +402,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                             };
                                             button()
                                                 .accessibility_label(move || {
-                                                    Some(SharedString::from(format!(
-                                                        "打开本地歌单 {}",
-                                                        item().map_or_else(String::new, |p| p.name)
-                                                    )))
+                                                    Some(SharedString::from(tr!("Open local playlist {}", item().map_or_else(String::new, |p| p.display_name().to_owned()))))
                                                 })
                                                 .on_press(move || {
                                                     if let Some(p) = item() {
@@ -344,11 +422,8 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                                 .child(crate::controls::artwork(
                                                     move || item().and_then(|p| p.cover_url),
                                                     move || {
-                                                        format!(
-                                                            "{}封面",
-                                                            item().map_or_else(String::new, |p| p
-                                                                .name)
-                                                        )
+                                                        tr!("Artwork for {}", item().map_or_else(String::new, |p| p
+                                                                .display_name().to_owned()))
                                                     },
                                                     40.0,
                                                 ))
@@ -361,7 +436,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                                             text(move || {
                                                                 item()
                                                                     .map_or_else(String::new, |p| {
-                                                                        p.name
+                                                                        p.display_name().to_owned()
                                                                     })
                                                             })
                                                             .number_of_lines(1)
@@ -371,14 +446,11 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                                         .child(caption(move || {
                                                             item().map_or_else(String::new, |p| {
                                                                 let prefix = if p.pinned {
-                                                                    "已置顶 · "
+                                                                    tr!("Pinned · ")
                                                                 } else {
                                                                     ""
                                                                 };
-                                                                format!(
-                                                                    "{prefix}{} 首",
-                                                                    p.track_count
-                                                                )
+                                                                tr!("{prefix}{tracks}"; prefix = prefix, tracks = crate::protocol::i18n::tracks(p.track_count))
                                                             })
                                                         })),
                                                 )
@@ -387,7 +459,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                     .flex_1()
                                     .min_h(px(0.0))
                                     .estimated_item_size(px(56.0))
-                                    .label("本地歌单列表")
+                                    .label(tr!("Local playlists"))
                                 },
                             )
                         },
@@ -406,7 +478,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                             .flex_row()
                             .justify_between()
                             .child(action(
-                                "所有歌单",
+                                tr!("All playlists"),
                                 move || this.busy.get(),
                                 move || this.lists(),
                             ))
@@ -414,7 +486,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                 move || !this.managing.get(),
                                 move || {
                                     action(
-                                        "管理歌单",
+                                        tr!("Manage playlists"),
                                         move || this.busy.get(),
                                         move || {
                                             this.managing.set(true);
@@ -429,7 +501,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                 move || this.managing.get(),
                                 move || {
                                     action(
-                                        "完成管理",
+                                        tr!("Done"),
                                         move || this.busy.get(),
                                         move || {
                                             this.managing.set(false);
@@ -445,7 +517,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                         move || {
                             heading(move || {
                                 this.selected.with(|p| {
-                                    p.as_ref().map_or_else(String::new, |p| p.name.clone())
+                                    p.as_ref().map_or_else(String::new, |p| p.display_name().to_owned())
                                 })
                             })
                         },
@@ -453,7 +525,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                     .child(caption(move || {
                         this.selected.with(|p| {
                             p.as_ref().map_or_else(String::new, |p| {
-                                format!("{} 首 · 本地歌单", p.tracks.len())
+                                tr!("{tracks} · Local playlist"; tracks = crate::protocol::i18n::tracks(p.tracks.len()))
                             })
                         })
                     }))
@@ -466,7 +538,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                     input()
                                         .value(move || this.name.get())
                                         .on_change(move |v: &str| this.name.set(v.into()))
-                                        .label("歌单名称")
+                                        .label(tr!("Playlist name"))
                                         .h(px(34.0))
                                         .px(px(8.0))
                                         .bg(move || theme().muted)
@@ -478,7 +550,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                         .flex_row()
                                         .gap(px(4.0))
                                         .child(primary(
-                                            "保存名称",
+                                            tr!("Save name"),
                                             move || {
                                                 this.busy.get()
                                                     || this.name.with(|v| v.trim().is_empty())
@@ -493,7 +565,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                             },
                                         ))
                                         .child(action(
-                                            "取消重命名",
+                                            tr!("Cancel rename"),
                                             move || this.busy.get(),
                                             move || this.editing.set(false),
                                         )),
@@ -505,12 +577,20 @@ pub fn library_view(model: Model) -> impl IntoElement {
                         move || {
                             view()
                                 .gap(px(6.0))
+                                .child(when(
+                                    move || this.selected.with(|p| p.as_ref().is_some_and(|p| p.id == RADIO_PLAYLIST_ID)),
+                                    move || action(
+                                        tr!("Add recommendations"),
+                                        move || this.busy.get(),
+                                        move || this.radio(),
+                                    ),
+                                ))
                                 .child(
                                     view()
                                         .flex_row()
                                         .gap(px(6.0))
                                         .child(primary(
-                                            "播放歌单",
+                                            tr!("Play playlist"),
                                             move || {
                                                 model.starting.get()
                                                     || this.busy.get()
@@ -526,7 +606,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                             },
                                         ))
                                         .child(action(
-                                            "添加歌曲",
+                                            tr!("Add tracks"),
                                             move || this.busy.get(),
                                             move || this.adding.update(|v| *v = !*v),
                                         )),
@@ -537,7 +617,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                         view()
                                             .gap(px(2.0))
                                             .child(action(
-                                                "加入当前歌曲",
+                                                tr!("Add current track"),
                                                 move || {
                                                     this.busy.get()
                                                         || model.status.with(|s| s.track.is_none())
@@ -545,7 +625,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                                 move || this.add(false),
                                             ))
                                             .child(action(
-                                                "加入播放队列",
+                                                tr!("Add current queue"),
                                                 move || {
                                                     this.busy.get()
                                                         || model
@@ -581,7 +661,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                                     },
                                                     move || {
                                                         action(
-                                                            "取消置顶",
+                                                            tr!("Unpin"),
                                                             move || {
                                                                 this.busy.get()
                                                                     || this.deleting.get()
@@ -592,7 +672,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                                 )
                                                 .otherwise(move || {
                                                     action(
-                                                        "置顶",
+                                                        tr!("Pin"),
                                                         move || {
                                                             this.busy.get() || this.deleting.get()
                                                         },
@@ -601,7 +681,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                                 }),
                                             )
                                             .child(action(
-                                                "重命名",
+                                                tr!("Rename"),
                                                 move || this.busy.get(),
                                                 move || {
                                                     if let Some(p) = this.selected.get() {
@@ -611,7 +691,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                                 },
                                             ))
                                             .child(action(
-                                                "删除歌单",
+                                                tr!("Delete playlist"),
                                                 move || this.busy.get(),
                                                 move || this.deleting.set(true),
                                             ))
@@ -623,18 +703,18 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                         view()
                                             .gap(px(4.0))
                                             .child(caption(
-                                                "删除这张本地歌单？当前播放队列会保留。",
+                                                tr!("Delete this local playlist? The current queue will be kept."),
                                             ))
                                             .child(
                                                 view()
                                                     .flex_row()
                                                     .child(action(
-                                                        "取消删除",
+                                                        tr!("Cancel playlist deletion"),
                                                         move || this.busy.get(),
                                                         move || this.deleting.set(false),
                                                     ))
                                                     .child(action(
-                                                        "确认删除歌单",
+                                                        tr!("Confirm playlist deletion"),
                                                         move || this.busy.get(),
                                                         move || this.delete(),
                                                     )),
@@ -648,7 +728,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                             this.selected
                                 .with(|p| p.as_ref().is_some_and(|p| p.tracks.is_empty()))
                         },
-                        || caption("歌单为空，点「添加歌曲」加入当前歌曲或队列。"),
+                        || caption(tr!("This playlist is empty. Use “Add tracks” to add the current track or queue.")),
                     ))
                     .child(when(
                         move || {
@@ -686,14 +766,10 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                                 .child(
                                                     button()
                                                         .accessibility_label(move || {
-                                                            Some(SharedString::from(format!(
-                                                                "播放本地歌单第{}首 {}",
-                                                                at.index() + 1,
-                                                                track().map_or_else(
+                                                            Some(SharedString::from(tr!("Play local playlist track {}, {}", at.index() + 1, track().map_or_else(
                                                                     String::new,
                                                                     |t| t.title
-                                                                )
-                                                            )))
+                                                                ))))
                                                         })
                                                         .disabled(move || {
                                                             model.starting.get() || this.busy.get()
@@ -717,13 +793,10 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                                                 track().and_then(|t| t.cover_url)
                                                             },
                                                             move || {
-                                                                format!(
-                                                                    "{}封面",
-                                                                    track().map_or_else(
+                                                                tr!("Artwork for {}", track().map_or_else(
                                                                         String::new,
                                                                         |t| t.title
-                                                                    )
-                                                                )
+                                                                    ))
                                                             },
                                                             36.0,
                                                         ))
@@ -757,7 +830,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                                     move || this.managing.get(),
                                                     move || {
                                                         action(
-                                                            "移除",
+                                                            tr!("Remove"),
                                                             move || this.busy.get(),
                                                             move || {
                                                                 if let Some(p) = this.selected.get()
@@ -777,7 +850,7 @@ pub fn library_view(model: Model) -> impl IntoElement {
                                     .flex_1()
                                     .min_h(px(0.0))
                                     .estimated_item_size(px(52.0))
-                                    .label("本地歌单曲目")
+                                    .label(tr!("Local playlist tracks"))
                                 },
                             )
                         },
@@ -786,7 +859,15 @@ pub fn library_view(model: Model) -> impl IntoElement {
         ))
         .child(when(
             move || this.busy.get() && !this.importing.get(),
-            || caption("正在读取或保存…"),
+            move || caption(move || if this.refreshing.get() { tr!("Getting recommendations…") } else { tr!("Loading or saving…") }),
+        ))
+        .child(when(
+            move || this.notice.with(|v| !v.is_empty()) && !this.importing.get(),
+            move || caption(move || this.notice.get()),
+        ))
+        .child(when(
+            move || this.source_errors.with(|v| !v.is_empty()) && !this.importing.get(),
+            move || caption(move || this.source_errors.get()),
         ))
         .child(when(
             move || this.error.with(|v| !v.is_empty()),

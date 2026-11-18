@@ -26,6 +26,31 @@ Use the same build settings and data directory when connecting to the test sessi
 
 Runtime overrides are `MUSICX_DATA_DIR`, `MUSICX_PORT`, and `MUSICX_WEB_AUTH`. Only these current names are supported; previous names are ignored, and previous data directories are not migrated. Production builds leave `MUSICX_BUILD_*` unset and use the MusicX name, `local.musicx` IDs, and the default listener.
 
+## UI languages
+
+MusicX supports English and Simplified Chinese on macOS and iPhone. Language in
+settings defaults to the system's preferred supported language, falling back to
+English. Choosing a language applies immediately and saves it in `language` in
+the app's data directory. The panel and background helper share this preference.
+`MUSICX_LANGUAGE=en` or `MUSICX_LANGUAGE=zh-CN` overrides it for isolated QA runs.
+
+Use `musicx_protocol::tr!` (or `crate::protocol::tr!` in the shared UI) for app
+messages. English source messages are gettext-style keys shared by the English
+and Simplified Chinese catalogs in `crates/protocol/src/locales/`. English is
+the fallback when a key is missing. Provide parameters explicitly:
+`tr!("View artist {}", name)` or `tr!("Like not saved: {e}"; e = error)`.
+Named parameters can be reordered in translations and user content is never
+interpreted as a template. Use the shared `i18n::tracks`, `playlists` and
+`relative_time` helpers for counts and relative timestamps. Catalog tests verify
+parameter parity; the headless localization test exercises real settings buttons,
+language persistence and refresh without resetting the playback model.
+
+Plugins receive the same `en` or `zh-CN` locale and use their own language files,
+with the other supported locale as a fallback for missing keys. Track titles,
+lyrics, user playlist names, and third-party errors retain their original text.
+The protected Liked Songs playlist has a localized display name; its persisted
+identity and name are preserved. MCP tool schemas retain their static descriptions.
+
 ## Package the macOS app
 
 Run the packager from the repository root. It builds a DMG for the build machine's architecture with `MusicX.app` and an Applications shortcut. The app includes its panel and web sign-in helpers.
@@ -42,13 +67,17 @@ Signature verification requires OpenSSL 3. On macOS, install `openssl@3` with Ho
 
 The persistent outer app owns Sparkle 2.10.1; the disposable player panel forwards update requests to its parent. Settings displays the parent app's version, and both the application menu and status icon's context menu expose **检查更新…**. Sparkle checks daily, downloads updates automatically, and manages installation and relaunch. Quitting stops playback and terminates the child panel before the outer app exits.
 
-The fixed stable feed is `https://github.com/popomore/MusicX/releases/latest/download/appcast.xml`. Each enclosure points to the DMG on its immutable version tag. Preview releases do not supply this feed. Pushing source or building a CI artifact does not make an update available; the regular GitHub Release must be published with its signed appcast.
+The updater uses `https://github.com/popomore/MusicX/releases/download/update-feed/appcast.xml`. The dedicated `update-feed` pre-release holds signed metadata, is never Latest, and is updated after each versioned installer is published. It retains the newest three stable and preview items. Stable items have no channel; previews use `sparkle:channel=preview`. Settings defaults to **稳定版**; **全部版本** allows preview in addition to stable. The preference lives in `update-channel` in the app's data directory and is shared by settings, both menus, and automatic checks. Switching back to stable does not downgrade an installed preview. The choice applies to subsequent update checks; it does not cancel a Preview download or an update already prepared by Sparkle, which can still be installed.
 
-Configure repository variable `SPARKLE_PUBLIC_KEY` and repository secret `SPARKLE_PRIVATE_KEY` before the next Developer ID release. Generate and export a dedicated key with Sparkle's `bin/generate_keys --account musicx` and `bin/generate_keys --account musicx -x <private-file>`. Preserve this key for future releases; keep the private value out of Git. The packager embeds only the public key. The workflow passes the private key to `generate_appcast` through stdin, verifies the enclosure signature against the configured public key, and uploads the feed with the installer. A signed stable release fails if this configuration or feed is missing.
+The legacy stable URL `https://github.com/popomore/MusicX/releases/latest/download/appcast.xml` remains available to existing installations. Every versioned release includes its own signed single-item `appcast.xml`. Each enclosure points to that tag's installer. The publisher authenticates previous metadata before merging it, refuses decreasing or conflicting build numbers, and checks the previous feed digest before replacement so a stale retry cannot discard newer updates. The dedicated feed must remain mutable; versioned installers and tags are never overwritten. Pushing source or building a CI artifact does not make an update available.
+
+Feed replacement uploads a uniquely named `appcast-next-*` asset and verifies its digest before touching `appcast.xml`. The publisher then renames the old asset to `appcast-previous-<asset-id>.xml` and promotes the staged asset. Failed promotion restores the old name; a lost API response never causes an already published newer feed to be rolled back. Signed remote copies are retained for recovery rather than deleted. If a runner stops between renames, the next generation/publication can recover fully uploaded signed metadata and the live entry before continuing. The two renames are not an atomic operation; a brief interruption can still occur between them.
+
+Configure repository variable `SPARKLE_PUBLIC_KEY` and Environment secret `SPARKLE_PRIVATE_KEY` in both `macos-preview` and `macos-stable` before the next Developer ID release. Generate and export a dedicated key with Sparkle's `bin/generate_keys --account musicx` and `bin/generate_keys --account musicx -x <private-file>`. Preserve this key for future releases; keep the private value out of Git. The packager embeds only the public key. The workflow passes the private key to `generate_appcast` through stdin, verifies the enclosure signature against the configured public key, and uploads the feed with the installer. A signed stable release fails if this configuration or feed is missing.
 
 For local packaging with updates enabled, set `MUSICX_SPARKLE_PUBLIC_KEY` to the public key before running `scripts/package-macos.sh`. The script downloads a pinned, checksum-verified Sparkle distribution and signs its nested framework components before signing the outer bundle. Omit the key for local builds with updates disabled. The CLI's private development cache is never configured as an update target.
 
-Bundle versions follow the Cargo `X.Y.Z` version, so increment both helper and platform package versions before releasing an update. The first version with Sparkle must be installed manually; older versions have no updater. A real A→B upgrade, Developer ID validation, and notarization require published builds and are separate from local tests.
+Release versions come from tags, without changing Cargo package versions. `CFBundleShortVersionString` is the tag's numeric `X.Y.Z`; `MusicXReleaseVersion` retains the full preview suffix for the settings display. `CFBundleVersion` and `sparkle:version` use `1000000 + GITHUB_RUN_NUMBER` from the single Release macOS workflow. This migrates legacy `1.0.0` installations and orders stable and preview builds together; reruns of the same workflow keep their build number. Do not recreate the workflow or reset its counter without a migration. Older preview packages without Sparkle require a manual installation of a newer build. A real published A→B upgrade, Developer ID validation, and notarization remain separate acceptance checks.
 
 For distribution, set `MUSICX_CODESIGN_IDENTITY` to your Developer ID Application identity and package to a new output path. Submit the resulting DMG using your existing notarytool Keychain profile, then staple and validate the ticket before publishing it.
 
@@ -64,37 +93,108 @@ xcrun stapler validate target/distribution/MusicX-release.dmg
 
 ## Build and publish with GitHub Actions
 
-The macOS CI workflow runs formatting, workspace tests, and release automation tests on pull requests and pushes to `main`. [macOS CI](../.github/workflows/ci-macos.yml)
+### macOS TestFlight
 
-Workspace tests use Cargo's test profile with debug information disabled (`CARGO_PROFILE_TEST_DEBUG=0 cargo test --locked --workspace`) to avoid release size optimization and LTO on every change. Rust dependencies and their compiled artifacts are cached by toolchain, target, manifests, lockfile, and compiler environment. Stable releases still run the workspace tests with `--release` before packaging.
+TestFlight uses a Mac App Distribution certificate, a Mac Installer Distribution certificate, and a macOS App Store provisioning profile for `com.popomore.musicx`. Developer ID signing is for the separate direct-download installer. Preserve each certificate's private key, encrypted P12 export and export password in the credential vault.
 
-After CI passes for a push to `main`, the Tag macOS Preview workflow creates a tag on the tested commit. The tag combines the application version, the commit's UTC timestamp, and the first four commit characters as `v<version>.preview-<YYYYMMDDHHMMSS>-<commit>`, for example `v0.2.0.preview-20261110085445-a87b`. A rerun reuses the tag when it points to the same commit. [Tag macOS Preview](../.github/workflows/tag-macos-preview.yml)
+The TestFlight packager builds the three components separately and follows Cargo's reported executable paths. It enables App Sandbox, embeds the provisioning profile, signs the child helpers with inherited sandbox permissions, and creates a signed `.pkg`. It omits Sparkle. The Mac application uses Foundation to resolve its sandbox container for storage. The store build's MCP listener uses port `45969`.
 
-Tag macOS Preview dispatches Release macOS with the new tag as its ref because [tags created using `GITHUB_TOKEN` do not trigger another push workflow](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow#triggering-a-workflow-from-a-workflow). Manually pushing a version tag starts Release macOS through the tag push event. [Release workflow](../.github/workflows/release-macos.yml)
+Choose the display version from the intended release tag and an increasing App Store Connect build number; Cargo package versions stay unchanged. For example:
 
-Release macOS builds an ad hoc signed DMG for preview tags and publishes it as a GitHub Pre-release. macOS may block it on first launch because it lacks notarization. Stable tags use Developer ID signing and notarization when all six repository Actions secrets are configured. With all six unset, a stable tag also produces an ad hoc signed Pre-release. A partial configuration fails before the build of a stable tag.
+```sh
+python3 scripts/package-testflight-macos.py \
+  --version 1.0.0 --build 1 \
+  --profile /secure/MusicX.provisionprofile \
+  --app-identity APPLICATION_CERTIFICATE_SHA1 \
+  --installer-identity INSTALLER_CERTIFICATE_SHA1 \
+  --keychain /secure/signing.keychain-db \
+  --output target/distribution/MusicX-TestFlight.pkg
+```
+
+Validate and upload using an App Store Connect team API key. The private key remains outside the repository:
+
+```sh
+export API_PRIVATE_KEYS_DIR=/secure/private-keys
+xcrun altool --validate-app target/distribution/MusicX-TestFlight.pkg \
+  --api-key KEY_ID --api-issuer ISSUER_ID
+xcrun altool --upload-package target/distribution/MusicX-TestFlight.pkg --wait \
+  --api-key KEY_ID --api-issuer ISSUER_ID
+```
+
+Verify the processed build in App Store Connect and enable it for the intended internal testing group. Upload, processing, installation through TestFlight, and actual device testing are separate acceptance steps. External beta review and public App Store publication need their own authorization.
+
+For isolated local sandbox QA, `--prepare-only` creates an ad hoc app using `local.musicx.testflightqa`, its own container, and port `45974`:
+
+```sh
+python3 scripts/package-testflight-macos.py --prepare-only \
+  --version 1.0.0 --build 1 --output target/distribution/MusicX-Sandbox-QA.app
+```
+
+### Automatic release branches
+
+| Branch | Version / notes | GitHub | Apple distribution |
+| --- | --- | --- | --- |
+| `main` | `vX.Y.Z-preview.N`; changes since the previous semantic Preview | Pre-release, ad hoc signed DMG | Separate sandboxed PKG to the existing Internal TestFlight group |
+| `release` | `vX.Y.Z`; cumulative changes since the previous stable tag | Developer ID signed, notarized, stapled; Latest | No automatic public App Store submission |
+| `N.x` / `N.N.x` | Stable versions constrained by semantic-release's maintenance range | Signed maintenance release; never Latest | No automatic store submission |
+
+The [Conventional Commit rules](../AGENTS.md#contributions) control versions: `feat` is minor, `fix`/`perf` are patch, and `!` or `BREAKING CHANGE:` is major. Other types do not publish by themselves. semantic-release 26.0.1 and the conventional-commits preset generate grouped English notes with commit/issue links, followed by installation and signing information. Preview notes are incremental; stable notes include changes across the Preview cycle. The npm package is private tooling only: no npm publication, release commits, version-file updates or automatic PR/issue comments. Cargo versions stay unchanged. Existing `v1.0.0` establishes the stable baseline; old timestamp Preview tags remain usable but are no longer generated.
+
+[macOS CI](../.github/workflows/ci-macos.yml) runs formatting, locked workspace/iOS metadata checks, and Python/Node release tests on PRs and pushes to all release branches. The separate [Commit Policy workflow](../.github/workflows/commit-policy.yml) checks the PR title and handwritten commits from JSON fetched through a read-only token. PR title/body edits rerun only this metadata check, so bot-written release summaries cannot cancel a queued build. It checks out only the trusted base SHA. The initial policy migration uses a small inline bootstrap check when the base predates the validator; subsequent PRs use the base revision's rules. This is a structural/character check; reviewers still assess English quality, accurate change types and the final merge method. Business PRs use Squash; cross-branch synchronization PRs use Merge commit. GitHub-generated merge/revert messages and historical commits carried by trusted synchronization are allowed.
+
+After successful push CI, [Queue macOS Release](../.github/workflows/tag-macos-preview.yml) verifies the CI workflow ID/path, repository, event, branch, SHA and current tip, then dispatches [Release macOS](../.github/workflows/release-macos.yml) on that exact branch. A PR run or fork cannot enter this path. The release workflow verifies provenance again before checking out source. Dispatching on the tested branch makes the Environment deployment policy check the correct ref; a `workflow_run` job itself uses the default branch ref. The dispatcher creates no tags. Explicit dispatch is needed because ordinary pushes made with `GITHUB_TOKEN` do not trigger another push workflow.
+
+Release macOS is globally serialized and retains its existing workflow identity and run counter. The plan job uses semantic-release dry-run to save the next version, notes, source SHA, CI/release run IDs, branch, feed and build number before any tag is created. Planning has `contents: write` because semantic-release verifies Git push authorization even in dry-run mode, but receives no signing credentials. The macOS build jobs have read-only tokens and no PR caches/artifacts. The publisher has `contents: write` and no Apple/Sparkle private credentials. Only the dispatcher needs `actions: write`; no PAT is required.
+
+### Signing Environments
+
+Use selected deployment branches, not a policy allowing every protected branch:
+
+| Environment | Allowed branches | Secrets |
+| --- | --- | --- |
+| `macos-preview` | `main` | `SPARKLE_PRIVATE_KEY` |
+| `macos-stable` | `release`, explicitly enabled maintenance branches | Developer ID and Apple API fields below, `SPARKLE_PRIVATE_KEY` |
+| `macos-testflight` | `main` | Store application/installer P12s and passwords, profile, Apple API fields |
 
 | Secret | Value |
 | --- | --- |
-| `APPLE_CERTIFICATE` | Base64-encoded Developer ID Application certificate and private key exported as a `.p12` |
-| `APPLE_CERTIFICATE_PASSWORD` | Password used to export the `.p12` |
-| `APPLE_SIGNING_IDENTITY` | Full Developer ID Application signing identity |
-| `APPLE_API_PRIVATE_KEY` | Contents of the App Store Connect team API private key `.p8` |
-| `APPLE_API_KEY` | App Store Connect API key ID |
-| `APPLE_API_ISSUER` | App Store Connect API issuer ID |
+| `APPLE_CERTIFICATE` | Base64 Developer ID Application P12, including private key and certificate chain |
+| `APPLE_CERTIFICATE_PASSWORD` | Developer ID P12 export password |
+| `APPLE_SIGNING_IDENTITY` | Full Developer ID Application common name |
+| `APPLE_API_PRIVATE_KEY` | App Store Connect team API `.p8` contents |
+| `APPLE_API_KEY` / `APPLE_API_ISSUER` | API key ID / issuer ID |
+| `STORE_APP_CERTIFICATE` / `STORE_APP_CERTIFICATE_PASSWORD` | Base64 Mac App Distribution P12 / export password |
+| `STORE_INSTALLER_CERTIFICATE` / `STORE_INSTALLER_CERTIFICATE_PASSWORD` | Base64 Mac Installer Distribution P12 / export password |
+| `STORE_PROVISION_PROFILE` | Base64 macOS App Store provisioning profile for `com.popomore.musicx` |
+| `SPARKLE_PRIVATE_KEY` | Existing Sparkle Ed25519 key; preserve continuity |
 
-Formal releases use manual stable tags. Tag a commit on `main` with a version that matches `apps/macos/helper/Cargo.toml` and `crates/platform-apple/Cargo.toml`. For version 0.2.0, push `v0.2.0`. Only a stable `vX.Y.Z` tag with a Developer ID signed and notarized installer becomes a regular release. Non-stable tags and ad hoc signed builds are always marked **Pre-release**.
+Keep `SPARKLE_PUBLIC_KEY` as a repository variable. Configure `TESTFLIGHT_APP_ID` and `TESTFLIGHT_GROUP_ID` as variables in `macos-testflight`, pointing to the existing app and Internal group. The uploader verifies the group belongs to this app and is internal, never adds testers, checks export compliance, and waits for `VALID`, group association and `IN_BETA_TESTING`. It reconciles an existing build before attempting an upload, so a processing timeout can resume without a duplicate delivery. Installation through TestFlight and real audio playback remain separate acceptance steps. Store builds disable automatic writes to external agent configuration; users can copy the existing MCP settings manually.
+
+The TestFlight job selects the installed Xcode 26.3 toolchain explicitly. App Store Connect JWTs are signed with Node's built-in ES256 implementation rather than `altool --generate-jwt`, which is unavailable in older Xcode tools. The uploader discovers the protected `AuthKey_<ID>.p8` through `API_PRIVATE_KEYS_DIR`; no private key or JWT is placed in command arguments or published artifacts.
+
+The signed store bundle includes `ITSAppUsesNonExemptEncryption = false`, carrying the owner's existing declaration for the current standard TLS/AES usage. Reassess this declaration if the app's cryptography changes. This avoids a post-upload export-compliance write, which the Developer API role cannot perform. Prefer automatic distribution in the existing Internal group when using an upload-only Developer key; API-managed distribution may require an App Manager key. Verify the actual group association and Internal state before treating delivery as complete.
+
+Signing in to Xcode does not configure Actions. A paid Apple Developer Program distribution team is required. App Store and Developer ID certificates serve different distributions. Import certificates only into disposable job keychains and expose API/Sparkle keys only to the steps that need them. Never log private keys, passwords or raw JWT output. Pin Actions to full SHAs and install the committed npm lockfile with `npm ci --ignore-scripts`; there is no release-job restore of PR dependency/build caches. Migrate repository secrets only after Environment values and actual builds are verified, then remove the repository copies. Require PRs, resolved review conversations, and the official GitHub Actions checks `commit-policy`, `release-tests` and `test` on protected release branches. CODEOWNERS identifies release files for owner review. With one maintainer, the configured approval count is zero because an author cannot approve their own PR; owner review remains a documented merge responsibility. Allow Merge and Squash, and keep Rebase disabled.
+
+### Promotion, maintenance and recovery
+
+Bootstrap `release` from the existing stable tag before activating the first semantic Preview, so semantic-release has a stable release branch. After Preview and Internal TestFlight verification, open a PR from `main` to `release`, for example `chore(release): promote main to stable`, and use Merge commit. CI must succeed on the resulting `release` SHA before automatic stable publication. After every stable promotion, merge `release` back into `main` with another Merge commit PR, even without hotfixes: the stable tag must enter main's ancestry before the next Preview cycle. A synchronization containing no releasable changes does not create another build. Never squash these synchronization PRs: losing ancestry causes repeated commits and incorrect release ranges. Create maintenance branches only on explicit request, from the appropriate stable tag, and add that exact branch to `macos-stable`'s deployment policy. Backport with PRs, then merge fixes forward.
+
+Maintenance builds embed `MUSICX_UPDATE_FEED_URL` pointing to `update-feed-N.x` or `update-feed-N.N.x`. Their feed starts independently and cannot overwrite `update-feed` or Latest. The current stable/Preview feed keeps the existing global URL; old installations retain their configured feed. The publisher preserves checksum, source-tag, signed feed and GitHub asset-digest checks. Stable publication requires an Accepted notarization result and a validated stapled ticket before uploading a draft and publishing it. Every release includes the installer, checksum, signed appcast and source/build/signing manifest.
+
+Plans, validated DMGs, signed feeds and TestFlight PKGs are retained as immutable artifacts for 90 days. Each artifact is bound to its original plan and SHA-256 digests. Rerun **the original run's failed jobs** after a transient failure. Rerunning all jobs also restores the same plan, build number and signed bytes. Do not dispatch a fresh run to rebuild an existing tag. If semantic-release pushed the tag before publication failed, recovery verifies the tag/source and original artifact receipt, repairs only a missing semantic-release channel note, and resumes the idempotent publisher. Conflicting tags, channel notes or digests stop recovery; moving a pushed tag still requires approval. An expired/missing artifact for an already tagged version requires manual recovery, never an automatic rebuild. A newer feed is never replaced by a stale retry.
+
+The TestFlight job is independent of GitHub publication: its failure does not undo an already verified GitHub Release. Check the per-attempt `testflight-status` receipt and rerun the failed job to reconcile processing. Temporary 404 responses while reading Internal metadata are polled within the existing 20-minute processing deadline; the receipt records the pending API path. Failed writes stop the job so a rerun can read back the actual state before resuming. It does not submit an external beta or public App Store release. Retain the `Release macOS` workflow file and identity; recreating it would reset the build counter and requires a migration.
+
+Local verification requires Python 3.11+, Node 26.13+, Git, Bash, Cargo, `jq`, and GNU `sha256sum` on `PATH`:
 
 ```sh
-git tag -a v0.2.0 -m "MusicX 0.2.0"
-git push origin v0.2.0
+npm ci --ignore-scripts --no-audit --no-fund
+npm test
+python3 -m unittest discover -s scripts/tests -v
 ```
 
-The macOS job validates the tagged commit and both package versions, then builds the DMG for the selected signing mode. For Developer ID builds it signs, notarizes, and staples the installer, then generates a signed `appcast.xml`. The publish job verifies the checksum and update signature and uploads the installer, checksum, appcast (stable releases), and `release-manifest.json` to a draft. It checks the GitHub asset digests before publishing and retains a copy of the manifest for 90 days. The manifest records the signing mode.
-
-If publication fails after a successful build, rerun the failed jobs to reuse the same installer. Preview installers are retained for 14 days; tagged release installers are retained for seven days. The publisher reuses matching uploads and stops if the draft contains conflicting assets. After configuring Apple credentials, use the next version tag for the signed release.
-
-The local release automation tests require Python 3.9 or later, Git, Bash, Cargo, `jq`, and `sha256sum` (GNU coreutils) on `PATH`; the GitHub CLI fixture uses `jq` to filter responses. Run them with `python3 -m unittest discover -s scripts/tests -v`. They use a local Git repository and a file-backed GitHub CLI fixture, without creating remote tags or releases.
+Node tests use local bare Git repositories with the real semantic-release engine to check incremental Preview, cumulative stable, maintenance, breaking changes and no-release behavior. Python tests use a file-backed GitHub service fixture to verify signing, asset/feed integrity and failed-publication recovery. Neither test suite publishes remote releases.
 
 ## Repository layout
 
@@ -103,8 +203,8 @@ The local release automation tests require Python 3.9 or later, Git, Bash, Cargo
 | `crates/core` | Playback state, queues, history, local playlists, and persistence |
 | `crates/protocol` | Shared types and the local control protocol |
 | `crates/platform-apple` | AVPlayer, system Now Playing, and macOS menu bar integration |
-| `crates/plugin-api` | Rust interfaces for search, streams, track information, and albums |
-| `crates/plugins` | MyGo bridge, source management, and account adapters |
+| `crates/plugin` | `DataSource` media interface and typed `PluginSource` operations |
+| `crates/mygo-plugin` | MyGo implementation, runtime injection, and source management |
 | `crates/mcp` | Streamable HTTP, MCP tools, and local panel routes |
 | `apps/macos/helper` | Entry point that wires the runtime together |
 | `apps/macos/panel` | NSH player window and details views |
@@ -113,13 +213,15 @@ The local release automation tests require Python 3.9 or later, Git, Bash, Cargo
 | `assets` | App artwork and theme tokens |
 | `vendor` | Patched NSH platform code |
 
-The helper wires the player core to the Apple `AudioOutput` and MyGo `DataSource` implementations. The panel and MCP server send commands to the same playback session. The design guide describes how this affects the window lifecycle, queues, and artwork. [Design guide](DESIGN.md)
+The helper wires the player core to the Apple `AudioOutput` and MyGo `PluginSource: DataSource` implementations. `crates/plugin` is the `musicx-plugin` contract crate; `crates/mygo-plugin` is its `musicx-mygo-plugin` implementation. The generic contract has no dependency on MyGo or the player core. `crates/protocol/src/sources.rs` owns source capabilities and request/result types; `crates/core/src/sources.rs` dispatches application actions and imports typed snapshots. `crates/mygo-plugin/src/adapter.rs` converts MyGo inputs and results. MCP and local UI routes receive the interface through `Services`; MCP has no MyGo dependency, including test dependencies. The real adapter startup test lives in `crates/mygo-plugin/tests/plugin_startup.rs`, with MCP as a development dependency of the implementation crate. The panel and MCP server send commands to the same playback session. [Design guide](DESIGN.md)
 
 ## MCP tools
 
 Connect the client to the running helper first. [MCP setup](../README.md#connect-an-mcp-client)
 
-The settings panel copies a configuration for clients that use the `mcpServers` format. For CLI testing, use the helper's build settings and data directory when running `./run mcp-token`. Send the token as an `Authorization: Bearer <token>` header over Streamable HTTP to the address shown in **Settings → MCP Connection**. The production default is `http://127.0.0.1:45967/mcp`; the QA example above uses `http://127.0.0.1:45969/mcp`. A valid, nonzero `MUSICX_PORT` overrides the build's port, so the client must use the helper's configured port.
+The settings panel copies a configuration for clients that use the `mcpServers` format. For CLI testing, use the helper's build settings and data directory when running `./run mcp-token`. Send the token as an `Authorization: Bearer <token>` header over Streamable HTTP to the address shown in **Settings → Agent → MCP**. The production default is `http://127.0.0.1:45967/mcp`; the QA example above uses `http://127.0.0.1:45969/mcp`. A valid, nonzero `MUSICX_PORT` overrides the build's port, so the client must use the helper's configured port.
+
+On macOS, Agent also offers automatic setup for [Codex](https://developers.openai.com/codex/mcp) (`~/.codex/config.toml`, or `CODEX_HOME`) and [Claude Code](https://code.claude.com/docs/en/mcp#user-scope) (`~/.claude.json`, or `CLAUDE_CONFIG_DIR/.claude.json`). Setup stores MusicX's local HTTP endpoint and bearer authorization, preserves unrelated configuration and tool restrictions, writes a private atomic replacement, and keeps the first existing file as `<filename>.musicx-backup`. Malformed files are left untouched. Setup compares the file with its original content immediately before replacement and asks to retry when it detects an edit. This narrows the race with other clients; the check and rename are not a cross-process transaction. A completed write requires restarting the client; it does not prove the client connected. Isolated QA sets `MUSICX_AGENT_CONFIG_ROOT` to a temporary directory, with `codex/config.toml` and `claude.json` underneath, so native button tests never modify real agent settings.
 
 | Tools | What they do |
 | --- | --- |
@@ -137,7 +239,7 @@ See [Plugin capabilities and MyGo differences](PLUGINS.md) for artist/podcast br
 
 MusicX starts with the locally installed plugins, including an empty installation. Startup and listing installed sources do not install plugins or contact the catalog. Add a source in **Settings → Music Sources** on macOS or **Music Sources** on iPhone. Account sign-in, sign-out, configuration, and playlist import use that selected plugin's capabilities. MCP clients use `manage_music_sources` with `source=mygo:<plugin-id>`.
 
-Search with `plugin_search` and an explicit `plugin` ID. Its `tracks` array contains the shared `Track` wire type: title, artist, duration in seconds, available cover/album/source-link metadata, and the original string ID under `source.id`. The adapter normalizes the plugin's native search response and preserves its top-level pagination fields.
+Search with `plugin_search` and an explicit source identifier in `plugin`; the MyGo adapter also accepts its legacy raw plugin ID. Its `tracks` array contains the shared `Track` wire type: title, artist, duration in seconds, available cover/album/source-link metadata, and the original string ID under `source.id`, plus the optional `unavailable` flag. Other categories use `SourceSearchEntity` with opaque IDs and known metadata fields. `SourceSearchPage` returns `source`, `more`, and all five category arrays; arbitrary provider fields are not forwarded.
 
 Playback is independent of the source tools. Pass a complete item from `tracks` unchanged in the `track` parameter of `play_song` or `enqueue_song`. These tools resolve through the injected `DataSource` and submit a player action only after successful resolution. They do not invoke MyGo directly or reconstruct a partial track. `plugin_play` has been removed. The `play_song`/`enqueue_song` names now use this full-Track contract; the old bare `id` parameter is not supported.
 
@@ -149,7 +251,17 @@ Install a compatible single-file JavaScript or TypeScript plugin from a local di
 cargo run --release --locked -- plugin-install /path/to/plugin
 ```
 
-Available actions depend on the plugin's capabilities. Repository installs prefer the latest Release's platform or generic ZIP, then its source archive. Repositories without a Release resolve the default branch to one fixed commit and download its ZIP. Packages are checked against MusicX's single-file host, TypeScript is transpiled, and the entry is compiled without executing plugin code before installation; external modules and unsupported host permissions remain unavailable. Every source uses the same installation flow; there is no built-in repository, source version, or checksum pin. [MyGo Music plugin directory](https://music.egoist.dev/zh/plugins)
+Available actions depend on the plugin's capabilities. Repository installs prefer the latest Release's platform or generic ZIP, then its source archive. Repositories without a Release resolve the default branch to one fixed commit. ZIPs are limited to 32 MiB; oversized source archives fall back to that commit's manifest, single-file entry and supported locales. Bundled assets retain executable bits, with 64 MiB per file and 128 MiB total limits; package paths and symlinks are checked. TypeScript is transpiled and the entry is compiled without executing it. External modules and background extensions remain unavailable. Every source uses the same installation flow; curated trust records do not pin installation candidates to old versions. [MyGo Music plugin directory](https://music.egoist.dev/zh/plugins)
+
+Source descriptors distinguish raw MyGo `adapter_exports` (legacy JSON `capabilities`) from typed `host_capabilities: Vec<SourceCapability>`. UI checks `supports(SourceCapability)`; Rust defines product operations and normalized pages, and the adapter implements them. Native page requests decode the legacy `method`/`params` keys into `SourcePageRequest`, and collection navigation uses `SourceCollectionKind`. The generic `invoke` action is removed. Native recommendation/browse/radio pages do not automatically become MCP actions. Existing MCP source management, account and local snapshot imports remain available; cloud mutations, device control and helper/network grants are not exposed through the MCP source tool. Stations create a queue context that requests another batch when it ends.
+
+The runtime supplies URL/URLSearchParams, Headers, UTF-8 TextEncoder/TextDecoder, base64, form and binary fetch bodies, and response `arrayBuffer()`. HTTP uses six bounded workers, at most 16 pending requests per VM, an 8 MiB response limit and the existing call deadline. Storage is bounded at 4 MiB and failed writes preserve the previous value.
+
+Sources with `network:["*"]` can use the exact origins of server URLs explicitly saved in source settings. They do not inherit a manifest default as a grant. Private HTTP servers, ports, covers and authenticated streams use that origin boundary; redirects cannot change origin. Unrestricted Internet/local network access requires explicit `set_network_permission` authorization. External helpers require separate `set_process_permission` authorization, except the existing constrained audio-only FFmpeg path. Both permissions require the descriptor's current `permission_fingerprint` as `expected_fingerprint` when enabling, bind to the full installed payload and expire on changes; stale approvals are rejected and trust does not grant them. Helpers expose stdin, line output, stderr, wait and kill. Helpers must remain in the foreground and must not detach or daemonize. Ordinary call exit and revocation signal their original process groups; this is not a sandbox or a guarantee to terminate detached descendants. Stream helpers live through the loaded media lease. File media stays within the source's installed/data directories, and generated audio receives a bounded per-item copy.
+
+Every playable source must return `Media` for the Rust player and AVPlayer. There is no source-owned player or remote marker. Audio comes from the plugin’s stream export; remote-only sources, including Spotify plugins without streams, remain metadata-only for MusicX playback. The Spotify-specific decoder, credential capture, extra OAuth scope rewriting and decoder process entry point have been removed. Original plugin scripts/manifests and generic account/search/library behavior remain unchanged. The MyGo runtime still uses a fresh VM per call, so persistent module globals, background hooks and watchers need separate compatibility work.
+
+`verification` records historical functional checks for an exact repository, ID, version, normalized manifest, installed entry, locales and assets. The catalog displays the verified version; installed trust requires a complete content/platform match. Plugin self-declarations cannot grant trust. The [current verification report](reports/2026-11-15-plugin-compatibility.md) distinguishes short decoded samples, previews, native QA, platform limitations and account/device work that has not been verified.
 
 Playback and sign-in call public plugin exports. Playing a full track preserves its supplied metadata, and enrichment matches both the plugin ID and the track ID. Source names and repository links come from the installed manifest. Playlist identifiers are opaque strings passed to the selected plugin; MusicX does not parse provider-specific links. Sign-in methods follow the installed plugin: QR sign-in needs `host.signInPrompt`, and web sign-in needs `host.webSignIn`.
 
@@ -175,7 +287,7 @@ Custom endpoints may return a GitHub repository search response (`{"items":[{"fu
 
 Catalog requests have a 25-second timeout and a 2 MiB response limit. Fetch or parse errors are reported when no valid cached copy exists. Invalid responses do not replace the cache. Unset the variable to restore the official topic search. Playback and account settings for installed plugins use their local installation without reading or downloading the catalog.
 
-`catalog` retains its array response for existing MCP clients. `catalog_view` and `refresh_catalog` return `sources`, `refreshing`, and `warning`; clients can poll `catalog_view` while `refreshing` is true to display the completed background update. ZIP downloads are limited to 16 MiB and 4,096 entries; only the checked manifest, compiled JavaScript entry, and supported locale files are written into the installation.
+`catalog` retains its array response for existing MCP clients. `catalog_view` and `refresh_catalog` return `sources`, `refreshing`, and `warning`; clients can poll `catalog_view` while `refreshing` is true to display the completed background update. ZIP downloads are limited to 32 MiB and 4,096 entries. Installation retains checked entries, locales and bounded bundled assets as described above. Source-only archive fallbacks cannot replace an existing installation or install helper-dependent sources.
 
 Manifest `requestHeaders` and stream headers are supported. Header-dependent audio uses a helper-owned range-capable loopback transport; authenticated artwork is fetched by the helper. [Plugin compatibility and limits](PLUGINS.md#host-compatibility).
 
@@ -193,4 +305,6 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 
 For UI changes, include the macOS version and describe the window, playback, or source flow you tested. The vendored NSH patch notes describe platform changes. [macOS patches](../vendor/nsh-platform-macos/PATCH.md) · [iOS patches](../vendor/nsh-platform-ios/PATCH.md)
 
-In an interactive macOS session, run the native window lifecycle regression with `MUSICX_NATIVE_UI_TEST=1 cargo test --locked -p musicx-panel --test window_lifecycle`. It checks first-launch activation and reopening a minimized or hidden window; ordinary workspace tests skip this UI run.
+In an interactive macOS session, run the native window lifecycle regression with `MUSICX_DATA_DIR="$(mktemp -d)" MUSICX_NATIVE_UI_TEST=1 cargo test --locked -p musicx-panel --test window_lifecycle`. It checks first-launch activation, reopening minimized or hidden windows, standard menu registration, disabled empty-session actions, the settings shortcut, view navigation, closing the player, and live English/Chinese menu refresh. It changes the isolated instance's language preference; ordinary workspace tests skip this UI run.
+
+Append `-- --menus-only` to verify menu behavior separately when the host session cannot grant focus to a test process. This mode retains the menu assertions and does not validate window activation or reopening.

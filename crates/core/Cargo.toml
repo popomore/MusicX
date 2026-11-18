@@ -8,8 +8,9 @@ publish = false
 
 [dependencies]
 musicx-protocol = { path = "../protocol" }
-musicx-plugin-api = { path = "../plugin-api" }
+musicx-plugin = { path = "../plugin" }
 anyhow = "1"
+base64 = "0.22"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 hex = "0.4"

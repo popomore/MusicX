@@ -1,6 +1,7 @@
 //! iPhone owns its AVPlayer and local service; it never controls the Mac process.
 use crate::{player, system_media::SystemMedia};
 use anyhow::Result;
+use musicx_core::protocol::tr;
 use objc2::{
     MainThreadMarker, MainThreadOnly, define_class, msg_send,
     rc::{Retained, autoreleasepool},
@@ -78,13 +79,14 @@ pub fn activate_audio_session() -> Result<()> {
         let session = AVAudioSession::sharedInstance();
         session
             .setCategory_error(
-                AVAudioSessionCategoryPlayback
-                    .ok_or_else(|| anyhow::anyhow!("系统缺少播放音频类别"))?,
+                AVAudioSessionCategoryPlayback.ok_or_else(|| {
+                    anyhow::anyhow!(tr!("System playback audio category missing"))
+                })?,
             )
-            .map_err(|e| anyhow::anyhow!("无法启用后台音频：{e}"))?;
+            .map_err(|e| anyhow::anyhow!(tr!("Could not enable background audio: {e}"; e = e)))?;
         session
             .setActive_error(true)
-            .map_err(|e| anyhow::anyhow!("无法激活音频：{e}"))?;
+            .map_err(|e| anyhow::anyhow!(tr!("Could not activate audio: {e}"; e = e)))?;
     }
     Ok(())
 }

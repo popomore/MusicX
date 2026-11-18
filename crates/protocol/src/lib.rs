@@ -2,8 +2,15 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+pub mod i18n;
+mod sources;
+pub use sources::*;
+mod update_channel;
+pub use update_channel::UpdateChannel;
+
 /// Maximum size of a playback queue that can be persisted and restored.
 pub const MAX_QUEUE_TRACKS: usize = 10_000;
+pub const RADIO_PLAYLIST_ID: &str = "radio";
 
 /// Build-time identity keeps separately packaged QA apps independent of MusicX.
 pub const APP_NAME: &str = match option_env!("MUSICX_BUILD_APP_NAME") {
@@ -32,6 +39,11 @@ pub fn check_updates_notification() -> String {
     component_app_id("updates.check")
 }
 
+#[cfg(target_os = "macos")]
+pub fn update_channel_notification() -> String {
+    component_app_id("updates.channel")
+}
+
 #[cfg(not(target_os = "ios"))]
 pub const ADDRESS: &str = match option_env!("MUSICX_BUILD_ADDRESS") {
     Some(address) => address,
@@ -58,7 +70,14 @@ pub fn data_dir() -> Option<std::path::PathBuf> {
     std::env::var_os(DATA_DIR_ENV)
         .map(std::path::PathBuf::from)
         .or_else(|| {
-            std::env::home_dir().map(|home| home.join("Library/Application Support").join(APP_NAME))
+            // Foundation resolves the app's container when App Sandbox is enabled.
+            #[cfg(target_os = "macos")]
+            let home = Some(std::path::PathBuf::from(
+                objc2_foundation::NSHomeDirectory().to_string(),
+            ));
+            #[cfg(not(target_os = "macos"))]
+            let home = std::env::home_dir();
+            home.map(|home| home.join("Library/Application Support").join(APP_NAME))
         })
 }
 
@@ -153,9 +172,9 @@ pub enum Quality {
 impl Quality {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Standard => "标准",
-            Self::High => "高音质",
-            Self::Lossless => "无损",
+            Self::Standard => tr!("Standard"),
+            Self::High => tr!("High"),
+            Self::Lossless => tr!("Lossless"),
             Self::Hires => "Hi-Res",
         }
     }
@@ -163,22 +182,15 @@ impl Quality {
         match self {
             Self::Standard => "standard",
             Self::High => "high",
-            Self::Lossless | Self::Hires => "lossless",
+            Self::Lossless => "lossless",
+            Self::Hires => "hires",
         }
     }
     pub fn for_plugin(self) -> Self {
-        if self == Self::Hires {
-            Self::Lossless
-        } else {
-            self
-        }
+        self
     }
-    pub fn choices(plugin: bool) -> &'static [Self] {
-        if plugin {
-            &[Self::Standard, Self::High, Self::Lossless]
-        } else {
-            &[Self::Standard, Self::High, Self::Lossless, Self::Hires]
-        }
+    pub fn choices(_plugin: bool) -> &'static [Self] {
+        &[Self::Standard, Self::High, Self::Lossless, Self::Hires]
     }
 }
 impl std::str::FromStr for Quality {
@@ -189,7 +201,7 @@ impl std::str::FromStr for Quality {
             "high" => Ok(Self::High),
             "lossless" => Ok(Self::Lossless),
             "hires" => Ok(Self::Hires),
-            _ => Err("音质应为standard、high、lossless或hires"),
+            _ => Err(tr!("Quality must be standard, high, lossless, or hires")),
         }
     }
 }
@@ -217,14 +229,14 @@ impl AudioQuality {
             return None;
         }
         match level {
-            "standard" => Some("标准"),
-            "higher" => Some("较高"),
-            "high" | "exhigh" => Some("高音质"),
-            "lossless" => Some("无损"),
+            "standard" => Some(tr!("Standard")),
+            "higher" => Some(tr!("Higher")),
+            "high" | "exhigh" => Some(tr!("High")),
+            "lossless" => Some(tr!("Lossless")),
             "hires" => Some("Hi-Res"),
-            "jyeffect" => Some("高清臻音"),
-            "sky" | "vivid" => Some("全景声"),
-            "jymaster" => Some("超清母带"),
+            "jyeffect" => Some(tr!("Enhanced audio")),
+            "sky" | "vivid" => Some(tr!("Spatial audio")),
+            "jymaster" => Some(tr!("Master audio")),
             _ => None,
         }
     }
@@ -232,7 +244,7 @@ impl AudioQuality {
         self.level_label()
             .map(str::to_owned)
             .or_else(|| self.format.clone())
-            .unwrap_or_else(|| "音质未知".into())
+            .unwrap_or_else(|| tr!("Unknown quality").into())
     }
     pub fn summary(&self) -> String {
         let mut parts = Vec::with_capacity(5);
@@ -252,7 +264,7 @@ impl AudioQuality {
             parts.push(format!("{depth} bit"));
         }
         if parts.is_empty() {
-            "来源未提供音质参数".into()
+            tr!("This source has no audio quality details").into()
         } else {
             parts.join(" · ")
         }
@@ -281,6 +293,8 @@ pub struct Status {
     pub normalization_enabled: bool,
     #[serde(default)]
     pub audio_quality: Option<AudioQuality>,
+    #[serde(default)]
+    pub audio_uses_http: bool,
     pub error: Option<String>,
     pub switching: bool,
 }
@@ -331,6 +345,11 @@ pub enum UiAction {
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum QueueContext {
+    Station {
+        source: String,
+        id: String,
+        name: String,
+    },
     Album {
         id: String,
         name: String,
@@ -451,9 +470,34 @@ pub struct LocalPlaylistSummary {
     pub cover_url: Option<String>,
 }
 
+impl LocalPlaylist {
+    pub fn display_name(&self) -> &str {
+        if self.favorite {
+            tr!("Liked Songs")
+        } else if self.id == RADIO_PLAYLIST_ID && self.name == "Radio" {
+            tr!("Radio")
+        } else {
+            &self.name
+        }
+    }
+}
+
+impl LocalPlaylistSummary {
+    pub fn display_name(&self) -> &str {
+        if self.favorite {
+            tr!("Liked Songs")
+        } else if self.id == RADIO_PLAYLIST_ID && self.name == "Radio" {
+            tr!("Radio")
+        } else {
+            &self.name
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum LocalLibraryAction {
+    RefreshRadio {},
     SetFavorite {
         track: Box<Track>,
         liked: bool,
@@ -485,6 +529,21 @@ pub enum LocalLibraryAction {
         source: String,
         playlist_id: String,
     },
+}
+
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RadioRefresh {
+    pub playlist: Option<LocalPlaylist>,
+    pub added: usize,
+    pub sources: Vec<RadioSourceResult>,
+}
+
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RadioSourceResult {
+    pub source: String,
+    pub name: String,
+    pub tracks: usize,
+    pub error: Option<String>,
 }
 
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -527,17 +586,59 @@ pub struct MusicSource {
     #[serde(default)]
     pub description: String,
     pub version: String,
+    #[serde(default)]
+    pub playback: String,
+    #[serde(default)]
+    pub notes: Vec<String>,
     pub repository: Option<String>,
     pub installed: bool,
     pub can_install: bool,
     pub limitation: Option<String>,
-    pub capabilities: Vec<String>,
+    #[serde(default, rename = "capabilities")]
+    pub adapter_exports: Vec<String>,
+    #[serde(default)]
+    pub host_capabilities: Vec<SourceCapability>,
+    #[serde(default)]
+    pub process_programs: Vec<String>,
+    #[serde(default)]
+    pub process_granted: bool,
+    #[serde(default)]
+    pub network_unrestricted: bool,
+    #[serde(default)]
+    pub network_granted: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_fingerprint: Option<String>,
+    #[serde(default)]
+    pub pages: Vec<SourceNavigation>,
     pub settings: Vec<SourceSetting>,
     pub qr_sign_in: bool,
     #[serde(default)]
     pub web_sign_in: bool,
     #[serde(default)]
     pub oauth_sign_in: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification: Option<SourceVerification>,
+}
+impl MusicSource {
+    pub fn supports(&self, capability: SourceCapability) -> bool {
+        self.host_capabilities.contains(&capability)
+    }
+}
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SourceNavigation {
+    pub title: String,
+    pub page: String,
+}
+/// Historical functional evidence for one exact plugin payload, not a security audit.
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SourceVerification {
+    pub version: String,
+    pub verified_at: String,
+    pub platform: String,
+    pub checks: Vec<String>,
+    pub limitations: Vec<String>,
+    #[serde(default)]
+    pub installed_payload_matches: bool,
 }
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct MusicSourceCatalog {
@@ -571,7 +672,7 @@ pub struct SourcePlaylist {
 
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SourceCollection {
-    pub kind: String,
+    pub kind: SourceCollectionKind,
     pub id: String,
     pub name: String,
     pub description: String,
@@ -585,15 +686,52 @@ pub struct SourcePage {
     pub description: String,
     pub cover_url: Option<String>,
     pub tracks: Vec<Track>,
+    /// The adapter confirms this page's source supports MusicX audio playback.
+    #[serde(default)]
+    pub playable: bool,
     pub collections: Vec<SourceCollection>,
     pub more: bool,
     pub next_offset: u64,
+    #[serde(default)]
+    pub station: Option<SourceStation>,
+}
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SourceStation {
+    pub source: String,
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginUpdateSettings {
+    pub enabled: bool,
 }
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum MusicSourceAction {
+    Page {
+        source: String,
+        #[serde(flatten)]
+        request: SourcePageRequest,
+    },
+    SetProcessPermission {
+        source: String,
+        enabled: bool,
+        #[serde(default)]
+        expected_fingerprint: Option<String>,
+    },
+    SetNetworkPermission {
+        source: String,
+        enabled: bool,
+        #[serde(default)]
+        expected_fingerprint: Option<String>,
+    },
     List,
+    AutoUpdateSettings,
+    SetAutoUpdate {
+        enabled: bool,
+    },
     Catalog,
     CatalogView,
     RefreshCatalog,

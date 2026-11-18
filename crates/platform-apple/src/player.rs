@@ -1,22 +1,30 @@
 use anyhow::{Result, anyhow};
+use musicx_core::protocol::tr;
 use musicx_core::{
     audio::{AudioOutput, AudioSnapshot, AudioState},
     player::{Message, Player, Reply},
 };
-use musicx_plugin_api::{DataSource, Media};
+use musicx_plugin::{DataSource, Media};
 use objc2::{
     MainThreadMarker,
     rc::{Retained, autoreleasepool},
-    runtime::AnyObject,
+    runtime::{AnyObject, ProtocolObject},
 };
 use objc2_av_foundation::{
-    AVPlayer, AVPlayerItem, AVPlayerTimeControlStatus, AVURLAsset, AVURLAssetHTTPUserAgentKey,
+    AVPlayer, AVPlayerItem, AVPlayerItemDidPlayToEndTimeNotification, AVPlayerTimeControlStatus,
+    AVURLAsset, AVURLAssetHTTPUserAgentKey,
 };
 use objc2_core_media::CMTime;
-use objc2_foundation::{NSDictionary, NSString, NSURL};
+use objc2_foundation::{
+    NSDictionary, NSNotification, NSNotificationCenter, NSObjectProtocol, NSString, NSURL,
+};
 use std::{
     cell::{Cell, RefCell},
-    sync::OnceLock,
+    ptr::NonNull,
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 pub use musicx_core::player::{Action, State, Status};
@@ -28,7 +36,9 @@ thread_local! {
 }
 
 pub fn configure(source: &'static dyn DataSource) -> Result<()> {
-    SOURCE.set(source).map_err(|_| anyhow!("播放核心已配置"))
+    SOURCE
+        .set(source)
+        .map_err(|_| anyhow!(tr!("Playback core already configured")))
 }
 #[cfg(target_os = "macos")]
 pub(crate) fn artwork(url: &str) -> Option<Vec<u8>> {
@@ -55,9 +65,42 @@ pub fn shutdown() {
 
 struct AppleAudio {
     player: Retained<AVPlayer>,
+    end_observer: Option<EndObserver>,
     volume: Cell<f32>,
     gain: Cell<f32>,
     scale: Cell<f32>,
+}
+
+struct EndObserver {
+    token: Retained<ProtocolObject<dyn NSObjectProtocol>>,
+    ended: Arc<AtomicBool>,
+}
+
+impl EndObserver {
+    fn new(item: &AnyObject) -> Self {
+        let ended = Arc::new(AtomicBool::new(false));
+        let signal = ended.clone();
+        let block = block2::RcBlock::new(move |_: NonNull<NSNotification>| {
+            signal.store(true, Ordering::Relaxed);
+        });
+        // With no queue, the callback runs on the posting thread. It only
+        // touches an atomic flag, so no player or main-thread state is borrowed.
+        let token = unsafe {
+            NSNotificationCenter::defaultCenter().addObserverForName_object_queue_usingBlock(
+                Some(AVPlayerItemDidPlayToEndTimeNotification),
+                Some(item),
+                None,
+                &block,
+            )
+        };
+        Self { token, ended }
+    }
+}
+
+impl Drop for EndObserver {
+    fn drop(&mut self) {
+        unsafe { NSNotificationCenter::defaultCenter().removeObserver(self.token.as_ref()) };
+    }
 }
 
 fn activate_audio_session() -> Result<()> {
@@ -68,13 +111,17 @@ fn activate_audio_session() -> Result<()> {
 
 impl AudioOutput for AppleAudio {
     fn load(output: &mut Option<Self>, media: &Media, play: bool, volume: f32) -> Result<()> {
-        activate_audio_session()?;
+        anyhow::ensure!(
+            matches!(media.url.scheme(), "https" | "http" | "file"),
+            tr!("The source did not provide audio for MusicX playback")
+        );
         let url = NSURL::URLWithString(&NSString::from_str(media.url.as_str()))
-            .ok_or_else(|| anyhow!("无效的音频地址"))?;
+            .ok_or_else(|| anyhow!(tr!("Invalid audio URL")))?;
         let main = MainThreadMarker::new().expect("AVPlayer main thread");
         let output = output.get_or_insert_with(|| {
             let audio = Self {
                 player: unsafe { AVPlayer::new(main) },
+                end_observer: None,
                 volume: Cell::new(volume),
                 gain: Cell::new(1.0),
                 scale: Cell::new(1.0),
@@ -82,6 +129,7 @@ impl AudioOutput for AppleAudio {
             audio.set_volume(volume);
             audio
         });
+        activate_audio_session()?;
         output.gain.set(musicx_core::audio::normalization_scale(
             media.gain_db,
             media.peak,
@@ -98,6 +146,9 @@ impl AudioOutput for AppleAudio {
             } else {
                 AVPlayerItem::playerItemWithURL(&url, main)
             };
+            // Give each item its own flag so a late notification from the
+            // replaced item can never end its successor.
+            output.end_observer = Some(EndObserver::new(&item));
             output.player.replaceCurrentItemWithPlayerItem(Some(&item));
         }
         if play {
@@ -111,10 +162,18 @@ impl AudioOutput for AppleAudio {
     fn snapshot(&self) -> AudioSnapshot {
         unsafe {
             let item = self.player.currentItem();
-            let state = match self.player.timeControlStatus() {
-                AVPlayerTimeControlStatus::Playing => AudioState::Playing,
-                AVPlayerTimeControlStatus::WaitingToPlayAtSpecifiedRate => AudioState::Waiting,
-                _ => AudioState::Paused,
+            let state = if self
+                .end_observer
+                .as_ref()
+                .is_some_and(|observer| observer.ended.load(Ordering::Relaxed))
+            {
+                AudioState::Ended
+            } else {
+                match self.player.timeControlStatus() {
+                    AVPlayerTimeControlStatus::Playing => AudioState::Playing,
+                    AVPlayerTimeControlStatus::WaitingToPlayAtSpecifiedRate => AudioState::Waiting,
+                    _ => AudioState::Paused,
+                }
             };
             AudioSnapshot {
                 position: self.player.currentTime().seconds(),
@@ -150,6 +209,9 @@ impl AudioOutput for AppleAudio {
     }
 
     fn seek(&self, seconds: f64, complete: impl Fn(bool) + Send + 'static) {
+        if let Some(observer) = &self.end_observer {
+            observer.ended.store(false, Ordering::Relaxed);
+        }
         let completion = block2::RcBlock::new(move |finished: objc2::runtime::Bool| {
             complete(finished.as_bool());
         });
@@ -162,5 +224,46 @@ impl AudioOutput for AppleAudio {
                     &completion,
                 );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use objc2_foundation::NSObject;
+
+    fn post_end(item: &AnyObject) {
+        unsafe {
+            NSNotificationCenter::defaultCenter()
+                .postNotificationName_object(AVPlayerItemDidPlayToEndTimeNotification, Some(item));
+        }
+    }
+
+    #[test]
+    fn end_notifications_are_scoped_to_the_loaded_item() {
+        autoreleasepool(|_| {
+            let old_item = NSObject::new();
+            let item = NSObject::new();
+            let mut observer = EndObserver::new(&old_item);
+            post_end(&old_item);
+            assert!(observer.ended.load(Ordering::Relaxed));
+            observer = EndObserver::new(&item);
+            post_end(&old_item);
+            assert!(!observer.ended.load(Ordering::Relaxed));
+            post_end(&item);
+            assert!(observer.ended.load(Ordering::Relaxed));
+        });
+    }
+
+    #[test]
+    fn dropping_end_observer_unregisters_its_callback() {
+        autoreleasepool(|_| {
+            let item = NSObject::new();
+            let observer = EndObserver::new(&item);
+            let ended = observer.ended.clone();
+            drop(observer);
+            post_end(&item);
+            assert!(!ended.load(Ordering::Relaxed));
+        });
     }
 }

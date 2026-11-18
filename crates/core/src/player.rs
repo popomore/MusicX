@@ -1,5 +1,6 @@
 use anyhow::{Result, anyhow, ensure};
-use musicx_plugin_api::{DataSource, Media};
+use musicx_plugin::{DataSource, Media};
+use musicx_protocol::tr;
 use std::{
     sync::Arc,
     thread,
@@ -20,12 +21,12 @@ pub enum Action {
     DisplayStatus,
     MergeTrackMetadata(Track),
     Play(Media),
+    PlayTrack(Track),
     Enqueue(Media),
     ReplaceQueue {
         tracks: Vec<Track>,
         index: usize,
         context: crate::protocol::QueueContext,
-        media: Media,
     },
     Select {
         index: usize,
@@ -63,6 +64,14 @@ pub struct AutoAdvance {
 }
 
 pub enum Message {
+    StationReady {
+        revision: u64,
+        serial: u64,
+        request: u64,
+        automatic: bool,
+        tracks: Result<Vec<Track>>,
+        reply: Reply,
+    },
     Action(Action, Reply),
     Switched {
         index: usize,
@@ -96,8 +105,11 @@ pub struct Player<A: AudioOutput> {
     volume: f32,
     queue: Arc<Vec<Track>>,
     queue_revision: u64,
+    station_request: Option<(u64, u64, u64)>,
+    station_generation: u64,
     queue_context: Option<crate::protocol::QueueContext>,
     audio_quality: Option<crate::protocol::AudioQuality>,
+    audio_uses_http: bool,
     seek_serial: u64,
     pending_seek: Option<(u64, f64)>,
     deferred_position: Option<f64>,
@@ -124,8 +136,11 @@ impl<A: AudioOutput> Player<A> {
             source,
             queue: Arc::default(),
             queue_revision: 0,
+            station_request: None,
+            station_generation: 0,
             queue_context: None,
             audio_quality: None,
+            audio_uses_http: false,
             seek_serial: 0,
             pending_seek: None,
             deferred_position: None,
@@ -149,7 +164,10 @@ impl<A: AudioOutput> Player<A> {
                 player.deferred_position = session.index.map(|_| session.position);
                 player.history_recorded = session.index.is_some_and(|index| {
                     history::restore(&session.queue[index]).unwrap_or_else(|error| {
-                        eprintln!("恢复播放历史失败：{error:#}");
+                        eprintln!(
+                            "{}",
+                            tr!("Could not restore listening history: {error}"; error = format!("{:#}", error))
+                        );
                         false
                     })
                 });
@@ -157,7 +175,10 @@ impl<A: AudioOutput> Player<A> {
                 player.saved_session = Some(session);
             }
             Ok(None) => {}
-            Err(error) => eprintln!("恢复播放会话失败：{error:#}"),
+            Err(error) => eprintln!(
+                "{}",
+                tr!("Could not restore playback session: {error}"; error = format!("{:#}", error))
+            ),
         }
         player
     }
@@ -239,8 +260,7 @@ impl<A: AudioOutput> Player<A> {
             State::Playing
         } else if self.pending_seek.is_none()
             && self.requested_play
-            && duration > 0.0
-            && position >= duration - 0.12
+            && (control == AudioState::Ended || (duration > 0.0 && position >= duration - 0.12))
         {
             State::Ended
         } else if control == AudioState::Waiting {
@@ -263,6 +283,7 @@ impl<A: AudioOutput> Player<A> {
             preferred_quality: crate::audio_quality::preferred(),
             normalization_enabled: crate::audio_quality::normalization_enabled(),
             audio_quality: self.audio_quality.clone(),
+            audio_uses_http: self.audio_uses_http,
             error: error.or_else(|| self.error.clone()),
             switching: self.switching,
         }
@@ -278,12 +299,48 @@ impl<A: AudioOutput> Player<A> {
         self.seek_serial += 1;
         self.pending_seek = None;
         self.audio_quality = Some(media.quality.clone());
+        self.audio_uses_http = media.uses_http;
         self.deferred_position = None;
         self.end_handled = false;
         self.history_recorded = false;
         self.preserve_restored_history = false;
         self.requested_play = true;
         Ok(())
+    }
+
+    fn prepare_selection(&mut self) {
+        self.station_request = None;
+        // Checkpoint the old track before changing the queue or its index.
+        self.flush_history();
+        if let Some(audio) = self.audio.take() {
+            audio.pause();
+        }
+        self.audio_lease = None;
+        self.audio_quality = None;
+        self.audio_uses_http = false;
+        self.seek_serial += 1;
+        self.pending_seek = None;
+        self.deferred_position = Some(0.0);
+        self.end_handled = false;
+        self.history_recorded = false;
+        self.preserve_restored_history = false;
+        self.requested_play = true;
+        self.switching = true;
+        self.error = None;
+    }
+
+    fn resolve_selection(&self, reply: Reply) {
+        let index = self.index.expect("a selection owns a queue index");
+        let track = self.queue[index].clone();
+        let dispatch = self.dispatch;
+        let source = self.source;
+        thread::spawn(move || {
+            dispatch(Message::Switched {
+                index,
+                media: source.resolve_selection(track, crate::audio_quality::preferred()),
+                reply,
+            });
+        });
     }
 
     fn seek(&mut self, seconds: f64) {
@@ -315,7 +372,7 @@ impl<A: AudioOutput> Player<A> {
             Action::Restore { snapshot, media } => {
                 ensure!(
                     self.startup_handoff_available && self.audio.is_none() && !self.switching,
-                    "只能向尚未操作的播放器交接会话"
+                    tr!("A session can only be transferred to an unused player")
                 );
                 crate::audio_quality::set_preferred(snapshot.preferred_quality)?;
                 if let Some(media) = media {
@@ -334,7 +391,10 @@ impl<A: AudioOutput> Player<A> {
                 self.volume = snapshot.volume;
                 self.history_recorded = self.index.is_some_and(|index| {
                     history::restore(&self.queue[index]).unwrap_or_else(|error| {
-                        eprintln!("恢复播放历史失败：{error:#}");
+                        eprintln!(
+                            "{}",
+                            tr!("Could not restore listening history: {error}"; error = format!("{error:#}"))
+                        );
                         false
                     })
                 });
@@ -354,10 +414,10 @@ impl<A: AudioOutput> Player<A> {
                 self.startup_handoff_available = false;
             }
             Action::Play(media) => {
-                ensure!(!self.switching, "正在切换曲目");
+                ensure!(!self.switching, tr!("Changing track"));
                 ensure!(
                     self.queue.len() < MAX_QUEUE_TRACKS,
-                    "播放队列最多支持{MAX_QUEUE_TRACKS}首歌"
+                    tr!("The queue supports up to {MAX_QUEUE_TRACKS} tracks"; MAX_QUEUE_TRACKS = MAX_QUEUE_TRACKS)
                 );
                 self.load(&media)?;
                 let target = self.index.map_or(0, |index| index + 1);
@@ -368,7 +428,7 @@ impl<A: AudioOutput> Player<A> {
             Action::Enqueue(media) => {
                 ensure!(
                     self.queue.len() < MAX_QUEUE_TRACKS,
-                    "播放队列最多支持{MAX_QUEUE_TRACKS}首歌"
+                    tr!("The queue supports up to {MAX_QUEUE_TRACKS} tracks"; MAX_QUEUE_TRACKS = MAX_QUEUE_TRACKS)
                 );
                 if self.index.is_none() {
                     self.load(&media)?;
@@ -376,24 +436,6 @@ impl<A: AudioOutput> Player<A> {
                 }
                 Arc::make_mut(&mut self.queue).push(media.track);
                 self.queue_revision += 1;
-            }
-            Action::ReplaceQueue {
-                mut tracks,
-                index,
-                context,
-                media,
-            } => {
-                ensure!(!self.switching, "正在切换曲目");
-                ensure!(
-                    index < tracks.len() && tracks.len() <= MAX_QUEUE_TRACKS,
-                    "无效的播放列表"
-                );
-                self.load(&media)?;
-                tracks[index] = media.track;
-                self.queue = Arc::new(tracks);
-                self.queue_context = Some(context);
-                self.queue_revision += 1;
-                self.index = Some(index);
             }
             Action::Toggle => {
                 let playing = matches!(self.status().state, State::Playing | State::Loading);
@@ -404,7 +446,8 @@ impl<A: AudioOutput> Player<A> {
                 });
             }
             Action::Pause => {
-                ensure!(self.index.is_some(), "请先选一首歌");
+                self.station_request = None;
+                ensure!(self.index.is_some(), tr!("Choose a track first"));
                 self.flush_history();
                 self.requested_play = false;
                 if let Some(audio) = &self.audio {
@@ -412,10 +455,12 @@ impl<A: AudioOutput> Player<A> {
                 }
             }
             Action::Resume => {
-                ensure!(self.index.is_some(), "请先选一首歌");
+                ensure!(self.index.is_some(), tr!("Choose a track first"));
                 self.audio().prepare_resume()?;
                 let status = self.status();
-                if status.duration > 0.0 && status.position >= status.duration - 0.12 {
+                if self.audio().snapshot().state == AudioState::Ended
+                    || (status.duration > 0.0 && status.position >= status.duration - 0.12)
+                {
                     self.seek(0.0);
                     self.end_handled = false;
                 }
@@ -429,13 +474,13 @@ impl<A: AudioOutput> Player<A> {
                             && self.index.is_some_and(|i| {
                                 crate::protocol::track_key(&self.queue[i]) == expected
                             }),
-                        "歌曲已切换，请选择当前歌词"
+                        tr!("The track changed; select a lyric from the current track")
                     );
                 }
                 let status = self.status();
                 ensure!(
                     status.duration > 0.0 && seconds.is_finite() && seconds >= 0.0,
-                    "无效的播放进度"
+                    tr!("Invalid playback position")
                 );
                 let position = seconds.min(status.duration);
                 if position < status.duration - 0.12 {
@@ -457,13 +502,21 @@ impl<A: AudioOutput> Player<A> {
                 }
             }
             Action::Volume(value) => {
-                ensure!((0.0..=1.0).contains(&value), "音量必须在 0 到 1 之间");
+                ensure!(
+                    (0.0..=1.0).contains(&value),
+                    tr!("Volume must be between 0 and 1")
+                );
                 self.volume = value;
                 if let Some(audio) = &self.audio {
                     audio.set_volume(value);
                 }
             }
-            Action::Previous | Action::Next | Action::Select { .. } | Action::Quality(_) => {
+            Action::PlayTrack(_)
+            | Action::ReplaceQueue { .. }
+            | Action::Previous
+            | Action::Next
+            | Action::Select { .. }
+            | Action::Quality(_) => {
                 unreachable!("switching resolves outside the UI thread")
             }
         }
@@ -525,7 +578,10 @@ impl<A: AudioOutput> Player<A> {
             return;
         };
         if let Err(error) = result {
-            eprintln!("保存播放历史失败：{error:#}");
+            eprintln!(
+                "{}",
+                tr!("Could not save listening history: {error}"; error = format!("{:#}", error))
+            );
         }
     }
 
@@ -540,7 +596,10 @@ impl<A: AudioOutput> Player<A> {
         }
         match session.save() {
             Ok(()) => self.saved_session = Some(session),
-            Err(error) => eprintln!("保存播放会话失败：{error:#}"),
+            Err(error) => eprintln!(
+                "{}",
+                tr!("Could not save playback session: {error}"; error = format!("{:#}", error))
+            ),
         }
     }
 
@@ -565,15 +624,76 @@ impl<A: AudioOutput> Player<A> {
         let dispatch = self.dispatch;
         let source = self.source;
         match message {
+            Message::Action(Action::PlayTrack(track), reply) => {
+                if self.switching {
+                    self.respond(Err(anyhow!(tr!("Changing track"))), reply);
+                } else if self.queue.len() >= MAX_QUEUE_TRACKS {
+                    self.respond(
+                        Err(anyhow!(tr!("The queue supports up to {MAX_QUEUE_TRACKS} tracks"; MAX_QUEUE_TRACKS = MAX_QUEUE_TRACKS))),
+                        reply,
+                    );
+                } else {
+                    self.prepare_selection();
+                    let index = self.index.map_or(0, |index| index + 1);
+                    Arc::make_mut(&mut self.queue).insert(index, track);
+                    self.index = Some(index);
+                    self.queue_revision += 1;
+                    self.resolve_selection(reply);
+                }
+            }
+            Message::Action(
+                Action::ReplaceQueue {
+                    tracks,
+                    index,
+                    context,
+                },
+                reply,
+            ) => {
+                if self.switching {
+                    self.respond(Err(anyhow!(tr!("Changing track"))), reply);
+                } else if index >= tracks.len() || tracks.len() > MAX_QUEUE_TRACKS {
+                    self.respond(Err(anyhow!(tr!("Invalid playlist"))), reply);
+                } else {
+                    self.prepare_selection();
+                    self.queue = Arc::new(tracks);
+                    self.index = Some(index);
+                    self.queue_context = Some(context);
+                    self.queue_revision += 1;
+                    self.resolve_selection(reply);
+                }
+            }
             Message::Action(action @ (Action::Resume | Action::Toggle), reply)
-                if self.deferred_position.is_some() =>
+                if self.deferred_position.is_some()
+                    || self
+                        .audio
+                        .as_ref()
+                        .is_some_and(|audio| audio.snapshot().error.is_some()) =>
             {
-                if matches!(action, Action::Toggle) && self.requested_play {
+                if matches!(action, Action::Toggle)
+                    && self.deferred_position.is_some()
+                    && self.requested_play
+                {
                     let result = self.apply(Action::Pause);
                     self.respond(result, reply);
                 } else if self.switching {
-                    self.respond(Err(anyhow!("正在取流，请稍候")), reply);
+                    self.respond(
+                        Err(anyhow!(tr!("Getting audio stream; please wait"))),
+                        reply,
+                    );
                 } else if let Some(track) = self.index.and_then(|i| self.queue.get(i)).cloned() {
+                    if self.deferred_position.is_none() {
+                        // A failed native item cannot be played again. Keep the
+                        // song, progress and history while resolving a fresh item.
+                        let position = self.status().position;
+                        if let Some(audio) = self.audio.take() {
+                            audio.pause();
+                        }
+                        self.audio_lease = None;
+                        self.audio_quality = None;
+                        self.seek_serial += 1;
+                        self.pending_seek = None;
+                        self.deferred_position = Some(position);
+                    }
                     self.switching = true;
                     self.requested_play = true;
                     self.error = None;
@@ -584,7 +704,7 @@ impl<A: AudioOutput> Player<A> {
                         })
                     });
                 } else {
-                    self.respond(Err(anyhow!("请先选一首歌")), reply);
+                    self.respond(Err(anyhow!(tr!("Choose a track first"))), reply);
                 }
             }
             Message::Seeked { serial, finished } => {
@@ -600,7 +720,12 @@ impl<A: AudioOutput> Player<A> {
             }
             Message::Action(Action::Quality(quality), reply) => {
                 if self.switching {
-                    self.respond(Err(anyhow!("正在切换，请稍后再选音质")), reply);
+                    self.respond(
+                        Err(anyhow!(tr!(
+                            "Changing track; please wait before selecting quality"
+                        ))),
+                        reply,
+                    );
                 } else if self.deferred_position.is_some() {
                     self.respond(crate::audio_quality::set_preferred(quality), reply);
                 } else if let Some(track) = self.index.and_then(|i| self.queue.get(i)).cloned() {
@@ -626,30 +751,90 @@ impl<A: AudioOutput> Player<A> {
                         Some(index)
                     }
                     Action::Select { .. } => {
-                        self.respond(Err(anyhow!("播放列表已变化，请重新选择")), reply);
+                        self.respond(
+                            Err(anyhow!(tr!("The playlist changed; please select again"))),
+                            reply,
+                        );
                         return;
                     }
                     Action::Next => self.index.and_then(|i| i.checked_add(1)),
                     _ => self.index.and_then(|i| i.checked_sub(1)),
                 };
                 if self.switching {
-                    self.respond(Err(anyhow!("正在切换曲目")), reply);
-                } else if let Some((index, track)) =
-                    target.and_then(|i| self.queue.get(i).map(|track| (i, track)))
+                    self.respond(Err(anyhow!(tr!("Changing track"))), reply);
+                } else if let Some(index) = target.filter(|&i| i < self.queue.len()) {
+                    self.prepare_selection();
+                    self.index = Some(index);
+                    self.resolve_selection(reply);
+                } else if matches!(action, Action::Next)
+                    && matches!(
+                        self.queue_context,
+                        Some(crate::protocol::QueueContext::Station { .. })
+                    )
                 {
-                    self.switching = true;
-                    self.error = None;
-                    let track = track.clone();
-                    thread::spawn(move || {
-                        dispatch(Message::Switched {
-                            index,
-                            media: source
-                                .resolve_selection(track, crate::audio_quality::preferred()),
-                            reply,
-                        });
-                    });
+                    self.refill_station(reply, true);
                 } else {
-                    self.respond(Err(anyhow!("没有可切换的曲目")), reply);
+                    self.respond(Err(anyhow!(tr!("No other track available"))), reply);
+                }
+            }
+            Message::StationReady {
+                revision,
+                serial,
+                request,
+                automatic,
+                tracks,
+                reply,
+            } => {
+                if self.station_request != Some((revision, serial, request))
+                    || self.queue_revision != revision
+                    || self.seek_serial != serial
+                    || self.switching
+                    || !self.requested_play
+                {
+                    if self.station_request == Some((revision, serial, request)) {
+                        self.station_request = None;
+                        if automatic
+                            && self.requested_play
+                            && !self.switching
+                            && self.status().state == State::Ended
+                        {
+                            self.end_handled = false;
+                            self.advance_on_end();
+                        }
+                    }
+                    if let Some(reply) = reply {
+                        let _ = reply.send(Err(anyhow!(tr!("Radio session changed"))));
+                    }
+                    return;
+                }
+                self.station_request = None;
+                match tracks {
+                    Ok(tracks) if !tracks.is_empty() && tracks.len() <= MAX_QUEUE_TRACKS => {
+                        self.prepare_selection();
+                        // Retain a bounded listening session while history stays separate.
+                        if self.queue.len() + tracks.len() > MAX_QUEUE_TRACKS {
+                            self.queue = Arc::default();
+                        }
+                        let index = self.queue.len();
+                        Arc::make_mut(&mut self.queue).extend(tracks);
+                        self.index = Some(index);
+                        self.queue_revision += 1;
+                        if automatic {
+                            self.resolve_automatic_next(AutoAdvance {
+                                index,
+                                attempt: 1,
+                                seek_serial: self.seek_serial,
+                                retry_until: Instant::now() + AUTO_ADVANCE_RETRY_WINDOW,
+                            });
+                        } else {
+                            self.resolve_selection(reply);
+                        }
+                    }
+                    Ok(_) => self.respond(
+                        Err(anyhow!(tr!("The station returned no playable tracks"))),
+                        reply,
+                    ),
+                    Err(error) => self.respond(Err(error), reply),
                 }
             }
             Message::Action(Action::DisplayStatus, reply) => {
@@ -673,9 +858,26 @@ impl<A: AudioOutput> Player<A> {
                 reply,
             } => {
                 self.switching = false;
-                let result = media.and_then(|media| self.load(&media));
-                if result.is_ok() {
-                    self.index = Some(index);
+                self.error = None;
+                let result = media.and_then(|media| {
+                    let play = self.requested_play;
+                    let position = self.deferred_position.unwrap_or(0.0);
+                    self.load_with_play(&media, false)?;
+                    self.requested_play = play;
+                    if self.queue[index] != media.track {
+                        Arc::make_mut(&mut self.queue)[index] = media.track;
+                        self.queue_revision += 1;
+                    }
+                    if position > 0.0 {
+                        self.seek(position);
+                    }
+                    if play {
+                        self.audio().play();
+                    }
+                    Ok(())
+                });
+                if result.is_err() {
+                    self.requested_play = false;
                 }
                 self.respond(result, reply);
             }
@@ -686,7 +888,15 @@ impl<A: AudioOutput> Player<A> {
                 if !self.requested_play || self.seek_serial != pending.seek_serial {
                     return;
                 }
-                match media.and_then(|media| self.load(&media)) {
+                let position = self.deferred_position.unwrap_or(0.0);
+                match media.and_then(|media| {
+                    self.load_with_play(&media, false)?;
+                    if position > 0.0 {
+                        self.seek(position);
+                    }
+                    self.audio().play();
+                    Ok(())
+                }) {
                     Ok(()) => {
                         self.index = Some(pending.index);
                         self.error = None;
@@ -703,10 +913,9 @@ impl<A: AudioOutput> Player<A> {
                                 ..pending
                             });
                         } else {
-                            self.error = Some(format!(
-                                "自动续播失败，已尝试 {} 首。{error}",
-                                pending.attempt
-                            ));
+                            self.error = Some(
+                                tr!("Could not continue playback after trying {} tracks. {error}", pending.attempt; error = error),
+                            );
                         }
                     }
                 }
@@ -784,8 +993,50 @@ impl<A: AudioOutput> Player<A> {
                     seek_serial: self.seek_serial,
                     retry_until: Instant::now() + AUTO_ADVANCE_RETRY_WINDOW,
                 });
+            } else {
+                self.refill_station(None, false);
             }
         }
+    }
+
+    fn refill_station(&mut self, reply: Reply, manual: bool) -> bool {
+        let Some(crate::protocol::QueueContext::Station { source, id, .. }) =
+            self.queue_context.clone()
+        else {
+            return false;
+        };
+        if !manual && !self.requested_play {
+            return false;
+        }
+        let revision = self.queue_revision;
+        let serial = self.seek_serial;
+        if self
+            .station_request
+            .is_some_and(|(r, s, _)| r == revision && s == serial)
+        {
+            if reply.is_some() {
+                self.respond(Err(anyhow!(tr!("Loading radio tracks…"))), reply);
+            }
+            return true;
+        }
+        self.station_generation += 1;
+        let request = self.station_generation;
+        self.requested_play = true;
+        self.error = None;
+        self.station_request = Some((revision, serial, request));
+        let dispatch = self.dispatch;
+        let provider = self.source;
+        thread::spawn(move || {
+            dispatch(Message::StationReady {
+                revision,
+                serial,
+                request,
+                automatic: !manual,
+                tracks: provider.station_next(&source, &id),
+                reply,
+            })
+        });
+        true
     }
 
     fn resolve_automatic_next(&mut self, pending: AutoAdvance) {

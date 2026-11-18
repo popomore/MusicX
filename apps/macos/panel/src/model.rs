@@ -1,4 +1,5 @@
 //! Shared NSH screen state. Catalog loads never block transport controls.
+use crate::protocol::tr;
 #[cfg(target_os = "macos")]
 use crate::protocol::{FavoriteState, LocalLibraryAction};
 use crate::{
@@ -16,19 +17,19 @@ pub enum Page {
     History,
     Album,
     Discovery,
+    #[cfg(target_os = "ios")]
     Sources,
     Library,
     #[cfg(target_os = "macos")]
     Queue,
     #[cfg(target_os = "macos")]
     Lyrics,
-    #[cfg(target_os = "macos")]
-    Settings,
 }
 
 #[derive(Clone, Copy)]
 pub struct Model {
     owner: Owner,
+    pub language: Signal<crate::protocol::i18n::Locale>,
     pub status: Signal<Status>,
     #[cfg(target_os = "macos")]
     pub status_ready: Signal<bool>,
@@ -77,6 +78,19 @@ enum Loaded {
     Queue(Box<Status>),
 }
 
+#[cfg(target_os = "macos")]
+fn mini_lyrics_preference() -> &'static std::sync::atomic::AtomicBool {
+    static VALUE: std::sync::OnceLock<std::sync::atomic::AtomicBool> = std::sync::OnceLock::new();
+    VALUE.get_or_init(|| {
+        std::sync::atomic::AtomicBool::new(
+            crate::protocol::data_dir()
+                .and_then(|d| std::fs::read_to_string(d.join("panel-preferences.json")).ok())
+                .and_then(|s| serde_json::from_str::<bool>(&s).ok())
+                .unwrap_or(true),
+        )
+    })
+}
+
 pub fn key(track: Option<&Track>) -> String {
     track.map_or_else(String::new, crate::protocol::track_key)
 }
@@ -85,6 +99,7 @@ impl Model {
     pub fn new() -> Self {
         Self {
             owner: Owner::current(),
+            language: signal(crate::protocol::i18n::locale()),
             status: signal(Status::default()),
             #[cfg(target_os = "macos")]
             status_ready: signal(false),
@@ -103,10 +118,7 @@ impl Model {
             lyric_clock: signal(0),
             #[cfg(target_os = "macos")]
             show_mini_lyrics: signal(
-                crate::protocol::data_dir()
-                    .and_then(|d| std::fs::read_to_string(d.join("panel-preferences.json")).ok())
-                    .and_then(|s| serde_json::from_str::<bool>(&s).ok())
-                    .unwrap_or(true),
+                mini_lyrics_preference().load(std::sync::atomic::Ordering::SeqCst),
             ),
             jobs: signal([false; 4]),
             starting: signal(false),
@@ -130,6 +142,17 @@ impl Model {
             cover_failed: signal(false),
         }
     }
+    pub fn refresh_language(self) {
+        crate::protocol::i18n::refresh();
+        let language = crate::protocol::i18n::locale();
+        if self.language.get() != language {
+            self.error.set(String::new());
+            self.language.set(language);
+            #[cfg(target_os = "macos")]
+            crate::desktop::refresh_language();
+        }
+    }
+
     pub fn open(self, page: Page) {
         #[cfg(target_os = "macos")]
         {
@@ -212,8 +235,10 @@ impl Model {
                 #[cfg(target_os = "macos")]
                 Page::Queue => remote::read_json("/ui/queue").map(|q| Loaded::Queue(Box::new(q))),
                 #[cfg(target_os = "macos")]
-                Page::Lyrics | Page::Settings => unreachable!(),
-                Page::Player | Page::Sources | Page::Library | Page::Discovery => unreachable!(),
+                Page::Lyrics => unreachable!(),
+                #[cfg(target_os = "ios")]
+                Page::Sources => unreachable!(),
+                Page::Player | Page::Library | Page::Discovery => unreachable!(),
             };
             let _ = send.send(result);
         });
@@ -245,19 +270,21 @@ impl Model {
                         }
                     }
                     Ok(Err(error)) => self.error.set(error.to_string()),
-                    Err(_) => self.error.set("加载已结束，请重试".into()),
+                    Err(_) => self
+                        .error
+                        .set(tr!("Loading ended; please try again").into()),
                 }
             })
         });
     }
     fn slot(page: Page) -> Option<usize> {
         match page {
-            Page::Player | Page::Sources | Page::Library | Page::Discovery => None,
+            #[cfg(target_os = "ios")]
+            Page::Sources => None,
+            Page::Player | Page::Library | Page::Discovery => None,
             Page::Info => Some(0),
             #[cfg(target_os = "macos")]
             Page::Lyrics => Some(0),
-            #[cfg(target_os = "macos")]
-            Page::Settings => None,
             Page::History => Some(1),
             Page::Album => Some(2),
             #[cfg(target_os = "macos")]
@@ -371,8 +398,10 @@ impl Model {
                 }
                 match result {
                     Ok(Ok(value)) => self.favorite.set(value),
-                    Ok(Err(e)) => self.error.set(format!("收藏未保存：{e}")),
-                    Err(_) => self.error.set("收藏请求已结束，请重试".into()),
+                    Ok(Err(e)) => self.error.set(tr!("Like not saved: {e}"; e = e)),
+                    Err(_) => self
+                        .error
+                        .set(tr!("Like request ended; please try again").into()),
                 }
             })
         });
@@ -400,15 +429,27 @@ impl Model {
                 match result {
                     Ok(Ok(info)) => self.info.set(Some(info)),
                     Ok(Err(e)) => self.error.set(e.to_string()),
-                    Err(_) => self.error.set("歌词请求已结束，请重试".into()),
+                    Err(_) => self
+                        .error
+                        .set(tr!("Lyrics request ended; please try again").into()),
                 }
             })
         });
     }
     #[cfg(target_os = "macos")]
+    pub fn refresh_mini_lyrics(self) {
+        let value = mini_lyrics_preference().load(std::sync::atomic::Ordering::SeqCst);
+        if self.show_mini_lyrics.get() != value {
+            self.show_mini_lyrics.set(value);
+        }
+    }
+    #[cfg(target_os = "macos")]
     pub fn toggle_mini_lyrics(self) {
-        self.show_mini_lyrics.update(|value| *value = !*value);
-        let value = self.show_mini_lyrics.get();
+        use std::sync::atomic::Ordering;
+        static TOGGLE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _toggle = TOGGLE.lock().unwrap();
+        let value = !mini_lyrics_preference().fetch_xor(true, Ordering::SeqCst);
+        self.show_mini_lyrics.set(value);
         static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         static WRITER: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let generation = GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
@@ -456,11 +497,18 @@ impl Model {
         self.play_action(Action::PlayList {
             tracks: page.tracks,
             index,
-            context: crate::protocol::QueueContext::SourceCollection {
-                source,
-                id: page.id,
-                name: page.title,
-            },
+            context: page
+                .station
+                .map(|station| crate::protocol::QueueContext::Station {
+                    source: station.source,
+                    id: station.id,
+                    name: station.name,
+                })
+                .unwrap_or_else(|| crate::protocol::QueueContext::SourceCollection {
+                    source,
+                    id: page.id,
+                    name: page.title,
+                }),
         });
     }
     #[cfg(target_os = "macos")]
@@ -513,7 +561,9 @@ impl Model {
                 match receive.await {
                     Ok(Ok(status)) => self.update(status),
                     Ok(Err(error)) => self.error.set(error.to_string()),
-                    Err(_) => self.error.set("音质请求已结束，请重试".into()),
+                    Err(_) => self
+                        .error
+                        .set(tr!("Quality request ended; please try again").into()),
                 }
                 self.quality_busy.set(false);
             })
@@ -525,19 +575,15 @@ impl Model {
         }
         self.starting.set(true);
         self.error.set(String::new());
+        self.open(Page::Player);
         let (send, receive) = oneshot::channel();
         remote::submit(action, Some(send));
         self.owner.run(|| {
             spawn(async move {
                 match receive.await {
-                    Ok(Ok(status)) => {
-                        #[cfg(target_os = "macos")]
-                        self.open(Page::Player);
-                        self.update(status);
-                        self.open(Page::Player);
-                    }
+                    Ok(Ok(status)) => self.update(status),
                     Ok(Err(error)) => self.error.set(error.to_string()),
-                    Err(_) => self.error.set("播放请求已结束".into()),
+                    Err(_) => self.error.set(tr!("Playback request ended").into()),
                 }
                 self.starting.set(false);
             })
@@ -568,10 +614,5 @@ pub fn plain_lyrics(text: &str) -> String {
 pub fn ago(timestamp: u64) -> String {
     let now = (nsh_core::time::unix_ms() / 1000.0) as u64;
     let seconds = now.saturating_sub(timestamp);
-    match seconds {
-        0..=59 => "刚刚".into(),
-        60..=3599 => format!("{} 分钟前", seconds / 60),
-        3600..=86399 => format!("{} 小时前", seconds / 3600),
-        _ => format!("{} 天前", seconds / 86400),
-    }
+    crate::protocol::i18n::relative_time(seconds)
 }

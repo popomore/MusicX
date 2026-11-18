@@ -7,6 +7,7 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+musicx-protocol = { path = "../../../crates/protocol" }
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

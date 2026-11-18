@@ -1,11 +1,12 @@
 //! Mac-only presentation. The shared iPhone layout stays independent.
 use super::{PLACEHOLDER, time};
+use crate::protocol::tr;
 use crate::{
     model::{Model, Page, key},
     protocol::{State, Track},
     remote::{Action, submit},
 };
-use nsh_base::{SliderValue, button, slider, theme};
+use nsh_base::{SliderValue, button, popover, slider, theme};
 use nsh_core::{element::ImageSrc, prelude::*};
 
 #[derive(Clone, Copy)]
@@ -14,7 +15,6 @@ enum Icon {
     Pause,
     Previous,
     Next,
-    Settings,
     History,
     Queue,
     Playlists,
@@ -39,9 +39,6 @@ impl Icon {
             }
             Self::Next => {
                 r#"<svg viewBox="0 0 24 24"><path d="M17 5v14M5 5.5 15.5 12 5 18.5Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" fill="currentColor"/></svg>"#
-            }
-            Self::Settings => {
-                r#"<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M10 5.1l.4-2.2h3.2l.4 2.2 3 1.8 2-.8 1.6 2.8-1.7 1.4v3.4l1.7 1.4-1.6 2.8-2-.8-3 1.8-.4 2.2h-3.2l-.4-2.2-3-1.8-2 .8-1.6-2.8 1.7-1.4v-3.4L3.4 8.9 5 6.1l2 .8Z"/><circle cx="12" cy="12" r="3"/></svg>"#
             }
             Self::History => {
                 r#"<svg viewBox="0 0 24 24"><path d="M3.5 10a8.5 8.5 0 1 1 1.3 7.2M3.5 4.5V10H9M12 7.5V12l3 2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>"#
@@ -116,7 +113,7 @@ fn small_button(
     )
 }
 
-fn header(model: Model) -> impl IntoElement {
+fn header() -> impl IntoElement {
     view()
         .flex_row()
         .window_drag(true)
@@ -124,70 +121,28 @@ fn header(model: Model) -> impl IntoElement {
         .h(px(26.0))
         .gap(px(2.0))
         .child(view().flex_1().min_w(px(12.0)).h_full().window_drag(true))
-        .child(now_playing_button(model))
-        .child(
-            view()
-                .w(px(1.0))
-                .h(px(10.0))
-                .mx(px(3.0))
-                .bg(move || theme().muted),
-        )
         .child(small_button(
-            "最小化窗口",
+            tr!("Minimize window"),
             Icon::Minimize,
             nsh_core::element::desktop::minimize,
         ))
         .child(small_button(
-            "关闭窗口",
+            tr!("Close window"),
             Icon::Close,
             nsh_core::element::desktop::close_window,
         ))
 }
 
-fn now_playing_button(model: Model) -> impl IntoElement {
-    let cover = computed(move || {
-        model
-            .status
-            .with(|s| s.track.as_ref().and_then(|t| t.cover_url.clone()))
-    });
-    view().tooltip(hint("正在播放")).child(
-        button()
-            .accessibility_label(Some("打开正在播放".into()))
-            .on_press(move || {
-                if model.drawer_open.get() && model.page.get() == Page::Queue {
-                    model.open(Page::Player);
-                } else {
-                    model.open(Page::Queue);
-                }
-            })
-            .selected(move || model.drawer_open.get() && model.page.get() == Page::Queue)
-            .selected_style(|s| s.bg(theme().muted))
-            .w(px(26.0))
-            .h(px(26.0))
-            .items_center()
-            .justify_center()
-            .rounded(px(6.0))
-            .hover(|s| s.bg(theme().muted).cursor_pointer())
-            .active(|s| s.opacity(0.65))
-            .child(
-                when(
-                    move || cover.with(Option::is_some),
-                    move || {
-                        crate::controls::artwork(
-                            move || cover.get(),
-                            || "当前歌曲封面".into(),
-                            22.0,
-                        )
-                    },
-                )
-                .otherwise(|| icon(|| Icon::Queue, 15.0, false)),
-            ),
-    )
-}
-
 fn transport(model: Model, previous: bool) -> impl IntoElement {
     button()
-        .accessibility_label(Some(if previous { "上一首" } else { "下一首" }.into()))
+        .accessibility_label(Some(
+            if previous {
+                tr!("Previous track")
+            } else {
+                tr!("Next track")
+            }
+            .into(),
+        ))
         .disabled(move || {
             model.starting.get()
                 || model.status.with(|s| {
@@ -197,6 +152,10 @@ fn transport(model: Model, previous: bool) -> impl IntoElement {
                                 i == 0
                             } else {
                                 i + 1 >= s.queue_length
+                                    && !matches!(
+                                        s.queue_context.as_ref(),
+                                        Some(crate::protocol::QueueContext::Station { .. })
+                                    )
                             }
                         })
                 })
@@ -254,18 +213,36 @@ fn details_navigation(model: Model) -> impl IntoElement {
         .flex_row()
         .items_center()
         .gap(px(2.0))
-        .child(destination(model, "正在播放", Icon::Queue, Page::Queue))
-        .child(destination(model, "播放历史", Icon::History, Page::History))
         .child(destination(
             model,
-            "我的歌单",
+            tr!("Now playing"),
+            Icon::Queue,
+            Page::Queue,
+        ))
+        .child(destination(
+            model,
+            tr!("History"),
+            Icon::History,
+            Page::History,
+        ))
+        .child(destination(
+            model,
+            tr!("My playlists"),
             Icon::Playlists,
             Page::Library,
         ))
-        .child(destination(model, "设置", Icon::Settings, Page::Settings))
 }
 
-pub(super) fn shell(model: Model) -> impl IntoElement {
+pub(crate) fn shell(model: Model) -> impl IntoElement {
+    let hint_left = signal(crate::desktop::preferred_details_left());
+    set_interval(std::time::Duration::from_millis(150), move || {
+        if !model.drawer_open.get() {
+            let left = crate::desktop::preferred_details_left();
+            if hint_left.get() != left {
+                hint_left.set(left);
+            }
+        }
+    });
     set_interval(std::time::Duration::from_millis(100), move || {
         if model.status.with(|s| s.state == State::Playing)
             && (model.show_mini_lyrics.get()
@@ -299,10 +276,20 @@ pub(super) fn shell(model: Model) -> impl IntoElement {
                 .px(px(24.0))
                 .pt(px(12.0))
                 .pb(px(12.0))
-                .child(header(model))
+                .child(header())
                 // The player remains mounted while its details are open.
                 .child(player(model)),
         )
+        .child(when(
+            move || {
+                !model.drawer_open.get() && window().width.0 < crate::desktop::EXPANDED_WIDTH - 1.0
+            },
+            move || {
+                crate::drawer::details_hint()
+                    .left(hint_left)
+                    .on_press(move || model.open(Page::Queue))
+            },
+        ))
         .child(
             crate::drawer::details_drawer()
                 .open(move || {
@@ -339,15 +326,13 @@ pub(super) fn shell(model: Model) -> impl IntoElement {
                                 .child(
                                     view().flex_1().min_w(px(0.0)).child(
                                         text(move || match model.page.get() {
-                                            Page::Info => "歌曲信息",
-                                            Page::Lyrics => "歌词",
-                                            Page::Settings => "设置",
-                                            Page::Sources => "音乐来源",
-                                            Page::History => "播放历史",
-                                            Page::Library => "我的歌单",
-                                            Page::Queue => "正在播放",
-                                            Page::Album => "专辑曲目",
-                                            _ => "详细信息",
+                                            Page::Info => tr!("Track information"),
+                                            Page::Lyrics => tr!("Lyrics"),
+                                            Page::History => tr!("History"),
+                                            Page::Library => tr!("My playlists"),
+                                            Page::Queue => tr!("Now playing"),
+                                            Page::Album => tr!("Album tracks"),
+                                            _ => tr!("Details"),
                                         })
                                         .text_size(px(12.0))
                                         .font_weight(FontWeight::SEMIBOLD)
@@ -363,34 +348,22 @@ pub(super) fn shell(model: Model) -> impl IntoElement {
                                         )
                                     },
                                     move || {
-                                        small_button("刷新详情", Icon::Refresh, move || {
-                                            model.open(model.page.get())
-                                        })
+                                        small_button(
+                                            tr!("Refresh details"),
+                                            Icon::Refresh,
+                                            move || model.open(model.page.get()),
+                                        )
                                     },
                                 )))
-                                .child(small_button("收起详情", Icon::Close, move || {
-                                    model.open(Page::Player)
-                                })),
+                                .child(small_button(
+                                    tr!("Close details"),
+                                    Icon::Close,
+                                    move || model.open(Page::Player),
+                                )),
                         )
                         .child(when(
                             move || model.page.get() == Page::Lyrics,
                             move || super::lyrics_ui::lyrics(model),
-                        ))
-                        .child(when(
-                            move || model.page.get() == Page::Settings,
-                            move || crate::sources_ui::settings_view(model),
-                        ))
-                        .child(when(
-                            move || model.page.get() == Page::Sources,
-                            move || {
-                                crate::source_browser::sources_view(
-                                    model,
-                                    move || model.open(Page::Player),
-                                    move || model.open(Page::Library),
-                                    None,
-                                    crate::source_browser::Start::Catalog,
-                                )
-                            },
                         ))
                         .child(when(
                             move || model.page.get() == Page::Info,
@@ -421,9 +394,9 @@ pub(super) fn shell(model: Model) -> impl IntoElement {
                             move || {
                                 text(move || {
                                     if model.starting.get() {
-                                        "正在准备播放…"
+                                        tr!("Preparing playback…")
                                     } else {
-                                        "正在加载…"
+                                        tr!("Loading…")
                                     }
                                 })
                                 .text_size(px(11.0))
@@ -460,7 +433,7 @@ pub(super) fn player(model: Model) -> impl IntoElement {
             .items_center()
             .justify_center()
             .gap(px(12.0))
-            .child(crate::controls::caption("正在连接播放器…"))
+            .child(crate::controls::caption(tr!("Connecting to player…")))
             .child(when(
                 move || model.error.with(|error| !error.is_empty()),
                 move || crate::controls::caption(move || model.error.get()),
@@ -468,11 +441,7 @@ pub(super) fn player(model: Model) -> impl IntoElement {
     })
 }
 
-fn setup_action(
-    label: &'static str,
-    primary: bool,
-    press: impl Fn() + 'static,
-) -> impl IntoElement {
+fn setup_action(label: &'static str, press: impl Fn() + 'static) -> impl IntoElement {
     button()
         .accessibility_label(Some(label.into()))
         .on_press(press)
@@ -481,26 +450,14 @@ fn setup_action(
         .items_center()
         .justify_center()
         .rounded(px(7.0))
-        .bg(move || {
-            if primary {
-                theme().primary
-            } else {
-                theme().muted.opacity(0.55)
-            }
-        })
+        .bg(move || theme().primary)
         .hover(|s| s.opacity(0.86))
         .active(|s| s.opacity(0.65))
         .child(
             text(label)
                 .text_size(px(13.0))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(move || {
-                    if primary {
-                        theme().primary_foreground
-                    } else {
-                        theme().foreground
-                    }
-                }),
+                .text_color(move || theme().primary_foreground),
         )
 }
 
@@ -520,22 +477,22 @@ fn empty_player(model: Model) -> impl IntoElement {
                                 .replace("#1b2421", "currentColor"),
                         )
                     })
-                    .w(px(56.0))
-                    .h(px(56.0))
+                    .w(px(48.0))
+                    .h(px(48.0))
                     .text_color(move || theme().foreground)
                     .label("MusicX"),
                 )
                 .child(
-                    text("从一首喜欢的歌开始")
+                    text(tr!("Add a music source"))
                         .mt(px(24.0))
-                        .text_size(px(22.0))
+                        .text_size(px(20.0))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(move || theme().foreground),
                 )
                 .child(
-                    text("添加音乐来源，连接 Agent，\n让它为你选一首歌。")
-                        .mt(px(10.0))
-                        .text_size(px(13.0))
+                    text(tr!("Connect your music service\nand start listening."))
+                        .mt(px(12.0))
+                        .text_size(px(12.0))
                         .text_center()
                         .number_of_lines(2)
                         .text_color(move || theme().muted_foreground),
@@ -543,29 +500,154 @@ fn empty_player(model: Model) -> impl IntoElement {
         )
         .child(
             view()
-                .mt(px(28.0))
-                .gap(px(8.0))
-                .child(setup_action("添加音乐来源", true, move || {
-                    model.open(Page::Sources)
-                }))
-                .child(setup_action("连接 Agent", false, move || {
-                    model.open(Page::Settings)
+                .mt(px(24.0))
+                .child(setup_action(tr!("Add music source"), || {
+                    crate::desktop::open_settings(crate::sources_ui::SettingsGroup::Sources)
                 })),
         )
         .child(
             view()
                 .items_center()
-                .mt(px(12.0))
+                .mt(px(20.0))
+                .gap(px(4.0))
                 .child(crate::controls::action(
-                    "打开我的歌单",
+                    tr!("Connect your agent"),
                     || false,
-                    move || model.open(Page::Library),
-                )),
+                    || crate::desktop::open_settings(crate::sources_ui::SettingsGroup::Agent),
+                ))
+                .child(
+                    text(tr!("Choose music and control playback through chat"))
+                        .text_size(px(11.0))
+                        .text_center()
+                        .text_color(move || theme().muted_foreground),
+                ),
         )
         .child(when(
             move || model.error.with(|error| !error.is_empty()),
             move || crate::controls::caption(move || model.error.get()),
         ))
+}
+
+fn artist_entry(model: Model) -> impl IntoElement {
+    let metadata = computed(move || {
+        model.status.with(|s| {
+            s.track.as_ref().map(|track| {
+                (
+                    track.artist.clone(),
+                    track.source.as_ref().map(|s| s.plugin.clone()),
+                    track.artists.clone(),
+                )
+            })
+        })
+    });
+    dynamic(move || {
+        let (name, plugin, artists) = metadata.get().unwrap_or_default();
+        let mut seen = std::collections::HashSet::new();
+        let artists: Vec<_> = artists
+            .into_iter()
+            .filter(|artist| {
+                !artist.id.trim().is_empty()
+                    && !artist.name.trim().is_empty()
+                    && seen.insert(artist.id.clone())
+            })
+            .collect();
+        let name = if name.trim().is_empty() {
+            artists
+                .iter()
+                .map(|artist| artist.name.as_str())
+                .collect::<Vec<_>>()
+                .join(" / ")
+        } else {
+            name
+        };
+        let plugin = plugin.filter(|plugin| !plugin.trim().is_empty());
+        if artists.is_empty() || plugin.is_none() {
+            return text(name)
+                .max_w(px(88.0))
+                .number_of_lines(1)
+                .text_size(px(11.0))
+                .text_color(move || theme().muted_foreground)
+                .into_element();
+        }
+        let source = format!("mygo:{}", plugin.unwrap());
+        let entry = button()
+            .accessibility_label(Some(tr!("View artist {}", name).into()))
+            .max_w(px(88.0))
+            .min_w(px(0.0))
+            .py(px(4.0))
+            .px(px(3.0))
+            .rounded(px(4.0))
+            .hover(|s| s.bg(theme().muted))
+            .active(|s| s.opacity(0.65))
+            .child(
+                text(name)
+                    .number_of_lines(1)
+                    .text_size(px(11.0))
+                    .text_color(move || theme().muted_foreground),
+            );
+        if artists.len() == 1 {
+            let id = artists[0].id.clone();
+            return entry
+                .on_press(move || {
+                    model.open_source(crate::protocol::MusicSourceAction::Artist {
+                        source: source.clone(),
+                        id: id.clone(),
+                    });
+                })
+                .into_element();
+        }
+        let open = signal(false);
+        popover()
+            .open(move || Some(open.get()))
+            .on_open_change(move |event: &nsh_base::PopoverEvent| {
+                if let nsh_base::PopoverEvent::OpenChange(value, _) = event {
+                    open.set(*value);
+                }
+            })
+            .placement(Placement::Bottom)
+            .align(Align::Start)
+            .offset(px(6.0))
+            .margin(px(12.0))
+            .popup_style(move |s| {
+                s.w(px(220.0))
+                    .p(px(6.0))
+                    .bg(theme().background)
+                    .border_1()
+                    .border_color(theme().muted)
+                    .rounded(px(8.0))
+            })
+            .trigger(entry)
+            .child(view().gap(px(2.0)).child(each(
+                move || artists.clone(),
+                |artist| artist.id.clone(),
+                move |artist, _| {
+                    let source = source.clone();
+                    button()
+                        .accessibility_label(move || {
+                            Some(tr!("View artist {}", artist.with(|a| a.name.clone())).into())
+                        })
+                        .on_press(move || {
+                            open.set(false);
+                            model.open_source(crate::protocol::MusicSourceAction::Artist {
+                                source: source.clone(),
+                                id: artist.with(|a| a.id.clone()),
+                            });
+                        })
+                        .px(px(8.0))
+                        .py(px(7.0))
+                        .rounded(px(4.0))
+                        .hover(|s| s.bg(theme().muted))
+                        .active(|s| s.opacity(0.65))
+                        .child(
+                            text(move || artist.with(|a| a.name.clone()))
+                                .text_size(px(12.0))
+                                .number_of_lines(1)
+                                .text_color(move || theme().foreground),
+                        )
+                },
+            )))
+            .into_element()
+    })
 }
 
 fn active_player(model: Model) -> impl IntoElement {
@@ -582,9 +664,10 @@ fn active_player(model: Model) -> impl IntoElement {
     };
     let title = computed(move || {
         model.status.with(|s| {
-            s.track
-                .as_ref()
-                .map_or_else(|| "还没有播放歌曲".to_owned(), |t| t.title.clone())
+            s.track.as_ref().map_or_else(
+                || tr!("Nothing playing yet").to_owned(),
+                |t| t.title.clone(),
+            )
         })
     });
     let cover = computed(move || {
@@ -601,13 +684,8 @@ fn active_player(model: Model) -> impl IntoElement {
             .child(
                 view().items_center().mt(px(8.0)).child(
                     button()
-                        .accessibility_label(Some("查看当前专辑的其他歌曲".into()))
-                        .disabled(move || {
-                            model
-                                .status
-                                .with(|s| s.track.as_ref().is_none_or(|t| t.album.is_none()))
-                        })
-                        .on_press(move || model.open(Page::Album))
+                        .accessibility_label(Some(tr!("Show now playing").into()))
+                        .on_press(move || model.open(Page::Queue))
                         .rounded(px(8.0))
                         .active(|s| s.opacity(0.9))
                         .child(
@@ -616,7 +694,7 @@ fn active_player(model: Model) -> impl IntoElement {
                                 .h(px(248.0))
                                 .rounded(px(8.0))
                                 .object_fit(ResizeMode::Cover)
-                                .label(move || SharedString::from(format!("{}的封面", title.get())))
+                                .label(move || SharedString::from(tr!("Cover for {}", title.get())))
                                 .placeholder(ImageSrc::svg_markup(PLACEHOLDER))
                                 .on_error(move |_: &str| model.cover_failed.set(true))
                                 .on_load(move |_: &nsh_core::Size<DevicePixels>| {
@@ -637,7 +715,7 @@ fn active_player(model: Model) -> impl IntoElement {
                             .gap(px(6.0))
                             .child(
                                 button()
-                                    .accessibility_label(Some("查看歌曲信息".into()))
+                                    .accessibility_label(Some(tr!("View track information").into()))
                                     .disabled(move || model.status.with(|s| s.track.is_none()))
                                     .on_press(move || model.open(Page::Info))
                                     .self_start()
@@ -654,6 +732,7 @@ fn active_player(model: Model) -> impl IntoElement {
                                             .text_color(move || theme().foreground),
                                     ),
                             )
+                            .child(super::playback_notices(model))
                             .child(
                                 button()
                                     .accessibility_label(move || {
@@ -665,9 +744,9 @@ fn active_player(model: Model) -> impl IntoElement {
                                                             .status
                                                             .with(|s| key(s.track.as_ref()))
                                             }) {
-                                                "取消喜欢"
+                                                tr!("Unlike this track")
                                             } else {
-                                                "喜欢这首歌"
+                                                tr!("Like this track")
                                             },
                                         ))
                                     })
@@ -716,20 +795,7 @@ fn active_player(model: Model) -> impl IntoElement {
                             .items_center()
                             .gap(px(4.0))
                             .mt(px(3.0))
-                            .child(
-                                text(move || {
-                                    model.status.with(|s| {
-                                        s.track.as_ref().map_or_else(
-                                            || "通过 Agent 选歌".into(),
-                                            |t| t.artist.clone(),
-                                        )
-                                    })
-                                })
-                                .max_w(px(88.0))
-                                .number_of_lines(1)
-                                .text_size(px(11.0))
-                                .text_color(move || theme().muted_foreground),
-                            )
+                            .child(artist_entry(model))
                             .child(when(
                                 move || {
                                     model.status.with(|s| {
@@ -750,7 +816,9 @@ fn active_player(model: Model) -> impl IntoElement {
                                         )
                                         .child(
                                             button()
-                                                .accessibility_label(Some("查看专辑曲目".into()))
+                                                .accessibility_label(Some(
+                                                    tr!("View album tracks").into(),
+                                                ))
                                                 .on_press(move || model.open(Page::Album))
                                                 .flex_1()
                                                 .min_w(px(0.0))
@@ -791,10 +859,8 @@ fn active_player(model: Model) -> impl IntoElement {
                         slider()
                             .value(move || Some(SliderValue::Single(position())))
                             .max(move || model.status.with(|s| s.duration.max(1.0)))
-                            .disabled(move || {
-                                model.status.with(|s| s.duration <= 0.0 || s.switching)
-                            })
-                            .accessibility_label(Some("播放进度".into()))
+                            .disabled(move || model.status.with(|s| s.duration <= 0.0))
+                            .accessibility_label(Some(tr!("Playback position").into()))
                             .track_class(Some("h-5 justify-center".into()))
                             .indicator_class(Some("h-1 rounded-full bg-muted".into()))
                             .range_class(Some("rounded-full bg-primary".into()))
@@ -841,13 +907,28 @@ fn active_player(model: Model) -> impl IntoElement {
                     .child(
                         button()
                             .accessibility_label(move || {
-                                Some(if playing() { "暂停" } else { "播放" }.into())
+                                Some(
+                                    if super::playback_busy(model) {
+                                        tr!("Loading audio")
+                                    } else if playing() {
+                                        tr!("Pause")
+                                    } else {
+                                        tr!("Play")
+                                    }
+                                    .into(),
+                                )
                             })
                             .disabled(move || {
-                                model.starting.get()
-                                    || model.status.with(|s| s.track.is_none() || s.switching)
+                                model.status.with(|s| {
+                                    s.track.is_none()
+                                        || (model.starting.get() && !s.switching)
+                                        || (s.switching && !playing())
+                                })
                             })
                             .on_press(move || {
+                                if !playing() {
+                                    model.error.set(String::new());
+                                }
                                 submit(
                                     if playing() {
                                         Action::Pause
@@ -866,41 +947,22 @@ fn active_player(model: Model) -> impl IntoElement {
                             .hover(|s| s.opacity(0.88))
                             .active(|s| s.opacity(0.6))
                             .disabled_style(|s| s.opacity(0.22))
-                            .child(icon(
-                                move || if playing() { Icon::Pause } else { Icon::Play },
-                                22.0,
-                                true,
-                            )),
+                            .child(
+                                when(
+                                    move || super::playback_busy(model),
+                                    crate::controls::loading_indicator,
+                                )
+                                .otherwise(move || {
+                                    icon(
+                                        move || if playing() { Icon::Pause } else { Icon::Play },
+                                        22.0,
+                                        true,
+                                    )
+                                }),
+                            ),
                     )
                     .child(transport(model, false)),
-            )
-            .child(when(
-                move || {
-                    model.status.with(|s| s.error.is_some() || s.switching)
-                        || model.cover_failed.get()
-                        || model.error.with(|e| !e.is_empty())
-                },
-                move || {
-                    text(move || {
-                        model.status.with(|s| {
-                            s.error.clone().unwrap_or_else(|| {
-                                if model.error.with(|e| !e.is_empty()) {
-                                    return model.error.get();
-                                }
-                                if s.switching {
-                                    "正在切歌…".into()
-                                } else {
-                                    "封面暂不可用".into()
-                                }
-                            })
-                        })
-                    })
-                    .text_size(px(11.0))
-                    .number_of_lines(2)
-                    .mt(px(8.0))
-                    .text_color(move || theme().muted_foreground)
-                },
-            )),
+            ),
     )
 }
 
@@ -921,21 +983,24 @@ fn queue(model: Model) -> impl IntoElement {
             snapshot.as_ref().map(|queue| {
                 use crate::protocol::QueueContext;
                 let (name, kind) = match &queue.queue_context {
-                    Some(QueueContext::Album { name, .. }) => (name.clone(), Some("专辑")),
-                    Some(QueueContext::LocalPlaylist { name, .. }) => {
-                        (name.clone(), Some("本地歌单"))
+                    Some(QueueContext::Station { name, .. }) => (name.clone(),Some(tr!("Radio"))),
+                    Some(QueueContext::Album { name, .. }) => (name.clone(), Some(tr!("Album"))),
+                    Some(QueueContext::LocalPlaylist { id, name }) => {
+                        (if id == "liked" { tr!("Liked Songs").into() } else { name.clone() }, Some(tr!("Local playlist")))
                     }
-                    Some(QueueContext::Playlist { name, .. }) => (name.clone(), Some("来源歌单")),
-                    Some(QueueContext::History) => ("播放历史".into(), None),
+                    Some(QueueContext::Playlist { name, .. }) => {
+                        (name.clone(), Some(tr!("Source playlist")))
+                    }
+                    Some(QueueContext::History) => (tr!("History").into(), None),
                     Some(QueueContext::SourceCollection { name, .. }) => {
-                        (name.clone(), Some("来源曲目"))
+                        (name.clone(), Some(tr!("Source tracks")))
                     }
-                    None => ("临时队列".into(), None),
+                    None => (tr!("Queue").into(), None),
                 };
                 let count = queue.queue.len();
                 let detail = match kind {
-                    Some(kind) => format!("{kind} · {count} 首"),
-                    None => format!("{count} 首"),
+                    Some(kind) => tr!("{kind} · {tracks}"; kind = kind, tracks = crate::protocol::i18n::tracks(count)),
+                    None => crate::protocol::i18n::tracks(count),
                 };
                 (name, detail)
             })
@@ -990,14 +1055,14 @@ fn queue(model: Model) -> impl IntoElement {
                         },
                         move || {
                             crate::controls::action(
-                                "查看歌词",
+                                tr!("View lyrics"),
                                 || false,
                                 move || model.open(Page::Lyrics),
                             )
                         },
                     ))
                     .child(crate::controls::action(
-                        "定位当前",
+                        tr!("Find current"),
                         move || model.status.with(|s| s.index.is_none()),
                         move || {
                             if let Some(index) = model.status.with(|s| s.index) {
@@ -1022,10 +1087,10 @@ fn queue(model: Model) -> impl IntoElement {
             || {
                 view()
                     .gap(px(6.0))
-                    .child(crate::controls::heading("队列还没有歌曲"))
-                    .child(crate::controls::caption(
-                        "从专辑、历史或歌单选择一首歌，就会在这里看到播放顺序。",
-                    ))
+                    .child(crate::controls::heading(tr!("The queue is empty")))
+                    .child(crate::controls::caption(tr!(
+                        "Choose a track from an album, history, or playlist to see the playback order here."
+                    )))
             },
         ))
         .child(
@@ -1053,8 +1118,8 @@ fn queue(model: Model) -> impl IntoElement {
                     };
                     button()
                         .accessibility_label(move || {
-                            Some(SharedString::from(format!(
-                                "播放队列第{}首，{}",
+                            Some(SharedString::from(tr!(
+                                "Play queue track {}, {}",
                                 at.index() + 1,
                                 track().map_or_else(String::new, |t| t.title)
                             )))
@@ -1103,9 +1168,7 @@ fn queue(model: Model) -> impl IntoElement {
                         )
                         .child(crate::controls::artwork(
                             move || track().and_then(|t| t.cover_url),
-                            move || {
-                                format!("{}封面", track().map_or_else(String::new, |t| t.title))
-                            },
+                            move || tr!("Artwork for {}", track().map_or_else(String::new, |t| t.title)),
                             36.0,
                         ))
                         .child(
@@ -1129,7 +1192,7 @@ fn queue(model: Model) -> impl IntoElement {
                         .child(
                             text(move || {
                                 if current() {
-                                    "当前".into()
+                                    tr!("Current").into()
                                 } else {
                                     track().map_or_else(String::new, |t| time(t.duration))
                                 }
@@ -1143,7 +1206,7 @@ fn queue(model: Model) -> impl IntoElement {
             .min_h(px(0.0))
             .estimated_item_size(px(52.0))
             .scrollbar(false)
-            .label("当前播放队列")
+            .label(tr!("Current queue"))
             .element_ref(&list)
             .on_layout(move |_: &Bounds<Points>| ready.set(true)),
         )
@@ -1165,7 +1228,7 @@ pub(super) fn track_row(
     button()
         .accessibility_label(move || {
             let track = track();
-            let mut label = format!("播放 {}，{}", track.title, track.artist);
+            let mut label = tr!("Play {}, {}", track.title, track.artist);
             if let Some(progress) = progress() {
                 label.push('，');
                 label.push_str(&progress);
@@ -1189,7 +1252,7 @@ pub(super) fn track_row(
         .disabled_style(|s| s.opacity(0.4))
         .child(crate::controls::artwork(
             move || track().cover_url,
-            move || format!("{}封面", track().title),
+            move || tr!("Artwork for {}", track().title),
             36.0,
         ))
         .child(
@@ -1215,7 +1278,7 @@ pub(super) fn track_row(
             move || {
                 text(move || {
                     if current() {
-                        "当前".into()
+                        tr!("Current").into()
                     } else {
                         progress().unwrap_or_default()
                     }
@@ -1258,7 +1321,7 @@ pub(super) fn song_info(model: Model) -> impl IntoElement {
             )
             .child(
                 button()
-                    .accessibility_label(Some("信息页查看专辑".into()))
+                    .accessibility_label(Some(tr!("View album information").into()))
                     .on_press(move || model.open(Page::Album))
                     .disabled(move || {
                         model
@@ -1272,10 +1335,10 @@ pub(super) fn song_info(model: Model) -> impl IntoElement {
                     .child(
                         text(move || {
                             model.status.with(|s| {
-                                s.track
-                                    .as_ref()
-                                    .and_then(|t| t.album.as_ref())
-                                    .map_or_else(|| "暂无专辑信息".into(), |a| a.name.clone())
+                                s.track.as_ref().and_then(|t| t.album.as_ref()).map_or_else(
+                                    || tr!("No album information").into(),
+                                    |a| a.name.clone(),
+                                )
                             })
                         })
                         .number_of_lines(2)
@@ -1284,7 +1347,7 @@ pub(super) fn song_info(model: Model) -> impl IntoElement {
                     ),
             )
             .child(
-                text("歌曲来源")
+                text(tr!("Track source"))
                     .mt(px(8.0))
                     .text_size(px(12.0))
                     .font_weight(FontWeight::SEMIBOLD)
@@ -1292,7 +1355,7 @@ pub(super) fn song_info(model: Model) -> impl IntoElement {
             )
             .child(
                 button()
-                    .accessibility_label(Some("打开歌曲来源链接".into()))
+                    .accessibility_label(Some(tr!("Open track source link").into()))
                     .disabled(move || {
                         model
                             .info
@@ -1333,7 +1396,7 @@ pub(super) fn song_info(model: Model) -> impl IntoElement {
                                 text(move || {
                                     model.info.with(|i| {
                                         i.as_ref().map_or_else(
-                                            || "正在加载来源…".into(),
+                                            || tr!("Loading source…").into(),
                                             |i| {
                                                 let source = i
                                                     .track
@@ -1367,14 +1430,14 @@ pub(super) fn song_info(model: Model) -> impl IntoElement {
             )
             .child(
                 button()
-                    .accessibility_label(Some("将当前歌曲加入本地歌单".into()))
+                    .accessibility_label(Some(tr!("Add current track to a local playlist").into()))
                     .on_press(move || model.open(Page::Library))
                     .py(px(9.0))
                     .px(px(8.0))
                     .rounded(px(6.0))
                     .hover(|s| s.bg(theme().muted))
                     .child(
-                        text("加入我的歌单")
+                        text(tr!("Add to my playlists"))
                             .text_size(px(12.0))
                             .text_color(move || theme().foreground),
                     ),

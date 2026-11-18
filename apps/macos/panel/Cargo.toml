@@ -10,6 +10,14 @@ publish = false
 name = "window_lifecycle"
 harness = false
 
+[[test]]
+name = "localization"
+harness = false
+
+[[test]]
+name = "notices"
+harness = false
+
 [dependencies]
 musicx-protocol = { path = "../../../crates/protocol" }
 nsh-core = "=0.4.0"
@@ -24,6 +32,7 @@ serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls"] }
 tokio = { version = "1", features = ["sync"] }
+toml_edit = "0.25"
 
 [dev-dependencies]
 musicx-platform-apple = { path = "../../../crates/platform-apple" }

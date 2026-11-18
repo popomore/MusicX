@@ -7,6 +7,10 @@ source_sha=${SOURCE_SHA:?}
 signing_mode=${SIGNING_MODE:?}
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 channel=$(bash "$script_dir/validate-release-tag.sh" "$source_sha" "$tag")
+if [[ "$channel" == stable && "$signing_mode" != developer-id ]]; then
+    echo '::error::Stable releases require Developer ID signing and notarization.' >&2
+    exit 1
+fi
 cd "$(dirname "$1")"
 dmg=$(basename "$1")
 checksum="$dmg.sha256"
@@ -14,13 +18,19 @@ manifest='release-manifest.json'
 
 title="MusicX ${tag#v}"
 notes="Download MusicX for Apple Silicon and drag the app to Applications. Requires macOS 14 or later."
+if [[ -n "${RELEASE_NOTES_FILE:-}" ]]; then
+    notes=$(cat "$RELEASE_NOTES_FILE")
+    [[ -n "$notes" ]] || { echo 'Release notes must not be empty.' >&2; exit 1; }
+fi
 prerelease=true
 if [[ "$channel" == stable ]]; then
     prerelease=false
 fi
 case "$signing_mode" in
     ad-hoc)
-        notes+=$'\n\nThis build uses ad hoc signing. macOS may block it on first launch because it lacks Apple notarization.'
+        if [[ -z "${RELEASE_NOTES_FILE:-}" ]]; then
+            notes+=$'\n\nThis build uses ad hoc signing. macOS may block it on first launch because it lacks Apple notarization.'
+        fi
         ;;
     developer-id) ;;
     *)
@@ -33,13 +43,13 @@ if [[ "$prerelease" == true ]]; then
 fi
 
 sha256sum --check "$checksum"
-files=("$dmg" "$checksum")
+python3 "$script_dir/validate-appcast.py" "$dmg" "$tag" "$repo"
+files=("$dmg" "$checksum" appcast.xml)
 make_latest=false
 if [[ "$channel" == stable ]]; then
-    python3 "$script_dir/validate-appcast.py" "$dmg" "$tag" "$repo"
-    files+=(appcast.xml)
-    make_latest=true
+    make_latest=${RELEASE_MAKE_LATEST:-true}
 fi
+[[ "$make_latest" == true || "$make_latest" == false ]] || { echo 'Invalid Latest policy.' >&2; exit 1; }
 verify_tag() {
     local tag_sha
     tag_sha=$(gh api "repos/$repo/commits/refs/tags/$tag" --jq .sha)
@@ -57,8 +67,9 @@ file_digests() {
 }
 
 jq -n --arg tag "$tag" --arg version "${tag#v}" --arg source_sha "$source_sha" \
+    --arg build_version "${MUSICX_BUNDLE_VERSION:?}" \
     --arg signing_mode "$signing_mode" --argjson files "$(file_digests "${files[@]}")" '
-    {schema: 1, unit: "musicx-macos", tag: $tag, version: $version, source_sha: $source_sha,
+    {schema: 1, unit: "musicx-macos", tag: $tag, version: $version, build_version: $build_version, source_sha: $source_sha,
      signing_mode: $signing_mode, files: ($files | map({name, sha256: (.digest | ltrimstr("sha256:"))}))}
 ' > "$manifest"
 files+=("$manifest")

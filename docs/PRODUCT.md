@@ -4,11 +4,15 @@ MusicX is a compact native player for people who choose music with an agent and 
 
 ## Playback on macOS
 
-The menu bar icon shows playback state and opens the compact player. Closing the window releases its resources while MusicX Helper keeps playing and recording history. The system's Now Playing controls and media keys remain available. To end the session and stop the helper, use Quit MusicX.
+The native menu bar provides application settings, standard editing, playback and volume commands, view navigation, window controls, and help. Settings uses Command-comma; Show Player uses Command-0; Now Playing, History, My Playlists, and Music Sources use Command-1 through Command-4. Playback actions are disabled when unavailable, and menu labels follow the selected interface language.
 
-The player shows the cover, track title, artist, album, audio quality badge, progress, and basic controls. The quality popover separates the reported stream quality from the listener's preference. The optional one-line lyric preview opens full lyrics, which follow playback and support seeking when the source provides timestamps. Track information links back to its source and album. Queue, history, playlists, and settings open beside the player so playback controls remain available.
+The menu bar icon shows playback state and opens the compact player. Closing the last UI window releases its resources while MusicX Helper keeps playing and recording history. The player can be reopened while settings remains open. The system's Now Playing controls and media keys remain available. To end the session and stop the helper, use Quit MusicX.
 
-Search and discovery are exposed through MCP. Use MCP Connection in settings to copy the endpoint configuration and connect a client. The player panel focuses on the current session and music already available in albums, playlists, and history.
+The player shows the cover, track title, artist, album, audio quality badge, progress, and basic controls. Clicking the cover opens Now Playing. The artist name opens the source's artist page; collaborations offer a choice of individual artists. Artist names remain plain text when the source provides no artist identity. The album name opens album tracks. The quality popover separates the reported stream quality from the listener's preference. The optional one-line lyric preview opens full lyrics, which follow playback and support seeking when the source provides timestamps. Track information links back to its source and album. Queue, history, and playlists open beside the player so playback controls remain available. Hovering the available opening edge reveals a translucent arrow that opens Now Playing. The edge follows the available space on the current display as the window moves.
+
+Settings opens a separate window from the application menu or Command-comma. Its sidebar switches between Language, Playback, Music Sources, Agent, and Version & Updates. The Music Sources menu command opens that settings group directly. Repeated settings commands focus the same window, and settings can close independently of the player.
+
+Search and discovery are exposed through MCP. Use Agent in macOS settings to set up Codex or Claude Code automatically, or copy the MCP endpoint configuration for another client. The player panel focuses on the current session and music already available in albums, playlists, and history.
 
 ## Queue, library, and history
 
@@ -16,10 +20,13 @@ Search and discovery are exposed through MCP. Use MCP Connection in settings to 
 | --- | --- |
 | Current queue | Tracks added individually or captured from an album, playlist, or history snapshot. Previous, next, and automatic advance follow the queue order. |
 | My Playlists | Saved local collections. Create, rename, pin, or delete playlists and add or remove tracks. Editing a saved playlist leaves the current queue intact. |
+| Radio | Personal recommendations from connected music accounts, collected into a local Radio playlist. Get another batch to append new tracks, deduplicated by source identity. Fetching recommendations leaves playback and the current queue intact. |
 | Playback history | A chronological log with separate progress for each play and a completion indicator. |
 | Liked Songs | A local playlist managed by the heart button. Track edits persist across launches. The playlist name and collection are protected. |
 
 Changing sources, liking a track, and editing a playlist are independent of queue progression. A failed track selection preserves the existing queue. Quality changes keep the current track and playback position while requesting a new stream.
+
+The feature is named Radio. Use Add recommendations in My Playlists or in the Radio playlist to append a personal batch. Fetching happens only when the listener presses this button or an agent invokes `manage_local_playlists(action=radio)`; opening the player or playlist browser never fetches automatically. MusicX prefers a source's personal FM and falls back to an explicitly advertised daily recommendation page. Public charts, new releases, and listening history are excluded. Accounts are checked before fetching; one unavailable source does not discard the others. Empty or failed fetches preserve the existing playlist. Radio is an editable local collection: renaming, pinning and deleting use the normal playlist controls. Its default name follows the interface language, while custom names are preserved. Playback starts only when the listener chooses Play.
 
 MusicX remembers the current track, queue, playback position, and volume across restarts. It restores the session paused, so opening the app does not start audio. Press Play to request a fresh stream and continue from the saved position. Playback progress is checkpointed every five seconds and saved on playback actions and normal quit.
 
@@ -27,7 +34,17 @@ MusicX remembers the current track, queue, playback position, and volume across 
 
 MusicX starts without a default source. Users explicitly add compatible MyGo Music plugins from the catalog or a GitHub repository. A source can offer search, playback, lyrics, album/artist information, account sign-in, podcast browsing, or playlist/liked-song/recent-track import depending on its capabilities. The settings view surfaces the available actions for each source.
 
+Repository-installed plugins update automatically while MusicX is running, preserving accounts and settings. Music Sources provides a switch to turn this off. Local-directory plugins remain manually managed.
+
 Connect accounts with QR sign-in or, where supported on macOS, an embedded web sign-in window. Credentials belong to the source's local account session. Imported playlists are local snapshots that remain available after signing out. Playback of their tracks still depends on the source and its account requirements.
+
+## Languages
+
+The macOS and iPhone interfaces support English and Simplified Chinese. Language
+in settings can follow the system or use an explicit choice, which takes effect
+immediately and is remembered. Music metadata, lyrics, and user playlist names
+remain in their original language. Installed plugins receive the same language
+preference and provide their own translations.
 
 ## Local data
 

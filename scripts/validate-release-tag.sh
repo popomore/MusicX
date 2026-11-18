@@ -11,6 +11,9 @@ version_pattern="$number\\.$number\\.$number"
 if [[ "$tag" =~ ^v($version_pattern)$ ]]; then
     version=${BASH_REMATCH[1]}
     channel=stable
+elif [[ "$tag" =~ ^v($version_pattern)-preview\.([1-9][0-9]*)$ ]]; then
+    version=${BASH_REMATCH[1]}
+    channel=preview
 elif [[ "$tag" =~ ^v($version_pattern)\.preview-([0-9]{14})-([0-9a-f]{4})$ ]]; then
     version=${BASH_REMATCH[1]}
     tag_timestamp=${BASH_REMATCH[5]}
@@ -22,13 +25,23 @@ elif [[ "$tag" =~ ^v($version_pattern)\.preview-([0-9]{14})-([0-9a-f]{4})$ ]]; t
     fi
     channel=preview
 else
-    echo '::error::Invalid release tag. Expected vX.Y.Z or vX.Y.Z.preview-YYYYMMDDHHMMSS-SHA4, without leading zeroes.' >&2
+    echo '::error::Invalid release tag. Expected vX.Y.Z or vX.Y.Z-preview.N (legacy timestamp previews are also accepted), without leading zeroes.' >&2
     exit 1
 fi
 
 case "${3:-}" in
     '') printf '%s\n' "$channel" ;;
-    --github-output) printf 'sha=%s\nchannel=%s\nversion=%s\nbundle-version=%s\n' "$source_sha" "$channel" "${tag#v}" "$version" ;;
+    --github-output)
+        # One release workflow allocates build numbers across both channels.
+        # The epoch also makes the first new build newer than legacy 1.0.0.
+        run_number=${GITHUB_RUN_NUMBER:?A release workflow run number is required}
+        if [[ ! "$run_number" =~ ^[1-9][0-9]{0,8}$ ]]; then
+            echo '::error::Invalid release workflow run number.' >&2
+            exit 1
+        fi
+        printf 'sha=%s\nchannel=%s\nversion=%s\nshort-version=%s\nbundle-version=%s\n' \
+            "$source_sha" "$channel" "${tag#v}" "$version" "$((1000000 + run_number))"
+        ;;
     *)
         echo '::error::Unknown validation output option.' >&2
         exit 1

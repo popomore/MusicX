@@ -25,7 +25,8 @@ if [[ -z "$stable_tag" ]]; then
     exit 0
 fi
 timestamp=$(TZ=UTC git show -s --format=%cd --date=format-local:%Y%m%d%H%M%S "$source_sha")
-tag="$stable_tag.preview-$timestamp-${source_sha:0:4}"
+IFS=. read -r major minor patch <<< "${stable_tag#v}"
+tag="v$major.$minor.$((patch + 1)).preview-$timestamp-${source_sha:0:4}"
 bash "$validation_script" "$source_sha" "$tag" > /dev/null
 
 existing=$(gh api "repos/$repo/git/matching-refs/tags/$tag" \
