@@ -5,6 +5,12 @@ import { resolve } from 'node:path';
 import { writeFileSync } from 'node:fs';
 import { git, readJSON, validatePlan, validateAssets } from './state.mjs';
 
+// Render pre-policy subjects in English without rewriting their commits or links.
+const legacySubjects = new Map([
+  ['e10bd714acb6226c2a80f042435273774a775adc', 'feat(macos): improve settings groups and source setup (#12)'],
+  ['5dce5879181909b08fa23786e96ded18c7b0bb0c', 'feat(macos): support stable and preview updates (#13)'],
+]);
+
 function planned(context) {
   return validatePlan(readJSON(context.env.RELEASE_PLAN), {
     sourceSha: git('rev-parse', 'HEAD'), branch: context.branch.name,
@@ -15,7 +21,14 @@ function planned(context) {
 
 export async function generateNotes(_config, context) {
   if (context.env.RELEASE_MODE === 'publish') return planned(context).notes;
-  const notes = await conventionalNotes({ preset: 'conventionalcommits' }, context);
+  const commits = context.commits.map(commit => ({ ...commit,
+    message: legacySubjects.has(commit.hash)
+      ? commit.message.replace(/^[^\n]*/, legacySubjects.get(commit.hash)) : commit.message,
+  }));
+  const notes = await conventionalNotes({ preset: 'conventionalcommits' }, { ...context, commits });
+  if (/[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]/u.test(notes)) {
+    throw new Error('English release notes require an explicit translation for a historical commit');
+  }
   const preview = context.branch.name === 'main';
   return `${notes}\n\n---\n\nDownload the Apple Silicon DMG and drag MusicX to Applications. Requires macOS 14 or later.\n\n`
     + (preview
