@@ -11,10 +11,10 @@ stage=$(mktemp -d "${TMPDIR:-/tmp}/musicx-appcast.XXXXXX")
 trap 'rm -rf "$stage"' EXIT
 # Isolate this release; other signed items are merged separately.
 cp "$dmg" "$stage/"
-options=()
+# Bash 3.2 treats empty arrays as unset under nounset; keep common arguments here.
+options=(--ed-key-file - --maximum-deltas 0)
 if [[ "$channel" == preview ]]; then options+=(--channel preview); fi
 printf '%s' "$SPARKLE_PRIVATE_KEY" | "$sparkle/bin/generate_appcast" \
-    --ed-key-file - --maximum-deltas 0 \
     "${options[@]}" \
     --download-url-prefix "https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/" \
     --link "https://github.com/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG" "$stage"
