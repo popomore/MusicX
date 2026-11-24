@@ -2,9 +2,10 @@ name: macOS CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, release, '[0-9]*.x']
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
-    branches: [main]
+    branches: [main, release, '[0-9]*.x']
 
 permissions:
   contents: read
@@ -25,8 +26,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '26.13.0'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Test release automation
-        run: python3 -m unittest discover -s scripts/tests -v
+        run: |
+          python3 -m unittest discover -s scripts/tests -v
+          npm test
 
   test:
     runs-on: macos-15
@@ -47,6 +54,9 @@ jobs:
 
       - name: Check formatting
         run: cargo fmt --all -- --check
+
+      - name: Test appcast generation with system Bash
+        run: python3 -m unittest discover -s scripts/tests -p test_appcast_generation.py -v
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3

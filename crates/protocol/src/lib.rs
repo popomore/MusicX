@@ -73,7 +73,14 @@ pub fn data_dir() -> Option<std::path::PathBuf> {
     std::env::var_os(DATA_DIR_ENV)
         .map(std::path::PathBuf::from)
         .or_else(|| {
-            std::env::home_dir().map(|home| home.join("Library/Application Support").join(APP_NAME))
+            // Foundation resolves the app's container when App Sandbox is enabled.
+            #[cfg(target_os = "macos")]
+            let home = Some(std::path::PathBuf::from(
+                objc2_foundation::NSHomeDirectory().to_string(),
+            ));
+            #[cfg(not(target_os = "macos"))]
+            let home = std::env::home_dir();
+            home.map(|home| home.join("Library/Application Support").join(APP_NAME))
         })
 }
 
