@@ -4,10 +4,26 @@ use super::{
 };
 use crate::protocol::{HistoryEntry, HistoryProgress, LocalPlaylist, Track};
 use serde_json::json;
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fs, path::PathBuf};
 
 const A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+struct TestDir(PathBuf);
+impl TestDir {
+    fn new() -> Self {
+        let path = std::env::temp_dir().join(format!(
+            "musicx-sync-test-{}",
+            crate::storage::random_hex::<12>()
+        ));
+        fs::create_dir(&path).unwrap();
+        Self(path)
+    }
+}
+impl Drop for TestDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
 fn map(value: serde_json::Value) -> Snapshot {
     serde_json::from_value(value).unwrap()
 }
@@ -30,10 +46,11 @@ fn playlist() -> LocalPlaylist {
 }
 fn capture(lists: &[LocalPlaylist]) -> Snapshot {
     // No global data directory or credentials are accessed by the merge tests.
+    let directory = TestDir::new();
     snapshot::capture(
         lists,
         &BTreeMap::new(),
-        &std::env::temp_dir().join(format!("musicx-no-preferences-{}", std::process::id())),
+        &directory.0,
         &Replica::new(A.into()),
     )
     .unwrap()
@@ -236,17 +253,55 @@ fn local_artwork_is_not_exported_in_playlists_or_history() {
         progress: None,
     };
     let history = BTreeMap::from([(format!("{A}/0"), entry)]);
-    let snapshot = snapshot::capture(
-        &[list],
-        &history,
-        &std::env::temp_dir().join("musicx-no-artwork-preferences"),
-        &Replica::new(A.into()),
-    )
-    .unwrap();
+    let directory = TestDir::new();
+    let snapshot =
+        snapshot::capture(&[list], &history, &directory.0, &Replica::new(A.into())).unwrap();
     assert!(
         !serde_json::to_string(&snapshot)
             .unwrap()
             .contains("file:///Users/device-a"),
         "Device-local artwork must be replenished by the receiving source"
     );
+}
+
+#[test]
+fn artwork_restoration_matches_identity_and_preserves_remote_covers() {
+    let directory = TestDir::new();
+    let artwork = directory.0.join("cover.jpg");
+    fs::write(&artwork, b"artwork").unwrap();
+    let local_cover = url::Url::from_file_path(&artwork).unwrap().to_string();
+    let missing_cover = url::Url::from_file_path(directory.0.join("missing.jpg"))
+        .unwrap()
+        .to_string();
+    let mut previous = playlist();
+    previous.tracks = (1..=5).map(track).collect();
+    for track in &mut previous.tracks[..4] {
+        track.cover_url = Some(local_cover.clone());
+    }
+    previous.tracks[2].cover_url = Some(missing_cover);
+    previous.tracks[4].cover_url = Some("https://old.example/cover.jpg".into());
+    let mut incoming = previous.clone();
+    incoming.tracks = [2, 1, 3, 4, 5].into_iter().map(track).collect();
+    incoming.tracks[3].cover_url = Some("https://remote.example/cover.jpg".into());
+
+    let restored = snapshot::playlists(&capture(&[incoming]), &[previous.clone()]).unwrap();
+    let covers: Vec<_> = restored[0]
+        .tracks
+        .iter()
+        .map(|track| track.cover_url.as_deref())
+        .collect();
+    assert_eq!(
+        covers,
+        [
+            Some(local_cover.as_str()),
+            Some(local_cover.as_str()),
+            None,
+            Some("https://remote.example/cover.jpg"),
+            None,
+        ]
+    );
+    previous.tracks[2].cover_url = None;
+    let unchanged =
+        snapshot::playlists(&capture(&[previous.clone()]), &[previous.clone()]).unwrap();
+    assert!(unchanged == [previous]);
 }

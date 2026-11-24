@@ -185,12 +185,14 @@ pub fn playlists(snapshot: &Snapshot, previous: &[LocalPlaylist]) -> Result<Vec<
         {
             // Keep this device's own usable artwork while omitting its path
             // from the portable replica sent to other devices.
+            let mut old_tracks = BTreeMap::new();
+            for track in &old.tracks {
+                old_tracks.entry(track_key(track)).or_insert(track);
+            }
             for track in &mut list.tracks {
                 if track.cover_url.is_none()
-                    && let Some(cover) = old
-                        .tracks
-                        .iter()
-                        .find(|old| track_key(old) == track_key(track))
+                    && let Some(cover) = old_tracks
+                        .get(&track_key(track))
                         .and_then(|old| old.cover_url.as_ref())
                     && url::Url::parse(cover)
                         .ok()
