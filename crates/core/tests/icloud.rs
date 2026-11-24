@@ -87,12 +87,124 @@ fn legacy_plugin_preference_does_not_override_a_synced_deletion() {
 }
 
 #[test]
+fn interrupted_legacy_preference_import_replays_its_pending_intent() {
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+    for step in [
+        "interrupt-legacy-import",
+        "interrupt-legacy-remote-update",
+        "interrupt-legacy-deletion",
+    ] {
+        let root = std::env::temp_dir().join(format!(
+            "musicx-icloud-legacy-recovery-{}",
+            storage::random_hex::<12>()
+        ));
+        fs::create_dir(&root).unwrap();
+        let _cleanup = Cleanup(root.clone());
+        child(&root, "a", "seed");
+        child(&root, "a", step);
+        child(&root, "a", "recover-legacy-intent");
+        child(&root, "b", "receive-legacy-intent");
+    }
+}
+
+#[test]
 fn icloud_child() {
     let Ok(step) = std::env::var("MUSICX_ICLOUD_TEST_STEP") else {
         return;
     };
     let root = std::path::PathBuf::from(std::env::var_os("MUSICX_ICLOUD_TEST_ROOT").unwrap());
     match step.as_str() {
+        "interrupt-legacy-import"
+        | "interrupt-legacy-remote-update"
+        | "interrupt-legacy-deletion" => {
+            use musicx_core::cloud_sync::merge::Snapshot;
+            let dir = storage::state_dir().unwrap();
+            let mut state: serde_json::Value =
+                serde_json::from_slice(&fs::read(dir.join("icloud-state.json")).unwrap()).unwrap();
+            let before: Snapshot = serde_json::from_value(state["baseline"].clone()).unwrap();
+            let mut after = before.clone();
+            let mut replica: Replica = serde_json::from_value(state["replica"].clone()).unwrap();
+            match step.as_str() {
+                "interrupt-legacy-remote-update" => {
+                    after.insert("s/plugin-auto-update.json".into(), json!(true));
+                }
+                "interrupt-legacy-deletion" => {
+                    after.remove("s/plugin-auto-update.json");
+                }
+                _ => {}
+            }
+            if after != before {
+                let mut remote = Replica::new("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into());
+                remote.merge(&replica).unwrap();
+                remote.capture(&before, &after).unwrap();
+                replica.merge(&remote).unwrap();
+            }
+            if step != "interrupt-legacy-deletion" {
+                // First import: no completed snapshot yet, only durable intent.
+                state["baseline"] = json!({});
+            }
+            state["replica"] = serde_json::to_value(replica).unwrap();
+            state["pending"] = json!({"before":before,"after":after});
+            storage::save_private(".icloud-applying", "1").unwrap();
+            storage::save_private("icloud-state.json", &serde_json::to_string(&state).unwrap())
+                .unwrap();
+            // Crash before writing the imported preference, or after applying deletion.
+            fs::remove_file(dir.join("plugin-auto-update.json")).unwrap();
+        }
+        "recover-legacy-intent" => {
+            let dir = storage::state_dir().unwrap();
+            let state: serde_json::Value =
+                serde_json::from_slice(&fs::read(dir.join("icloud-state.json")).unwrap()).unwrap();
+            let expected: Replica = serde_json::from_value(state["replica"].clone()).unwrap();
+            assert!(cloud_sync::has_pending_apply());
+            cloud_sync::set_enabled(false).unwrap();
+            cloud_sync::recover_pending().unwrap();
+            let state: serde_json::Value =
+                serde_json::from_slice(&fs::read(dir.join("icloud-state.json")).unwrap()).unwrap();
+            let recovered: Replica = serde_json::from_value(state["replica"].clone()).unwrap();
+            assert_eq!(
+                recovered.records["s/plugin-auto-update.json"],
+                expected.records["s/plugin-auto-update.json"],
+                "Recovery must replay the pending preference without publishing a new edit"
+            );
+            assert_eq!(recovered.clock, expected.clock);
+            let actual: Option<serde_json::Value> =
+                cloud_sync::read_json(&dir.join("plugin-auto-update.json")).unwrap();
+            assert_eq!(actual, expected.records["s/plugin-auto-update.json"].value);
+            assert!(!cloud_sync::has_pending_apply());
+            assert!(state["pending"].is_null());
+            cloud_sync::set_enabled(true).unwrap();
+            let recaptured = cloud_sync::synchronize(&[]).unwrap().unwrap();
+            assert_eq!(
+                recaptured.records["s/plugin-auto-update.json"],
+                recovered.records["s/plugin-auto-update.json"]
+            );
+            assert_eq!(recaptured.clock, recovered.clock);
+            export(&root, "a", recaptured);
+        }
+        "receive-legacy-intent" => {
+            let expected = incoming(&root, "a");
+            cloud_sync::set_enabled(true).unwrap();
+            let received = cloud_sync::synchronize(&[expected.clone()])
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                received.records["s/plugin-auto-update.json"],
+                expected.records["s/plugin-auto-update.json"]
+            );
+            let actual: Option<serde_json::Value> = cloud_sync::read_json(
+                &storage::state_dir()
+                    .unwrap()
+                    .join("plugin-auto-update.json"),
+            )
+            .unwrap();
+            assert_eq!(actual, expected.records["s/plugin-auto-update.json"].value);
+        }
         "delete-legacy-preference" => {
             let mut remote = Replica::new("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into());
             remote.merge(&incoming(&root, "a")).unwrap();

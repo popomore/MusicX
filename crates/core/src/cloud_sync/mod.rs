@@ -282,8 +282,17 @@ fn synchronize_locked(incoming: &[Replica], recovering: bool) -> Result<Option<R
         protocol::preferences::locked(&dir, || {
             let mut apply = || -> Result<()> {
                 let own_history = history::sync_entries(&device)?;
-                let actual = snapshot::capture(playlists, &own_history, &dir, &state.replica)?;
+                let mut actual = snapshot::capture(playlists, &own_history, &dir, &state.replica)?;
                 let current = if let Some(pending) = state.pending.take() {
+                    // The journal may contain a legacy value captured before its
+                    // standalone preference was written. Its absence is not a
+                    // local deletion while this apply is still pending.
+                    let key = "s/plugin-auto-update.json";
+                    if !actual.contains_key(key)
+                        && let Some(value) = pending.before.get(key)
+                    {
+                        actual.insert(key.into(), value.clone());
+                    }
                     let recovered = merge::recover(&pending.before, &pending.after, &actual);
                     state.replica.capture(&pending.after, &recovered)?;
                     state.baseline = recovered.clone();
