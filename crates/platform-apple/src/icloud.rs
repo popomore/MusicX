@@ -171,6 +171,9 @@ pub fn start() -> Result<()> {
         .name("musicx-icloud".into())
         .spawn(move || {
             loop {
+                if !cloud_sync::enabled() {
+                    stop_discovery();
+                }
                 if cloud_sync::has_pending_apply()
                     && let Err(error) = cloud_sync::recover_pending()
                 {
@@ -184,8 +187,6 @@ pub fn start() -> Result<()> {
                             cloud_sync::set_phase(Phase::Error, Some(error.to_string()));
                         }
                     });
-                } else {
-                    stop_discovery();
                 }
                 let _ = receive.recv_timeout(Duration::from_secs(30));
             }
