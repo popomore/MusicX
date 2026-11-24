@@ -282,7 +282,7 @@ fn synchronize_locked(incoming: &[Replica], recovering: bool) -> Result<Option<R
         protocol::preferences::locked(&dir, || {
             let mut apply = || -> Result<()> {
                 let own_history = history::sync_entries(&device)?;
-                let actual = snapshot::capture(playlists, &own_history, &dir)?;
+                let actual = snapshot::capture(playlists, &own_history, &dir, &state.replica)?;
                 let current = if let Some(pending) = state.pending.take() {
                     let recovered = merge::recover(&pending.before, &pending.after, &actual);
                     state.replica.capture(&pending.after, &recovered)?;

@@ -34,6 +34,7 @@ fn capture(lists: &[LocalPlaylist]) -> Snapshot {
         lists,
         &BTreeMap::new(),
         &std::env::temp_dir().join(format!("musicx-no-preferences-{}", std::process::id())),
+        &Replica::new(A.into()),
     )
     .unwrap()
 }
@@ -239,6 +240,7 @@ fn local_artwork_is_not_exported_in_playlists_or_history() {
         &[list],
         &history,
         &std::env::temp_dir().join("musicx-no-artwork-preferences"),
+        &Replica::new(A.into()),
     )
     .unwrap();
     assert!(

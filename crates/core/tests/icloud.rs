@@ -74,12 +74,68 @@ fn pending_apply_is_resolved_before_accepting_local_deletion() {
 }
 
 #[test]
+fn legacy_plugin_preference_does_not_override_a_synced_deletion() {
+    let root = std::env::temp_dir().join(format!(
+        "musicx-icloud-legacy-{}",
+        storage::random_hex::<12>()
+    ));
+    fs::create_dir_all(&root).unwrap();
+    child(&root, "a", "seed");
+    child(&root, "a", "delete-legacy-preference");
+    child(&root, "a", "recapture-deleted-preference");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn icloud_child() {
     let Ok(step) = std::env::var("MUSICX_ICLOUD_TEST_STEP") else {
         return;
     };
     let root = std::path::PathBuf::from(std::env::var_os("MUSICX_ICLOUD_TEST_ROOT").unwrap());
     match step.as_str() {
+        "delete-legacy-preference" => {
+            let mut remote = Replica::new("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into());
+            remote.merge(&incoming(&root, "a")).unwrap();
+            let before = remote.snapshot();
+            let mut after = before.clone();
+            assert_eq!(
+                after.remove("s/plugin-auto-update.json"),
+                Some(json!(false))
+            );
+            remote.capture(&before, &after).unwrap();
+            let deleted = cloud_sync::synchronize(&[remote]).unwrap().unwrap();
+            assert_eq!(deleted.records["s/plugin-auto-update.json"].value, None);
+            assert!(
+                !storage::state_dir()
+                    .unwrap()
+                    .join("plugin-auto-update.json")
+                    .exists()
+            );
+            assert!(
+                storage::state_dir()
+                    .unwrap()
+                    .join("plugin-updates.json")
+                    .exists()
+            );
+            export(&root, "deleted", deleted);
+        }
+        "recapture-deleted-preference" => {
+            let deleted = incoming(&root, "deleted");
+            let recaptured = cloud_sync::synchronize(&[]).unwrap().unwrap();
+            assert_eq!(
+                recaptured.records["s/plugin-auto-update.json"],
+                deleted.records["s/plugin-auto-update.json"],
+                "A legacy fallback must not publish a new edit after a synced deletion"
+            );
+            assert_eq!(recaptured.clock, deleted.clock);
+            protocol::preferences::save("plugin-auto-update.json", b"false").unwrap();
+            let edited = cloud_sync::synchronize(&[]).unwrap().unwrap();
+            assert_eq!(
+                edited.records["s/plugin-auto-update.json"].value,
+                Some(json!(false))
+            );
+            assert!(edited.clock > deleted.clock);
+        }
         "seed" => {
             assert!(!cloud_sync::enabled());
             assert!(cloud_sync::synchronize(&[]).unwrap().is_none());

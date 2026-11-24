@@ -1,4 +1,7 @@
-use super::{MAX_BYTES, merge::Snapshot};
+use super::{
+    MAX_BYTES,
+    merge::{Replica, Snapshot},
+};
 use crate::protocol::{
     self, HistoryEntry, LocalPlaylist, PlaylistOrigin, Quality, Track, track_key,
 };
@@ -35,6 +38,7 @@ pub fn capture(
     playlists: &[LocalPlaylist],
     history: &BTreeMap<String, HistoryEntry>,
     dir: &Path,
+    replica: &Replica,
 ) -> Result<Snapshot> {
     let mut result = Snapshot::new();
     let favorite = playlists
@@ -82,7 +86,11 @@ pub fn capture(
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                if name == "plugin-auto-update.json" {
+                // Only import legacy data before this setting is tracked.
+                // Missing files after a synced deletion must stay deleted.
+                if name == "plugin-auto-update.json"
+                    && !replica.records.contains_key(&format!("s/{name}"))
+                {
                     if let Some(legacy) =
                         super::read_json::<Value>(&dir.join("plugin-updates.json"))?
                     {
