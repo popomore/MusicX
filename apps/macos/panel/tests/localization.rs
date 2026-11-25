@@ -615,6 +615,104 @@ fn RadioScreen() -> impl IntoElement {
         ))
 }
 
+#[derive(Default)]
+struct SettingsFixture {
+    plugin_writes: Mutex<Vec<bool>>,
+}
+
+fn plugin_toggle(app: &Headless) -> Option<nsh_core::Checked> {
+    app.screen()
+        .accessibility_state("label:Automatically update plugins")
+        .unwrap()
+        .checked
+}
+
+fn plugin_preference_polling(fixture: &SettingsFixture) {
+    use nsh_core::Checked;
+    let directory = protocol::data_dir().unwrap();
+    let preference = directory.join("plugin-auto-update.json");
+    let legacy = directory.join("plugin-updates.json");
+    protocol::i18n::Language::English.save().unwrap();
+    for fallback in [None, Some(false)] {
+        std::fs::write(&preference, "false").unwrap();
+        if let Some(enabled) = fallback {
+            std::fs::write(&legacy, serde_json::json!({"enabled":enabled}).to_string()).unwrap();
+        } else {
+            let _ = std::fs::remove_file(&legacy);
+        }
+        sources_ui::select_settings_group(sources_ui::SettingsGroup::Sources);
+        let mut app = start();
+        app.wait_for("Automatically update plugins").unwrap();
+        for _ in 0..100 {
+            if app
+                .screen()
+                .enabled("label:Automatically update plugins")
+                .unwrap()
+            {
+                break;
+            }
+            app.wait(Duration::from_millis(20)).unwrap();
+        }
+        assert_eq!(plugin_toggle(&app), Some(Checked::False));
+        std::fs::remove_file(&preference).unwrap();
+        let effective = fallback.unwrap_or(true);
+        for _ in 0..150 {
+            if plugin_toggle(&app)
+                == Some(if effective {
+                    Checked::True
+                } else {
+                    Checked::False
+                })
+            {
+                break;
+            }
+            app.wait(Duration::from_millis(20)).unwrap();
+        }
+        // Give an already matching fallback a full poll to reject hardcoded defaults.
+        app.wait(Duration::from_millis(1100)).unwrap();
+        assert_eq!(
+            plugin_toggle(&app),
+            Some(if effective {
+                Checked::True
+            } else {
+                Checked::False
+            }),
+            "A deleted standalone preference must display the service's effective value"
+        );
+        fixture.plugin_writes.lock().unwrap().clear();
+        app.press("label:Automatically update plugins").unwrap();
+        for _ in 0..100 {
+            if !fixture.plugin_writes.lock().unwrap().is_empty() {
+                break;
+            }
+            app.wait(Duration::from_millis(10)).unwrap();
+        }
+        assert_eq!(*fixture.plugin_writes.lock().unwrap(), [!effective]);
+        app.wait(Duration::from_millis(50)).unwrap();
+    }
+    for unreadable in [false, true] {
+        std::fs::write(&preference, "false").unwrap();
+        sources_ui::select_settings_group(sources_ui::SettingsGroup::Sources);
+        let mut app = start();
+        app.wait_for("Automatically update plugins").unwrap();
+        app.wait(Duration::from_millis(100)).unwrap();
+        if unreadable {
+            std::fs::remove_file(&preference).unwrap();
+            std::fs::create_dir(&preference).unwrap();
+        } else {
+            std::fs::write(&preference, "invalid JSON").unwrap();
+        }
+        app.wait(Duration::from_millis(1200)).unwrap();
+        assert_eq!(plugin_toggle(&app), Some(Checked::False));
+        drop(app);
+        if unreadable {
+            std::fs::remove_dir(&preference).unwrap();
+        }
+    }
+    let _ = std::fs::remove_file(preference);
+    let _ = std::fs::remove_file(legacy);
+}
+
 fn radio_flow() {
     use std::io::{Read, Write};
     use std::sync::{
@@ -626,6 +724,7 @@ fn radio_flow() {
     let gate = Arc::new((Mutex::new(false), Condvar::new()));
     let history_gate = Arc::new((Mutex::new(false), Condvar::new()));
     let history_requests = Arc::new(AtomicUsize::new(0));
+    let settings = Arc::new(SettingsFixture::default());
     let listener = std::net::TcpListener::bind(protocol::address()).unwrap();
     std::fs::write(
         protocol::data_dir().unwrap().join("mcp-token"),
@@ -637,6 +736,7 @@ fn radio_flow() {
     let server_gate = gate.clone();
     let server_history_gate = history_gate.clone();
     let server_history_requests = history_requests.clone();
+    let server_settings = settings.clone();
     std::thread::spawn(move || {
         for connection in listener.incoming() {
             let mut socket = connection.unwrap();
@@ -645,6 +745,7 @@ fn radio_flow() {
             let gate = server_gate.clone();
             let history_gate = server_history_gate.clone();
             let history_requests = server_history_requests.clone();
+            let settings = server_settings.clone();
             std::thread::spawn(move || {
                 socket
                     .set_read_timeout(Some(Duration::from_secs(5)))
@@ -683,7 +784,52 @@ fn radio_flow() {
                 let body = &bytes[header_end..header_end + length];
                 let mut status = "200 OK";
                 let playlist = serde_json::json!({"id":"radio","name":"Radio","revision":1,"tracks":[{"id":1,"title":"Personal fixture song","artist":"Fixture artist","duration":180,"source":{"plugin":"fixture","id":"personal-1"}}],"imported_from":null});
-                let response = if first.starts_with("GET /ui/history") {
+                let response = if first.starts_with("GET /ui/music-sources") {
+                    serde_json::json!([])
+                } else if first.starts_with("POST /ui/music-sources") {
+                    match serde_json::from_slice::<protocol::MusicSourceAction>(body).unwrap() {
+                        protocol::MusicSourceAction::AutoUpdateSettings => {
+                            let directory = protocol::data_dir().unwrap();
+                            let enabled =
+                                match std::fs::read(directory.join("plugin-auto-update.json")) {
+                                    Ok(bytes) => serde_json::from_slice::<bool>(&bytes).ok(),
+                                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                                        Some(
+                                            std::fs::read(directory.join("plugin-updates.json"))
+                                                .ok()
+                                                .and_then(|bytes| {
+                                                    serde_json::from_slice::<serde_json::Value>(
+                                                        &bytes,
+                                                    )
+                                                    .ok()
+                                                })
+                                                .and_then(|value| value["enabled"].as_bool())
+                                                .unwrap_or(true),
+                                        )
+                                    }
+                                    Err(_) => None,
+                                };
+                            if let Some(enabled) = enabled {
+                                serde_json::json!({"enabled":enabled})
+                            } else {
+                                status = "500 Internal Server Error";
+                                serde_json::json!({"error":"invalid plugin preference"})
+                            }
+                        }
+                        protocol::MusicSourceAction::SetAutoUpdate { enabled } => {
+                            settings.plugin_writes.lock().unwrap().push(enabled);
+                            std::fs::write(
+                                protocol::data_dir()
+                                    .unwrap()
+                                    .join("plugin-auto-update.json"),
+                                enabled.to_string(),
+                            )
+                            .unwrap();
+                            serde_json::json!({"enabled":enabled})
+                        }
+                        _ => panic!("unexpected plugin settings action"),
+                    }
+                } else if first.starts_with("GET /ui/history") {
                     let at = history_requests.fetch_add(1, Ordering::SeqCst);
                     if at == 0 {
                         let (lock, ready) = &*history_gate;
@@ -734,6 +880,10 @@ fn radio_flow() {
         }
     });
     remote::start().unwrap();
+    if std::env::var("MUSICX_LOCALIZATION_CASE").as_deref() == Ok("plugin-sync") {
+        plugin_preference_polling(&settings);
+        return;
+    }
     for (language, iteration) in [("en", 0), ("zh-CN", 1)] {
         std::fs::write(protocol::data_dir().unwrap().join("language"), language).unwrap();
         protocol::i18n::refresh();
@@ -819,10 +969,14 @@ fn radio_flow() {
     history_gate.1.notify_all();
     history.wait_for("Fresh history").unwrap();
     assert_eq!(history_requests.load(Ordering::SeqCst), 2);
+    plugin_preference_polling(&settings);
 }
 
 fn exercise() {
-    if std::env::var("MUSICX_LOCALIZATION_CASE").as_deref() == Ok("history-race") {
+    if matches!(
+        std::env::var("MUSICX_LOCALIZATION_CASE").as_deref(),
+        Ok("history-race" | "plugin-sync")
+    ) {
         radio_flow();
         return;
     }

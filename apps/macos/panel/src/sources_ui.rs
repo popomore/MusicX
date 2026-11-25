@@ -27,6 +27,7 @@ struct Sources {
     message: Signal<String>,
     plugins: Signal<Vec<MusicSource>>,
     auto_update: Signal<Option<bool>>,
+    auto_update_refreshing: Signal<bool>,
     selected: Signal<Option<MusicSource>>,
     catalog: Signal<bool>,
     import_mode: bool,
@@ -83,6 +84,34 @@ impl Sources {
                 }
             },
         );
+    }
+    fn refresh_auto_update(self) {
+        if self.auto_update_refreshing.get() {
+            return;
+        }
+        self.auto_update_refreshing.set(true);
+        let (send, receive) = oneshot::channel();
+        std::thread::spawn(move || {
+            let _ = send.send(remote::post_json::<_, PluginUpdateSettings>(
+                "/ui/music-sources",
+                &MusicSourceAction::AutoUpdateSettings,
+            ));
+        });
+        self.owner.run(|| {
+            spawn(async move {
+                let result = receive.await;
+                self.auto_update_refreshing.set(false);
+                if !self.busy.get()
+                    && crate::protocol::data_dir().is_some_and(|dir| {
+                        matches!(std::fs::read(dir.join("plugin-auto-update.json")),
+                            Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+                    })
+                    && let Ok(Ok(settings)) = result
+                {
+                    self.auto_update.set(Some(settings.enabled));
+                }
+            })
+        });
     }
     fn home(self) {
         self.message.set(String::new());
@@ -790,6 +819,7 @@ fn flow(
         message: signal(String::new()),
         plugins: signal(Vec::new()),
         auto_update: signal(None),
+        auto_update_refreshing: signal(false),
         selected: signal(None),
         catalog: signal(false),
         import_mode: importing,
@@ -906,13 +936,21 @@ fn source_settings(this: Sources, importing: bool) -> impl IntoElement {
         if importing || this.busy.get() {
             return;
         }
-        let synced = crate::protocol::data_dir()
-            .and_then(|dir| std::fs::read(dir.join("plugin-auto-update.json")).ok())
-            .and_then(|bytes| serde_json::from_slice::<bool>(&bytes).ok());
-        if let Some(enabled) = synced
-            && this.auto_update.get() != Some(enabled)
-        {
-            this.auto_update.set(Some(enabled));
+        let Some(dir) = crate::protocol::data_dir() else {
+            return;
+        };
+        match std::fs::read(dir.join("plugin-auto-update.json")) {
+            Ok(bytes) => {
+                if let Ok(enabled) = serde_json::from_slice::<bool>(&bytes)
+                    && this.auto_update.get() != Some(enabled)
+                {
+                    this.auto_update.set(Some(enabled));
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                this.refresh_auto_update();
+            }
+            Err(_) => {}
         }
     });
     view()
