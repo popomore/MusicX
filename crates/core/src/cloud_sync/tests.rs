@@ -57,6 +57,49 @@ fn capture(lists: &[LocalPlaylist]) -> Snapshot {
 }
 
 #[test]
+fn marker_cleanup_failure_refreshes_committed_preferences() {
+    if std::env::var_os("MUSICX_CLEANUP_FAILURE_CHILD").is_none() {
+        let directory = TestDir::new();
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "cloud_sync::tests::marker_cleanup_failure_refreshes_committed_preferences",
+                "--nocapture",
+            ])
+            .env("MUSICX_CLEANUP_FAILURE_CHILD", "1")
+            .env("MUSICX_DATA_DIR", &directory.0)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        return;
+    }
+    let directory = crate::storage::state_dir().unwrap();
+    assert!(!crate::audio_quality::normalization_enabled());
+    fs::write(directory.join("normalization.json"), "true").unwrap();
+    // A directory makes unlink fail while the final state save still succeeds.
+    fs::create_dir(directory.join(super::APPLY_MARKER)).unwrap();
+    let state = super::State {
+        replica: Replica::new(A.into()),
+        baseline: Snapshot::new(),
+        pending: None,
+    };
+    assert!(super::finish_apply(&state, &directory).is_err());
+    let saved: super::State = super::read_json(&directory.join(super::STATE_FILE))
+        .unwrap()
+        .unwrap();
+    assert!(saved.pending.is_none());
+    assert!(
+        crate::audio_quality::normalization_enabled(),
+        "Committed normalization must be live even when marker cleanup fails"
+    );
+}
+
+#[test]
 fn independent_and_conflicting_edits_converge_in_any_arrival_order() {
     let mut a = Replica::new(A.into());
     let mut b = Replica::new(B.into());

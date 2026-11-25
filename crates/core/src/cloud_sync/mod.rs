@@ -333,9 +333,14 @@ fn synchronize_locked(incoming: &[Replica], recovering: bool) -> Result<Option<R
         .map_err(Into::into)
     })?;
     state.pending = None;
-    save_state(&state)?;
-    clear_apply_marker(&dir)?;
+    finish_apply(&state, &dir)?;
+    Ok(Some(state.replica))
+}
+
+fn finish_apply(state: &State, dir: &Path) -> Result<()> {
+    save_state(state)?;
     crate::audio_quality::reload();
     protocol::i18n::refresh();
-    Ok(Some(state.replica))
+    clear_apply_marker(dir)?;
+    Ok(())
 }
