@@ -9,6 +9,13 @@ use musicx_core::{
 use serde_json::json;
 use std::{fs, path::Path, process::Command};
 
+struct Cleanup(std::path::PathBuf);
+impl Drop for Cleanup {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
 fn track(id: u64) -> Track {
     serde_json::from_value(
         json!({"id":id,"title":format!("Song {id}"),"artist":"Artist","duration":90}),
@@ -52,13 +59,13 @@ fn child(root: &Path, device: &str, step: &str) {
 fn two_devices_merge_offline_changes_and_history_without_syncing_secrets() {
     let root = std::env::temp_dir().join(format!("musicx-icloud-{}", storage::random_hex::<12>()));
     fs::create_dir_all(&root).unwrap();
+    let _cleanup = Cleanup(root.clone());
     child(&root, "a", "seed");
     child(&root, "b", "receive");
     child(&root, "a", "offline");
     child(&root, "b", "converge");
     child(&root, "a", "recover");
     child(&root, "a", "corrupt");
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -68,9 +75,9 @@ fn pending_apply_is_resolved_before_accepting_local_deletion() {
         storage::random_hex::<12>()
     ));
     fs::create_dir_all(&root).unwrap();
+    let _cleanup = Cleanup(root.clone());
     child(&root, "a", "seed");
     child(&root, "a", "delete-after-apply");
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -80,20 +87,14 @@ fn legacy_plugin_preference_does_not_override_a_synced_deletion() {
         storage::random_hex::<12>()
     ));
     fs::create_dir_all(&root).unwrap();
+    let _cleanup = Cleanup(root.clone());
     child(&root, "a", "seed");
     child(&root, "a", "delete-legacy-preference");
     child(&root, "a", "recapture-deleted-preference");
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
 fn interrupted_legacy_preference_import_replays_its_pending_intent() {
-    struct Cleanup(std::path::PathBuf);
-    impl Drop for Cleanup {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
     for step in [
         "interrupt-legacy-import",
         "interrupt-legacy-remote-update",
