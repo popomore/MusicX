@@ -359,12 +359,18 @@ struct Cloud {
     status: Signal<Option<crate::protocol::CloudSyncStatus>>,
     busy: Signal<bool>,
     message: Signal<String>,
+    action_message: Signal<String>,
 }
 
 impl Cloud {
     fn request(self, action: Option<crate::protocol::CloudSyncAction>) {
         if self.busy.get() {
             return;
+        }
+        let is_action = action.is_some();
+        if is_action {
+            self.action_message.set(String::new());
+            self.message.set(String::new());
         }
         self.busy.set(true);
         let (send, receive) = oneshot::channel();
@@ -379,16 +385,23 @@ impl Cloud {
             spawn(async move {
                 let result = receive.await;
                 self.busy.set(false);
-                match result {
+                let message = match result {
                     Ok(Ok(status)) => {
                         self.status.set(Some(status));
-                        self.message.set(String::new());
+                        String::new()
                     }
-                    Ok(Err(error)) => self.message.set(error.to_string()),
-                    Err(_) => self
-                        .message
-                        .set(tr!("Request ended; please try again").into()),
+                    Ok(Err(error)) => error.to_string(),
+                    Err(_) => tr!("Request ended; please try again").into(),
+                };
+                if is_action {
+                    self.action_message.set(message.clone());
                 }
+                let action_message = self.action_message.get();
+                self.message.set(if action_message.is_empty() {
+                    message
+                } else {
+                    action_message
+                });
             })
         });
     }
@@ -400,6 +413,7 @@ fn cloud_sync_settings() -> impl IntoElement {
         status: signal(None),
         busy: signal(false),
         message: signal(String::new()),
+        action_message: signal(String::new()),
     };
     cloud.request(None);
     set_interval(std::time::Duration::from_secs(3), move || {

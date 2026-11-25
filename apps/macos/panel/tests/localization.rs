@@ -618,6 +618,43 @@ fn RadioScreen() -> impl IntoElement {
 #[derive(Default)]
 struct SettingsFixture {
     plugin_writes: Mutex<Vec<bool>>,
+    cloud_enabled: std::sync::atomic::AtomicBool,
+    cloud_actions: std::sync::atomic::AtomicUsize,
+    cloud_reads: std::sync::atomic::AtomicUsize,
+}
+
+const CLOUD_SAVE_ERROR: &str = "fixture could not save iCloud settings";
+
+fn cloud_action_error_polling(fixture: &SettingsFixture) {
+    use std::sync::atomic::Ordering;
+    fixture.cloud_enabled.store(false, Ordering::SeqCst);
+    fixture.cloud_actions.store(0, Ordering::SeqCst);
+    fixture.cloud_reads.store(0, Ordering::SeqCst);
+    protocol::i18n::Language::English.save().unwrap();
+    sources_ui::select_settings_group(sources_ui::SettingsGroup::Cloud);
+    let mut app = start();
+    app.wait_for("Stored on this device").unwrap();
+    app.press("label:Sync with iCloud").unwrap();
+    app.wait_for(CLOUD_SAVE_ERROR).unwrap();
+    let reads = fixture.cloud_reads.load(Ordering::SeqCst);
+    for _ in 0..200 {
+        if fixture.cloud_reads.load(Ordering::SeqCst) > reads {
+            break;
+        }
+        app.wait(Duration::from_millis(20)).unwrap();
+    }
+    assert!(fixture.cloud_reads.load(Ordering::SeqCst) > reads);
+    app.wait(Duration::from_millis(100)).unwrap();
+    assert!(
+        app.shows(CLOUD_SAVE_ERROR),
+        "A successful status poll must not erase an unsuccessful setting change"
+    );
+    assert!(!fixture.cloud_enabled.load(Ordering::SeqCst));
+    app.press("label:Sync with iCloud").unwrap();
+    app.wait_for("Waiting for iCloud").unwrap();
+    assert!(!app.shows(CLOUD_SAVE_ERROR));
+    assert!(fixture.cloud_enabled.load(Ordering::SeqCst));
+    assert_eq!(fixture.cloud_actions.load(Ordering::SeqCst), 2);
 }
 
 fn plugin_toggle(app: &Headless) -> Option<nsh_core::Checked> {
@@ -783,8 +820,37 @@ fn radio_flow() {
                 let first = String::from_utf8_lossy(&bytes[..header_end]);
                 let body = &bytes[header_end..header_end + length];
                 let mut status = "200 OK";
+                let cloud_status = || {
+                    let enabled = settings.cloud_enabled.load(Ordering::SeqCst);
+                    serde_json::to_value(protocol::CloudSyncStatus {
+                        enabled,
+                        phase: if enabled {
+                            protocol::CloudSyncPhase::Waiting
+                        } else {
+                            protocol::CloudSyncPhase::Disabled
+                        },
+                        ..Default::default()
+                    })
+                    .unwrap()
+                };
                 let playlist = serde_json::json!({"id":"radio","name":"Radio","revision":1,"tracks":[{"id":1,"title":"Personal fixture song","artist":"Fixture artist","duration":180,"source":{"plugin":"fixture","id":"personal-1"}}],"imported_from":null});
-                let response = if first.starts_with("GET /ui/music-sources") {
+                let response = if first.starts_with("GET /ui/icloud") {
+                    settings.cloud_reads.fetch_add(1, Ordering::SeqCst);
+                    cloud_status()
+                } else if first.starts_with("POST /ui/icloud") {
+                    let protocol::CloudSyncAction::SetEnabled { enabled } =
+                        serde_json::from_slice(body).unwrap()
+                    else {
+                        panic!("unexpected cloud action");
+                    };
+                    if settings.cloud_actions.fetch_add(1, Ordering::SeqCst) == 0 {
+                        status = "500 Internal Server Error";
+                        serde_json::json!({"error":CLOUD_SAVE_ERROR})
+                    } else {
+                        settings.cloud_enabled.store(enabled, Ordering::SeqCst);
+                        cloud_status()
+                    }
+                } else if first.starts_with("GET /ui/music-sources") {
                     serde_json::json!([])
                 } else if first.starts_with("POST /ui/music-sources") {
                     match serde_json::from_slice::<protocol::MusicSourceAction>(body).unwrap() {
@@ -884,6 +950,10 @@ fn radio_flow() {
         plugin_preference_polling(&settings);
         return;
     }
+    if std::env::var("MUSICX_LOCALIZATION_CASE").as_deref() == Ok("cloud-error") {
+        cloud_action_error_polling(&settings);
+        return;
+    }
     for (language, iteration) in [("en", 0), ("zh-CN", 1)] {
         std::fs::write(protocol::data_dir().unwrap().join("language"), language).unwrap();
         protocol::i18n::refresh();
@@ -970,12 +1040,13 @@ fn radio_flow() {
     history.wait_for("Fresh history").unwrap();
     assert_eq!(history_requests.load(Ordering::SeqCst), 2);
     plugin_preference_polling(&settings);
+    cloud_action_error_polling(&settings);
 }
 
 fn exercise() {
     if matches!(
         std::env::var("MUSICX_LOCALIZATION_CASE").as_deref(),
-        Ok("history-race" | "plugin-sync")
+        Ok("history-race" | "plugin-sync" | "cloud-error")
     ) {
         radio_flow();
         return;
