@@ -96,8 +96,8 @@ pub fn status() -> CloudSyncStatus {
 }
 
 pub fn set_phase(phase: Phase, error: Option<String>) {
-    let enabled = enabled();
     let mut status = STATUS.lock().unwrap_or_else(|e| e.into_inner());
+    let enabled = enabled();
     let last_sync_unix = status.as_ref().and_then(|s| s.last_sync_unix);
     *status = Some(CloudSyncStatus {
         enabled,
