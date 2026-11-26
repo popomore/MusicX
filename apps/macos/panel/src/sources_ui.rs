@@ -27,6 +27,7 @@ struct Sources {
     message: Signal<String>,
     plugins: Signal<Vec<MusicSource>>,
     auto_update: Signal<Option<bool>>,
+    auto_update_refreshing: Signal<bool>,
     selected: Signal<Option<MusicSource>>,
     catalog: Signal<bool>,
     import_mode: bool,
@@ -84,6 +85,34 @@ impl Sources {
             },
         );
     }
+    fn refresh_auto_update(self) {
+        if self.auto_update_refreshing.get() {
+            return;
+        }
+        self.auto_update_refreshing.set(true);
+        let (send, receive) = oneshot::channel();
+        std::thread::spawn(move || {
+            let _ = send.send(remote::post_json::<_, PluginUpdateSettings>(
+                "/ui/music-sources",
+                &MusicSourceAction::AutoUpdateSettings,
+            ));
+        });
+        self.owner.run(|| {
+            spawn(async move {
+                let result = receive.await;
+                self.auto_update_refreshing.set(false);
+                if !self.busy.get()
+                    && crate::protocol::data_dir().is_some_and(|dir| {
+                        matches!(std::fs::read(dir.join("plugin-auto-update.json")),
+                            Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+                    })
+                    && let Ok(Ok(settings)) = result
+                {
+                    self.auto_update.set(Some(settings.enabled));
+                }
+            })
+        });
+    }
     fn home(self) {
         self.message.set(String::new());
         self.mode.set(if self.import_mode {
@@ -106,6 +135,7 @@ impl Sources {
 pub enum SettingsGroup {
     Language,
     Playback,
+    Cloud,
     Sources,
     Agent,
     Updates,
@@ -113,9 +143,10 @@ pub enum SettingsGroup {
 
 #[cfg(target_os = "macos")]
 impl SettingsGroup {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self::Language,
         Self::Playback,
+        Self::Cloud,
         Self::Sources,
         Self::Agent,
         Self::Updates,
@@ -125,6 +156,7 @@ impl SettingsGroup {
         match self {
             Self::Language => tr!("Language"),
             Self::Playback => tr!("Playback"),
+            Self::Cloud => tr!("iCloud"),
             Self::Sources => tr!("Music sources"),
             Self::Agent => tr!("Agent"),
             Self::Updates => tr!("Version & updates"),
@@ -221,6 +253,10 @@ pub fn settings_view(model: Model) -> impl IntoElement {
                             move || scroll().flex_1().child(playback_settings(model)),
                         ))
                         .child(when(
+                            move || group.get() == SettingsGroup::Cloud,
+                            || scroll().flex_1().child(cloud_sync_settings()),
+                        ))
+                        .child(when(
                             move || group.get() == SettingsGroup::Sources,
                             move || flow(model, false, || {}, true),
                         ))
@@ -261,6 +297,13 @@ fn language_settings(model: Model) -> impl IntoElement {
     use crate::protocol::i18n::Language;
     let selected = signal(Language::load());
     let message = signal(String::new());
+    set_interval(std::time::Duration::from_secs(1), move || {
+        let language = Language::load();
+        if selected.get() != language {
+            selected.set(language);
+            model.refresh_language();
+        }
+    });
     view()
         .gap(px(8.0))
         .child(settings_heading(tr!("Language")))
@@ -310,10 +353,148 @@ fn language_settings(model: Model) -> impl IntoElement {
         ))
 }
 
+#[derive(Clone, Copy)]
+struct Cloud {
+    owner: Owner,
+    status: Signal<Option<crate::protocol::CloudSyncStatus>>,
+    busy: Signal<bool>,
+    message: Signal<String>,
+    action_message: Signal<String>,
+}
+
+impl Cloud {
+    fn request(self, action: Option<crate::protocol::CloudSyncAction>) {
+        if self.busy.get() {
+            return;
+        }
+        let is_action = action.is_some();
+        if is_action {
+            self.action_message.set(String::new());
+            self.message.set(String::new());
+        }
+        self.busy.set(true);
+        let (send, receive) = oneshot::channel();
+        std::thread::spawn(move || {
+            let result = match action {
+                Some(action) => remote::post_json("/ui/icloud", &action),
+                None => remote::read_json("/ui/icloud"),
+            };
+            let _ = send.send(result);
+        });
+        self.owner.run(|| {
+            spawn(async move {
+                let result = receive.await;
+                self.busy.set(false);
+                let message = match result {
+                    Ok(Ok(status)) => {
+                        self.status.set(Some(status));
+                        String::new()
+                    }
+                    Ok(Err(error)) => error.to_string(),
+                    Err(_) => tr!("Request ended; please try again").into(),
+                };
+                if is_action {
+                    self.action_message.set(message.clone());
+                }
+                let action_message = self.action_message.get();
+                self.message.set(if action_message.is_empty() {
+                    message
+                } else {
+                    action_message
+                });
+            })
+        });
+    }
+}
+
+fn cloud_sync_settings() -> impl IntoElement {
+    let cloud = Cloud {
+        owner: Owner::current(),
+        status: signal(None),
+        busy: signal(false),
+        message: signal(String::new()),
+        action_message: signal(String::new()),
+    };
+    cloud.request(None);
+    set_interval(std::time::Duration::from_secs(3), move || {
+        cloud.request(None)
+    });
+    cloud_sync_content(cloud.status, cloud.busy, cloud.message, move |action| {
+        cloud.request(Some(action))
+    })
+}
+
+pub(crate) fn cloud_sync_content(
+    status: Signal<Option<crate::protocol::CloudSyncStatus>>,
+    busy: Signal<bool>,
+    message: Signal<String>,
+    action: impl Fn(crate::protocol::CloudSyncAction) + Copy + 'static,
+) -> impl IntoElement {
+    use crate::protocol::{CloudSyncAction as Action, CloudSyncPhase as Phase};
+    view().gap(px(8.0))
+        .child(settings_heading(tr!("iCloud")))
+        .child(caption(tr!("Keep liked songs, playlists, settings, and listening history together across your devices.")))
+        .child(setting_toggle(
+            tr!("Sync with iCloud"),
+            move || status.with(|s| s.as_ref().is_some_and(|s| s.enabled)),
+            move || busy.get() || status.with(Option::is_none),
+            move |enabled| action(Action::SetEnabled { enabled }),
+        ))
+        .child(text(move || {
+            status.with(|s| match s.as_ref().map(|s| &s.phase) {
+                None => tr!("Loading iCloud settings…"),
+                Some(Phase::Disabled) => tr!("Stored on this device"),
+                Some(Phase::Waiting) => tr!("Waiting for iCloud"),
+                Some(Phase::Syncing) => tr!("Syncing…"),
+                Some(Phase::Ready) => tr!("iCloud connected"),
+                Some(Phase::Unavailable) => tr!("iCloud unavailable"),
+                Some(Phase::AccountChanged) => tr!("iCloud account changed"),
+                Some(Phase::Error) => tr!("Could not sync with iCloud"),
+            })
+        }).text_size(px(12.0)).text_color(move || theme().foreground))
+        .child(caption(move || {
+            if !message.get().is_empty() { return message.get(); }
+            status.with(|s| match s.as_ref() {
+                Some(s) if s.error.is_some() => s.error.clone().unwrap(),
+                Some(s) if s.phase == Phase::Unavailable => tr!("Sign in to iCloud and enable iCloud Drive in system settings.").into(),
+                Some(s) if s.phase == Phase::AccountChanged => tr!("Turn sync off and on to use this iCloud account. Your local data will be kept.").into(),
+                Some(s) if s.phase == Phase::Disabled => tr!("Turning this off keeps your data on this device.").into(),
+                _ => tr!("iCloud transfers changes in the background. You can keep listening while offline.").into(),
+            })
+        }))
+        .child(action_button_for_sync(status, busy, action))
+        .child(caption(tr!("Accounts, sign-in credentials, plugins, and the current playback queue stay on each device.")))
+}
+
+fn action_button_for_sync(
+    status: Signal<Option<crate::protocol::CloudSyncStatus>>,
+    busy: Signal<bool>,
+    send: impl Fn(crate::protocol::CloudSyncAction) + Copy + 'static,
+) -> impl IntoElement {
+    action(
+        tr!("Sync now"),
+        move || {
+            busy.get()
+                || status.with(|s| {
+                    s.as_ref().is_none_or(|s| {
+                        !s.enabled || s.phase == crate::protocol::CloudSyncPhase::Syncing
+                    })
+                })
+        },
+        move || send(crate::protocol::CloudSyncAction::SyncNow),
+    )
+}
+
 #[cfg(target_os = "macos")]
 fn update_settings() -> impl IntoElement {
     use crate::protocol::UpdateChannel;
     let channel = signal(UpdateChannel::load());
+    set_interval(std::time::Duration::from_secs(1), move || {
+        let next = UpdateChannel::load();
+        if next != channel.get() {
+            channel.set(next);
+        }
+    });
     let message = signal(String::new());
     let options = view().flex_row().gap(px(4.0));
     let options = [UpdateChannel::All, UpdateChannel::Stable]
@@ -652,6 +833,7 @@ fn flow(
         message: signal(String::new()),
         plugins: signal(Vec::new()),
         auto_update: signal(None),
+        auto_update_refreshing: signal(false),
         selected: signal(None),
         catalog: signal(false),
         import_mode: importing,
@@ -702,6 +884,10 @@ fn flow(
                             settings_separator,
                         ))
                         .child(source_settings(this, importing))
+                        .child(when(
+                            move || !importing && !only_sources,
+                            cloud_sync_settings,
+                        ))
                         .child(when(
                             move || !importing && !only_sources,
                             settings_separator,
@@ -760,6 +946,27 @@ fn flow(
 }
 
 fn source_settings(this: Sources, importing: bool) -> impl IntoElement {
+    set_interval(std::time::Duration::from_secs(1), move || {
+        if importing || this.busy.get() {
+            return;
+        }
+        let Some(dir) = crate::protocol::data_dir() else {
+            return;
+        };
+        match std::fs::read(dir.join("plugin-auto-update.json")) {
+            Ok(bytes) => {
+                if let Ok(enabled) = serde_json::from_slice::<bool>(&bytes)
+                    && this.auto_update.get() != Some(enabled)
+                {
+                    this.auto_update.set(Some(enabled));
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                this.refresh_auto_update();
+            }
+            Err(_) => {}
+        }
+    });
     view()
         .gap(px(4.0))
         .child(when(

@@ -1,4 +1,4 @@
-//! On-demand local playlists. No background sync, audio cache or resident library copy.
+//! On-demand playlists with serialized local edits and iCloud materialization.
 use crate::{metadata, protocol::*, storage};
 use anyhow::{Context, Result, ensure};
 use musicx_protocol::tr;
@@ -117,6 +117,50 @@ fn append(list: &mut LocalPlaylist, tracks: Vec<Track>) -> Result<()> {
         list.tracks.len() <= MAX_TRACKS,
         tr!("Each playlist can contain up to 10,000 tracks")
     );
+    Ok(())
+}
+
+pub(crate) fn validate_sync(playlists: &[LocalPlaylist]) -> Result<()> {
+    ensure!(
+        playlists.len() <= MAX_LISTS,
+        tr!("You can create up to 200 local playlists")
+    );
+    ensure!(
+        playlists.iter().map(|p| p.tracks.len()).sum::<usize>() <= MAX_TOTAL,
+        tr!("Local playlists exceed the 50,000-track limit")
+    );
+    for list in playlists {
+        name(list.name.clone())?;
+        ensure!(
+            list.tracks.len() <= MAX_TRACKS,
+            tr!("Each playlist can contain up to 10,000 tracks")
+        );
+        for track in &list.tracks {
+            validate_track(track)?;
+        }
+    }
+    ensure!(
+        serde_json::to_vec(&Library {
+            playlists: playlists.to_vec()
+        })?
+        .len() as u64
+            <= MAX_BYTES,
+        tr!("Local playlist file is too large")
+    );
+    Ok(())
+}
+
+pub(crate) fn synchronize(edit: impl FnOnce(&mut Vec<LocalPlaylist>) -> Result<()>) -> Result<()> {
+    let _guard = WRITER
+        .lock()
+        .map_err(|_| anyhow::anyhow!(tr!("Local playlists unavailable")))?;
+    let mut library = read()?;
+    let previous = library.playlists.clone();
+    edit(&mut library.playlists)?;
+    if previous != library.playlists {
+        validate_sync(&library.playlists)?;
+        save(&library)?;
+    }
     Ok(())
 }
 
@@ -268,13 +312,15 @@ pub fn playlist(id: &str) -> Result<LocalPlaylist> {
 }
 
 fn update<T>(edit: impl FnOnce(&mut Library) -> Result<T>) -> Result<T> {
-    let _guard = WRITER
-        .lock()
-        .map_err(|_| anyhow::anyhow!(tr!("Local playlists unavailable")))?;
-    let mut library = read()?;
-    let result = edit(&mut library)?;
-    save(&library)?;
-    Ok(result)
+    crate::cloud_sync::local_edit(|| {
+        let _guard = WRITER
+            .lock()
+            .map_err(|_| anyhow::anyhow!(tr!("Local playlists unavailable")))?;
+        let mut library = read()?;
+        let result = edit(&mut library)?;
+        save(&library)?;
+        Ok(result)
+    })
 }
 
 pub fn change(action: LocalLibraryAction) -> Result<Value> {

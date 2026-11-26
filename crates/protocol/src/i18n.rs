@@ -1,7 +1,6 @@
 //! Shared UI language, independent of playback and stored music metadata.
 use std::{
     collections::BTreeMap,
-    io::Write,
     path::Path,
     sync::{
         LazyLock,
@@ -93,29 +92,15 @@ impl Language {
     }
 
     fn write(self, dir: &Path) -> std::io::Result<()> {
-        std::fs::create_dir_all(dir)?;
-        let temp = dir.join(format!(".language.{}", std::process::id()));
-        let result = (|| {
-            let mut options = std::fs::OpenOptions::new();
-            options.write(true).create(true).truncate(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                options.mode(0o600);
-            }
-            let mut file = options.open(&temp)?;
-            file.write_all(match self {
+        crate::preferences::save_at(
+            dir,
+            "language",
+            match self {
                 Self::System => b"system\n",
                 Self::SimplifiedChinese => b"zh-CN\n",
                 Self::English => b"en\n",
-            })?;
-            file.sync_all()?;
-            std::fs::rename(&temp, dir.join("language"))
-        })();
-        if result.is_err() {
-            let _ = std::fs::remove_file(temp);
-        }
-        result
+            },
+        )
     }
 }
 

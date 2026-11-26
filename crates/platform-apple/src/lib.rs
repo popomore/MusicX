@@ -1,6 +1,7 @@
 //! Apple audio, native media controls and the macOS background application.
 #[cfg(target_os = "macos")]
 pub mod desktop;
+pub mod icloud;
 #[cfg(target_os = "ios")]
 pub mod mobile;
 pub mod player;

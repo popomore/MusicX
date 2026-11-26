@@ -1,5 +1,6 @@
 //! Streamable HTTP MCP and authenticated panel routes.
 use musicx_core::protocol::tr;
+mod cloud_sync_ui;
 mod local_library_ui;
 mod source_ui;
 
@@ -70,6 +71,14 @@ pub fn start(services: Services) -> Result<()> {
         "Could not listen for MCP; the player may already be running"
     ))?;
     listener.set_nonblocking(true)?;
+    // The bound listener excludes a second helper. Recover before exposing any
+    // UI/MCP mutations, even if iCloud itself is disabled or unavailable.
+    if let Err(error) = musicx_core::cloud_sync::recover_pending() {
+        musicx_core::cloud_sync::set_phase(
+            protocol::CloudSyncPhase::Error,
+            Some(error.to_string()),
+        );
+    }
     let path = storage::state_dir()?.join("mcp-token");
     let token = match fs::read_to_string(&path) {
         Ok(token) => token,
@@ -111,6 +120,7 @@ pub fn start(services: Services) -> Result<()> {
                 .route("/ui/action", post(ui_action))
                 .route("/ui/session/restore", post(ui_restore))
                 .merge(local_library_ui::routes())
+                .merge(cloud_sync_ui::routes())
                 .merge(source_ui::routes())
                 .with_state(services)
                 .layer(middleware::from_fn_with_state(auth, authorize));
