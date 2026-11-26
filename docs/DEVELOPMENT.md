@@ -168,9 +168,12 @@ Use selected deployment branches, not a policy allowing every protected branch:
 | `STORE_APP_CERTIFICATE` / `STORE_APP_CERTIFICATE_PASSWORD` | Base64 Mac App Distribution P12 / export password |
 | `STORE_INSTALLER_CERTIFICATE` / `STORE_INSTALLER_CERTIFICATE_PASSWORD` | Base64 Mac Installer Distribution P12 / export password |
 | `STORE_PROVISION_PROFILE` | Base64 macOS App Store provisioning profile for `com.popomore.musicx` |
+| `ICLOUD_PROVISION_PROFILE` | Optional base64 iCloud-enabled Developer ID profile for `local.musicx.playback`, in `macos-stable` |
 | `SPARKLE_PRIVATE_KEY` | Existing Sparkle Ed25519 key; preserve continuity |
 
 Keep `SPARKLE_PUBLIC_KEY` as a repository variable. Configure `TESTFLIGHT_APP_ID` and `TESTFLIGHT_GROUP_ID` as variables in `macos-testflight`, pointing to the existing app and Internal group. The uploader verifies the group belongs to this app and is internal, never adds testers, checks export compliance, and waits for `VALID`, group association and `IN_BETA_TESTING`. It reconciles an existing build before attempting an upload, so a processing timeout can resume without a duplicate delivery. Installation through TestFlight and real audio playback remain separate acceptance steps. Store builds disable automatic writes to external agent configuration; users can copy the existing MCP settings manually.
+
+For [iCloud sync](ICLOUD.md), configure `MUSICX_ICLOUD_CONTAINER` separately in `macos-stable` and `macos-testflight`. Stable also needs `ICLOUD_PROVISION_PROFILE`; TestFlight reuses its own iCloud-enabled Store profile. Regenerate affected profiles after changing App ID capabilities. Preview DMGs retain ad hoc signing and show iCloud unavailable.
 
 The TestFlight job selects the installed Xcode 26.3 toolchain explicitly. App Store Connect JWTs are signed with Node's built-in ES256 implementation rather than `altool --generate-jwt`, which is unavailable in older Xcode tools. The uploader discovers the protected `AuthKey_<ID>.p8` through `API_PRIVATE_KEYS_DIR`; no private key or JWT is placed in command arguments or published artifacts.
 

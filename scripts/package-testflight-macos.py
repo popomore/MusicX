@@ -4,6 +4,7 @@
 import argparse
 from datetime import datetime, timezone
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -15,6 +16,9 @@ import tempfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
+ICLOUD_SPEC = importlib.util.spec_from_file_location("icloud_signing", ROOT / "scripts/icloud-signing.py")
+ICLOUD = importlib.util.module_from_spec(ICLOUD_SPEC)
+ICLOUD_SPEC.loader.exec_module(ICLOUD)
 
 
 def run(*args, env=None):
@@ -77,6 +81,27 @@ def load_profile(path, bundle_id, identity):
     return profile, team
 
 
+def parent_entitlements(app, profile, container):
+    parent = {"com.apple.security.app-sandbox": True,
+              "com.apple.security.network.client": True, "com.apple.security.network.server": True,
+              "com.apple.security.files.user-selected.read-only": True}
+    if profile:
+        allowed = profile["Entitlements"]
+        parent.update({"com.apple.application-identifier": allowed.get("com.apple.application-identifier", allowed.get("application-identifier")),
+                       "com.apple.developer.team-identifier": profile["TeamIdentifier"][0]})
+        if allowed.get("beta-reports-active"):
+            parent["beta-reports-active"] = True
+    if container:
+        if not profile:
+            raise SystemExit("iCloud requires a signed App Store build with a provisioning profile")
+        path = app / "Contents/Info.plist"
+        info = plistlib.loads(path.read_bytes())
+        parent.update(ICLOUD.entitlements(profile, container, info["CFBundleIdentifier"], "macos"))
+        info["MusicXiCloudContainer"] = container
+        path.write_bytes(plistlib.dumps(info))
+    return parent
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
@@ -103,11 +128,15 @@ def main():
         parser.error("Store packaging requires --profile, --app-identity and --installer-identity")
     if args.app_identity and not re.fullmatch(r"[0-9a-fA-F]{40}", args.app_identity):
         parser.error("--app-identity must be the certificate's SHA-1 fingerprint")
+    container = os.environ.get("MUSICX_ICLOUD_CONTAINER", "")
+    if args.prepare_only and container:
+        parser.error("iCloud requires a signed App Store build; omit it for --prepare-only")
     profile, team = None, None
     # Public bundle metadata and newly generated code-signature resources are readable.
     os.umask(0o022)
     env = dict(os.environ)
-    for key in ("MUSICX_CODESIGN_IDENTITY", "MUSICX_SPARKLE_PUBLIC_KEY", "MUSICX_SPARKLE_FRAMEWORK"):
+    for key in ("MUSICX_CODESIGN_IDENTITY", "MUSICX_SPARKLE_PUBLIC_KEY", "MUSICX_SPARKLE_FRAMEWORK",
+                "MUSICX_ICLOUD_CONTAINER", "MUSICX_ICLOUD_PROVISIONING_PROFILE"):
         env.pop(key, None)
     env.update(
         MUSICX_BUILD_APP_NAME="MusicX TestFlight QA" if args.prepare_only else "MusicX", MUSICX_BUILD_APP_ID=args.bundle_id,
@@ -129,6 +158,9 @@ def main():
             staged_profile = stage / 'distribution.provisionprofile'
             staged_profile.write_bytes(args.profile.read_bytes())
             profile, team = load_profile(staged_profile, args.bundle_id, args.app_identity)
+            if container:
+                # Fail before compilation if the final Store identity is not authorized.
+                ICLOUD.entitlements(profile, container, args.bundle_id, "macos")
         binaries = stage / "bin"
         binaries.mkdir()
         for package, name in (("musicx-webauth", "musicx-webauth"),
@@ -162,17 +194,10 @@ def main():
             path.write_bytes(plistlib.dumps(info))
         if profile:
             shutil.copyfile(staged_profile, app / "Contents/embedded.provisionprofile")
+        parent = parent_entitlements(app, profile, container)
         normalize_permissions(app)
         remove_quarantine(app)
         inherited = {"com.apple.security.app-sandbox": True, "com.apple.security.inherit": True}
-        parent = {"com.apple.security.app-sandbox": True,
-                  "com.apple.security.network.client": True, "com.apple.security.network.server": True,
-                  "com.apple.security.files.user-selected.read-only": True}
-        if profile:
-            parent.update({"com.apple.application-identifier": f"{team}.{args.bundle_id}",
-                           "com.apple.developer.team-identifier": team})
-            if profile["Entitlements"].get("beta-reports-active"):
-                parent["beta-reports-active"] = True
         for bundle in bundles:
             entitlements = stage / ("main.plist" if bundle == app else "child.plist")
             entitlements.write_bytes(plistlib.dumps(parent if bundle == app else inherited))

@@ -68,6 +68,60 @@ class TestFlightPackagingTests(unittest.TestCase):
                 with self.assertRaises(SystemExit):
                     self.validate(profile)
 
+    def test_icloud_is_added_to_the_final_store_identity_and_sandbox_entitlements(self):
+        profile = copy.deepcopy(self.profile)
+        profile["Entitlements"].update({
+            "com.apple.developer.team-identifier": "EXAMPLETEAM",
+            "com.apple.developer.icloud-services": "*",
+            "com.apple.developer.ubiquity-container-identifiers": ["iCloud.com.example.musicx"],
+            "com.apple.developer.icloud-container-identifiers": ["iCloud.com.example.musicx"],
+            "com.apple.developer.icloud-container-environment": ["Production", "Development"],
+            "beta-reports-active": True,
+        })
+        with tempfile.TemporaryDirectory() as directory:
+            app = Path(directory) / "MusicX.app"
+            contents = app / "Contents"
+            contents.mkdir(parents=True)
+            info = contents / "Info.plist"
+            info.write_bytes(plistlib.dumps({"CFBundleIdentifier": "com.example.musicx"}))
+            parent = PACKAGER.parent_entitlements(app, profile, "iCloud.com.example.musicx")
+            self.assertTrue(parent["com.apple.security.app-sandbox"])
+            self.assertTrue(parent["com.apple.security.network.client"])
+            self.assertTrue(parent["beta-reports-active"])
+            self.assertEqual(parent["com.apple.application-identifier"], "EXAMPLETEAM.com.example.musicx")
+            self.assertEqual(parent["com.apple.developer.icloud-services"], ["CloudDocuments"])
+            self.assertEqual(parent["com.apple.developer.icloud-container-environment"], "Production")
+            self.assertEqual(plistlib.loads(info.read_bytes())["MusicXiCloudContainer"], "iCloud.com.example.musicx")
+            for invalid in (None, self.profile):
+                info.write_bytes(plistlib.dumps({"CFBundleIdentifier": "com.example.musicx"}))
+                with self.assertRaises((SystemExit, ValueError)):
+                    PACKAGER.parent_entitlements(app, invalid, "iCloud.com.example.musicx")
+                self.assertNotIn("MusicXiCloudContainer", plistlib.loads(info.read_bytes()))
+
+    def test_unconfigured_store_and_local_qa_keep_existing_entitlements(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = Path(directory) / "MusicX.app"
+            contents = app / "Contents"
+            contents.mkdir(parents=True)
+            info = contents / "Info.plist"
+            info.write_bytes(plistlib.dumps({"CFBundleIdentifier": "com.example.musicx"}))
+            for profile in (self.profile, None):
+                parent = PACKAGER.parent_entitlements(app, profile, "")
+                self.assertTrue(parent["com.apple.security.app-sandbox"])
+                self.assertNotIn("com.apple.developer.icloud-services", parent)
+                self.assertNotIn("MusicXiCloudContainer", plistlib.loads(info.read_bytes()))
+
+    def test_adhoc_qa_rejects_icloud_before_building(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "QA.app"
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT), "--prepare-only", "--output", str(output),
+                 "--version", "1.2.0", "--build", "1"], capture_output=True, text=True,
+                env={**os.environ, "MUSICX_ICLOUD_CONTAINER": "iCloud.com.example.musicx"})
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("omit it for --prepare-only", result.stderr)
+            self.assertFalse(output.exists())
+
     def cargo_fixture(self, directory, executable=None, exit_code=0):
         command = directory / "cargo"
         events = [] if executable is None else [{

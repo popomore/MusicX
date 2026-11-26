@@ -33,7 +33,11 @@ export MUSICX_CODESIGN_IDENTITY='Apple Development: Example (TEAMID)'
 python3 package.py --target ios
 ```
 
-The packagers verify the profile's expiry, exact application identifier and container authorization, embed it, add the required entitlements, and sign the final bundle. Simulator packaging retains its existing ad hoc behavior. Do not commit profiles or signing credentials. Release automation needs these optional settings supplied by the release environment to produce an iCloud-capable build; existing ad hoc release builds remain supported.
+The packagers verify the profile's expiry, exact application identifier and container authorization, embed it, add the required entitlements, and sign the final bundle. Apple profiles can authorize services with a wildcard and environments with an allowlist; the signature requests only `CloudDocuments` and one concrete environment. Simulator packaging retains its existing ad hoc behavior. Do not commit profiles or signing credentials.
+
+For release automation, set the `MUSICX_ICLOUD_CONTAINER` variable in the restricted `macos-stable` and `macos-testflight` Environments. In `macos-stable`, also set `ICLOUD_PROVISION_PROFILE` to the base64 Developer ID profile for `local.musicx.playback`. The signing import stages it privately and passes its path to the DMG packager. TestFlight uses the existing `STORE_PROVISION_PROFILE` for `com.popomore.musicx`: regenerate it after enabling iCloud, then update the Environment secret. The TestFlight packager adds the container and iCloud entitlements after assigning the final Store bundle identity, retaining Sandbox and TestFlight entitlements.
+
+Both signing paths reject incomplete or unauthorized configuration. Omit the iCloud settings to retain builds without iCloud support. Preview DMGs and local `--prepare-only` TestFlight QA remain ad hoc; they cannot access the container. A `--prepare-only` build rejects a configured iCloud container instead of claiming support. Changing these settings does not enable iCloud in an already installed app; install a newly signed build.
 
 ## Storage and conflicts
 

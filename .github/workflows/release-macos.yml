@@ -158,6 +158,8 @@ jobs:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          MUSICX_ICLOUD_CONTAINER: ${{ vars.MUSICX_ICLOUD_CONTAINER }}
+          ICLOUD_PROVISION_PROFILE: ${{ secrets.ICLOUD_PROVISION_PROFILE }}
         run: python3 scripts/import-release-signing.py developer-id
       # No PR caches or artifacts are restored in credential-bearing jobs.
       - name: Package Apple Silicon DMG
@@ -329,6 +331,8 @@ jobs:
         run: python3 scripts/import-release-signing.py testflight
       - name: Package sandboxed TestFlight installer
         if: steps.saved.outputs.exists != 'true'
+        env:
+          MUSICX_ICLOUD_CONTAINER: ${{ vars.MUSICX_ICLOUD_CONTAINER }}
         run: |
           python3 scripts/package-testflight-macos.py --output target/testflight/MusicX.pkg \
             --version "$MUSICX_SHORT_VERSION" --build "$MUSICX_BUNDLE_VERSION" \

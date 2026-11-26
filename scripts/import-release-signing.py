@@ -17,6 +17,22 @@ def run(*args):
     return result.stdout
 
 
+def icloud_configuration(stage):
+    container = os.environ.get('MUSICX_ICLOUD_CONTAINER', '')
+    encoded = os.environ.get('ICLOUD_PROVISION_PROFILE', '')
+    if not container and not encoded:
+        return {}
+    if not container or not encoded:
+        raise SystemExit('Set both MUSICX_ICLOUD_CONTAINER and ICLOUD_PROVISION_PROFILE for Developer ID iCloud signing')
+    profile = stage / 'MusicX-iCloud.provisionprofile'
+    try:
+        decoded = base64.b64decode(encoded, validate=True)
+    except ValueError:
+        raise SystemExit('ICLOUD_PROVISION_PROFILE must be a base64 provisioning profile') from None
+    profile.write_bytes(decoded)
+    return {'MUSICX_ICLOUD_CONTAINER': container, 'MUSICX_ICLOUD_PROVISIONING_PROFILE': str(profile)}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('mode', choices=('developer-id', 'testflight'))
@@ -24,6 +40,7 @@ def main():
     os.umask(0o077)
     stage = Path(os.environ['RUNNER_TEMP']) / 'musicx-signing'
     stage.mkdir(exist_ok=True)
+    exported = icloud_configuration(stage) if args.mode == 'developer-id' else {}
     keychain = stage / 'release.keychain-db'
     password = secrets.token_hex(24)
     print(f'::add-mask::{password}')
@@ -34,7 +51,7 @@ def main():
     if args.mode == 'testflight':
         names = [('STORE_APP_CERTIFICATE', 'STORE_APP_CERTIFICATE_PASSWORD', '3rd Party Mac Developer Application: ', 'STORE_APP_IDENTITY'),
                  ('STORE_INSTALLER_CERTIFICATE', 'STORE_INSTALLER_CERTIFICATE_PASSWORD', '3rd Party Mac Developer Installer: ', 'STORE_INSTALLER_IDENTITY')]
-    exported = {'MUSICX_SIGNING_KEYCHAIN': str(keychain)}
+    exported['MUSICX_SIGNING_KEYCHAIN'] = str(keychain)
     for name, password_name, prefix, output_name in names:
         certificate = stage / (name + '.p12')
         certificate.write_bytes(base64.b64decode(os.environ[name], validate=True))
