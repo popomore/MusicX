@@ -10,6 +10,8 @@ import subprocess
 
 
 def entitlements(profile, container, bundle_id, platform):
+    if not container.startswith("iCloud.") or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-" for c in container):
+        raise ValueError("Use an explicit iCloud.<container> identifier")
     allowed = profile.get("Entitlements", {})
     app_key = "com.apple.application-identifier" if platform == "macos" else "application-identifier"
     app_id = allowed.get(app_key, "")
@@ -19,7 +21,8 @@ def entitlements(profile, container, bundle_id, platform):
         raise ValueError("The iCloud profile must match the exact application bundle identifier")
     if container not in allowed.get("com.apple.developer.ubiquity-container-identifiers", []):
         raise ValueError("The profile does not authorize the requested iCloud Documents container")
-    if "CloudDocuments" not in allowed.get("com.apple.developer.icloud-services", []):
+    services = allowed.get("com.apple.developer.icloud-services", [])
+    if services != "*" and not (isinstance(services, list) and "CloudDocuments" in services):
         raise ValueError("Enable iCloud Documents for this application in its provisioning profile")
     result = {
         app_key: app_id,
@@ -31,7 +34,14 @@ def entitlements(profile, container, bundle_id, platform):
     if container in cloud_containers:
         result["com.apple.developer.icloud-container-identifiers"] = [container]
     if "com.apple.developer.icloud-container-environment" in allowed:
-        result["com.apple.developer.icloud-container-environment"] = allowed["com.apple.developer.icloud-container-environment"]
+        environments = allowed["com.apple.developer.icloud-container-environment"]
+        if isinstance(environments, str):
+            environments = [environments]
+        # A profile is an allowlist; the code signature must claim one concrete value.
+        environment = "Development" if allowed.get("get-task-allow") else "Production"
+        if environment not in environments:
+            raise ValueError("The profile does not authorize the required iCloud environment")
+        result["com.apple.developer.icloud-container-environment"] = environment
     # Device development profiles need these for installation/debugging.
     if "get-task-allow" in allowed:
         result["get-task-allow"] = allowed["get-task-allow"]
@@ -39,8 +49,6 @@ def entitlements(profile, container, bundle_id, platform):
 
 
 def prepare(bundle, platform, container, profile_path):
-    if not container.startswith("iCloud.") or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-" for c in container):
-        raise ValueError("Use an explicit iCloud.<container> identifier")
     decoded = subprocess.run(["/usr/bin/security", "cms", "-D", "-i", str(profile_path)], capture_output=True, check=True)
     profile = plistlib.loads(decoded.stdout)
     expiry = profile.get("ExpirationDate")
