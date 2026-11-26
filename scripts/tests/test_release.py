@@ -12,6 +12,7 @@ SCRIPTS = Path(__file__).resolve().parents[1]
 APPLE_SIGNING_FIELDS = (
     "APPLE_CERTIFICATE", "APPLE_CERTIFICATE_PASSWORD", "APPLE_SIGNING_IDENTITY",
     "APPLE_API_PRIVATE_KEY", "APPLE_API_KEY", "APPLE_API_ISSUER",
+    "MUSICX_ICLOUD_CONTAINER", "ICLOUD_PROVISION_PROFILE",
 )
 
 
@@ -338,9 +339,15 @@ length="{self.dmg.stat().st_size}" sparkle:edSignature="{base64.b64encode(signat
         self.assertTrue(self.state()["release"]["prerelease"])
 
     def test_semantic_recovery_after_tag_push_reuses_assets_and_repairs_channel_note(self):
+        self.semantic_recovery()
+
+    def test_signed_preview_recovery_keeps_its_planned_signing_mode(self):
+        self.semantic_recovery(signed=True)
+
+    def semantic_recovery(self, signed=False):
         tag = "v1.3.0-preview.1"
         self.prepare_appcast(tag)
-        self.env.update(RELEASE_TAG=tag, SIGNING_MODE="ad-hoc", RELEASE_BRANCH="main", CI_RUN_ID="41",
+        self.env.update(RELEASE_TAG=tag, SIGNING_MODE="developer-id" if signed else "ad-hoc", RELEASE_BRANCH="main", CI_RUN_ID="41",
                         GITHUB_RUN_ID="42", GITHUB_REF="refs/heads/main", GITHUB_EVENT_NAME="workflow_dispatch",
                         GITHUB_ACTIONS="true", GITHUB_ACTION="__run")
         self.git('branch', '-M', 'main')
@@ -359,6 +366,8 @@ length="{self.dmg.stat().st_size}" sparkle:edSignature="{base64.b64encode(signat
         plan = {'schema': 1, 'branch': 'main', 'sourceSha': self.sha, 'runId': '42', 'ciRunId': '41', 'runNumber': '42',
                 'release': True, 'channel': 'preview', 'feedTag': 'update-feed', 'makeLatest': False,
                 'version': tag[1:], 'tag': tag, 'shortVersion': '1.3.0', 'bundleVersion': '1000042', 'notes': 'Generated notes'}
+        if signed:
+            plan['signingMode'] = 'developer-id'
         plan_path = self.root / 'plan.json'
         plan_path.write_text(json.dumps(plan))
         self.env.update(RELEASE_PLAN=str(plan_path), RELEASE_ARTIFACTS=str(self.root))
@@ -371,6 +380,8 @@ length="{self.dmg.stat().st_size}" sparkle:edSignature="{base64.b64encode(signat
             self.assertEqual(result.returncode, 0, result.stderr)
         note = self.git('notes', '--ref', 'semantic-release-' + tag, 'show', tag).stdout
         self.assertEqual(json.loads(note), {'channels': ['preview']})
+        manifest = json.loads((self.root / 'release-manifest.json').read_text())
+        self.assertEqual(manifest['signing_mode'], 'developer-id' if signed else 'ad-hoc')
         self.assertFalse(self.state()['release']['draft'])
         self.assertEqual(len([c for c in self.state()['calls'] if c[:3] == ['release', 'create', tag]]), 1)
         self.dmg.write_bytes(b'changed bytes on retry')

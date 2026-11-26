@@ -10,6 +10,8 @@ import subprocess
 import tempfile
 import uuid
 
+from release_plan import signing_mode
+
 
 def digest(path):
     with path.open('rb') as stream:
@@ -126,7 +128,7 @@ def main():
     os.umask(0o077)
     plan_path = Path(os.environ['RELEASE_PLAN'])
     plan = json.loads(plan_path.read_text())
-    if (plan['schema'] != 1 or plan['channel'] != 'stable'
+    if (plan['schema'] != 1 or signing_mode(plan) != 'developer-id'
             or plan['sourceSha'] != os.environ['SOURCE_SHA']
             or str(plan['runId']) != os.environ['GITHUB_RUN_ID']
             or plan['branch'] != os.environ['RELEASE_BRANCH']):

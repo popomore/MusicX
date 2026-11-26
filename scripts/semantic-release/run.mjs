@@ -66,7 +66,8 @@ if (existsSync(planFile)) {
   const next = result && result.nextRelease;
   plan = { schema: 1, ...expected, release: Boolean(next) };
   if (next) Object.assign(plan, route(plan.branch), { version: next.version, tag: next.gitTag,
-    shortVersion: next.version.split('-')[0], bundleVersion: String(1000000 + Number(env.GITHUB_RUN_NUMBER)), notes: next.notes });
+    shortVersion: next.version.split('-')[0], bundleVersion: String(1000000 + Number(env.GITHUB_RUN_NUMBER)),
+    signingMode: 'developer-id', notes: next.notes });
   validatePlan(plan, expected);
   mkdirSync(dirname(planFile), { recursive: true });
   writeJSON(planFile, plan);
