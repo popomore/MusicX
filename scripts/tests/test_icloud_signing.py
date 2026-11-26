@@ -51,6 +51,22 @@ class ICloudSigningTests(unittest.TestCase):
         self.assertEqual(values["com.apple.application-identifier"], "OLDPREFIX.local.musicx.playback")
         self.assertEqual(values["com.apple.developer.team-identifier"], "TEAM")
 
+    def test_apple_allowlist_is_narrowed_to_concrete_signature_values(self):
+        profile = self.profile()
+        profile["Entitlements"].update({
+            "com.apple.developer.icloud-services": "*",
+            "com.apple.developer.icloud-container-environment": ["Production", "Development"],
+        })
+        result = signing.entitlements(profile, "iCloud.test.musicx", "local.musicx.playback", "macos")
+        self.assertEqual(result["com.apple.developer.icloud-services"], ["CloudDocuments"])
+        self.assertEqual(result["com.apple.developer.icloud-container-environment"], "Production")
+        profile["Entitlements"]["get-task-allow"] = True
+        result = signing.entitlements(profile, "iCloud.test.musicx", "local.musicx.playback", "macos")
+        self.assertEqual(result["com.apple.developer.icloud-container-environment"], "Development")
+        profile["Entitlements"]["com.apple.developer.icloud-services"] = ["CloudKit"]
+        with self.assertRaisesRegex(ValueError, "Enable iCloud Documents"):
+            signing.entitlements(profile, "iCloud.test.musicx", "local.musicx.playback", "macos")
+
     def test_prepare_embeds_profile_and_container_before_final_signing(self):
         for platform in ["macos", "ios"]:
             with self.subTest(platform=platform), tempfile.TemporaryDirectory() as temp:
