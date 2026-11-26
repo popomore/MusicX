@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { PassThrough } from 'node:stream';
 import semanticRelease from 'semantic-release';
 import config from '../../release.config.mjs';
-import { route, validatePlan } from './state.mjs';
+import { route, validatePlan, signingMode } from './state.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const plugin = name => fileURLToPath(import.meta.resolve(name));
@@ -54,6 +54,8 @@ test('preview increments, stable accumulates, and maintenance stays isolated', a
   const first = await release();
   assert.equal(first.nextRelease.version, '1.1.0-preview.1');
   assert.match(first.nextRelease.notes, /gapless playback/);
+  assert.match(first.nextRelease.notes, /Preview build: signed with Developer ID, notarized by Apple, and stapled/);
+  assert.doesNotMatch(first.nextRelease.notes, /ad hoc signed/);
   commit('fix(player): keep the queue after pause');
   const second = await release();
   assert.equal(second.nextRelease.version, '1.1.0-preview.2');
@@ -106,4 +108,17 @@ test('plan provenance, new preview tags and stable routes are strict', () => {
   }
   assert.throws(() => validatePlan(plan, { sourceSha: 'b'.repeat(40) }));
   assert.throws(() => route('pull/1/merge'));
+});
+
+test('new preview plans require Apple signing while historical plans retain their original mode', () => {
+  const plan = { schema: 1, branch: 'main', sourceSha: 'a'.repeat(40), runId: '42', ciRunId: '41', runNumber: '7',
+    release: true, version: '1.1.0-preview.1', tag: 'v1.1.0-preview.1', shortVersion: '1.1.0',
+    bundleVersion: '1000007', notes: 'Notes', signingMode: 'developer-id', ...route('main') };
+  assert.equal(validatePlan(plan), plan);
+  assert.equal(signingMode(plan), 'developer-id');
+  const legacy = { ...plan };
+  delete legacy.signingMode;
+  assert.equal(signingMode(validatePlan(legacy)), 'ad-hoc');
+  assert.throws(() => validatePlan({ ...plan, signingMode: 'ad-hoc' }));
+  assert.throws(() => validatePlan({ ...plan, signingMode: 'invalid' }));
 });

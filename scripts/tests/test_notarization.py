@@ -127,9 +127,26 @@ elif args[:2]!=['stapler','validate']:raise SystemExit('Unexpected command')
     def test_preview_plan_is_rejected_without_an_apple_call(self):
         plan = json.loads(self.plan.read_text())
         plan["channel"] = "preview"
+        for mode in (None, "ad-hoc", "invalid"):
+            with self.subTest(mode=mode):
+                if mode is None:
+                    plan.pop("signingMode", None)
+                else:
+                    plan["signingMode"] = mode
+                self.plan.write_text(json.dumps(plan))
+                self.assertNotEqual(self.run_helper("submit").returncode, 0)
+                self.assertEqual(self.recorded_calls(), [])
+
+    def test_signed_preview_uses_the_same_notarization_checkpoint_contract(self):
+        plan = json.loads(self.plan.read_text())
+        plan.update(channel="preview", branch="main", tag="v1.2.0-preview.3",
+                    version="1.2.0-preview.3", signingMode="developer-id")
         self.plan.write_text(json.dumps(plan))
-        self.assertNotEqual(self.run_helper("submit").returncode, 0)
-        self.assertEqual(self.recorded_calls(), [])
+        self.env["RELEASE_BRANCH"] = "main"
+        self.submit()
+        self.assertEqual(self.run_helper("wait", FAKE_NOTARY_STATE="accepted").returncode, 0)
+        self.assertEqual(sum(call[:2] == ["notarytool", "submit"] for call in self.recorded_calls()), 1)
+        self.assertTrue(self.dmg.read_bytes().endswith(b"notarization ticket"))
 
     def test_missing_receipt_never_submits_a_replacement(self):
         self.assertNotEqual(self.run_helper("wait").returncode, 0)

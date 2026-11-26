@@ -3,7 +3,7 @@ import { generateNotes as conventionalNotes } from '@semantic-release/release-no
 import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { writeFileSync } from 'node:fs';
-import { git, readJSON, validatePlan, validateAssets } from './state.mjs';
+import { git, readJSON, validatePlan, validateAssets, signingMode } from './state.mjs';
 
 // Render pre-policy subjects in English without rewriting their commits or links.
 const legacySubjects = new Map([
@@ -32,7 +32,7 @@ export async function generateNotes(_config, context) {
   const preview = context.branch.name === 'main';
   return `${notes}\n\n---\n\nDownload the Apple Silicon DMG and drag MusicX to Applications. Requires macOS 14 or later.\n\n`
     + (preview
-      ? 'Preview build: ad hoc signed; macOS may block the first launch. TestFlight Internal is distributed separately after Apple processing.\n'
+      ? 'Preview build: signed with Developer ID, notarized by Apple, and stapled. TestFlight Internal is distributed separately after Apple processing.\n'
       : 'Signed with Developer ID, notarized by Apple, and stapled. Automatic updates use signed Sparkle metadata.\n');
 }
 
@@ -49,7 +49,7 @@ export function publishPlan(plan, directory, env = process.env) {
   const notesFile = resolve(directory, 'release-notes.md');
   writeFileSync(notesFile, plan.notes);
   const releaseEnv = { ...env, RELEASE_TAG: plan.tag, SOURCE_SHA: plan.sourceSha,
-    MUSICX_BUNDLE_VERSION: plan.bundleVersion, SIGNING_MODE: plan.channel === 'stable' ? 'developer-id' : 'ad-hoc',
+    MUSICX_BUNDLE_VERSION: plan.bundleVersion, SIGNING_MODE: signingMode(plan),
     RELEASE_NOTES_FILE: notesFile, RELEASE_MAKE_LATEST: String(plan.makeLatest), UPDATE_FEED_TAG: plan.feedTag };
   for (const script of ['publish-macos.sh', 'publish-update-feed.sh']) {
     execFileSync('bash', [resolve('scripts', script), resolve(directory, 'MusicX-macos-arm64.dmg')],

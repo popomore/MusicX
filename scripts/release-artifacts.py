@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 import re
 
+from release_plan import signing_mode
+
 FILES = ('MusicX-macos-arm64.dmg', 'MusicX-macos-arm64.dmg.sha256', 'appcast.xml',
          'appcast-all.xml', 'appcast-all.base')
 
@@ -27,6 +29,7 @@ def main():
             or str(plan['runId']) != os.environ['GITHUB_RUN_ID']
             or plan['branch'] != os.environ['RELEASE_BRANCH']):
         raise SystemExit('Release artifact provenance mismatch')
+    mode = signing_mode(plan)
     if args.mode == 'env':
         numeric = r'(?:0|[1-9]\d*)'
         if (not re.fullmatch(rf'v{numeric}\.{numeric}\.{numeric}(?:-preview\.[1-9]\d*)?', plan['tag'])
@@ -38,6 +41,7 @@ def main():
         values = {'RELEASE_TAG': plan['tag'], 'MUSICX_RELEASE_VERSION': plan['version'],
                   'MUSICX_SHORT_VERSION': plan['shortVersion'], 'MUSICX_BUNDLE_VERSION': plan['bundleVersion'],
                   'UPDATE_FEED_TAG': plan['feedTag'],
+                  'SIGNING_MODE': mode,
                   'MUSICX_UPDATE_FEED_URL': f'https://github.com/{os.environ["GITHUB_REPOSITORY"]}/releases/download/{plan["feedTag"]}/appcast.xml'}
         with Path(os.environ['GITHUB_ENV']).open('a') as output:
             for key, value in values.items():
@@ -45,7 +49,7 @@ def main():
         return
     receipt_path = args.directory / 'validated-artifacts.json'
     receipt = {'schema': 1, 'planSha256': digest(plan_path), 'sourceSha': plan['sourceSha'], 'tag': plan['tag'],
-               'signingMode': 'developer-id' if plan['channel'] == 'stable' else 'ad-hoc',
+               'signingMode': mode,
                'files': {name: digest(args.directory / name) for name in FILES}}
     if args.mode == 'record':
         receipt_path.write_text(json.dumps(receipt, indent=2) + '\n')
