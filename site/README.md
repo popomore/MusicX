@@ -41,6 +41,9 @@ PR checks have read-only permissions and no deployment secrets.
   environments. It never deploys.
 - Each deployment uses the artifact built and checked in the same workflow run;
   deployments are serialized by environment.
+- Automatic test deployments skip builds that are no longer the current `main` commit.
+- The `production` Environment requires approval from `@popomore` and accepts
+  only `site-v*` tags.
 
 The `test` and `production` GitHub Environments need `CLOUDFLARE_API_TOKEN` and
 `CLOUDFLARE_ACCOUNT_ID`. Configure a token for the account and Workers/domains

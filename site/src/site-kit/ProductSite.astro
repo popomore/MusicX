@@ -1,4 +1,5 @@
 ---
+import { messages } from '../locales/index.ts';
 import type { Locale, Product } from './types';
 import './site.css';
 
@@ -69,7 +70,7 @@ const structuredData = {
     <script is:inline type="application/ld+json" set:html={JSON.stringify(structuredData).replaceAll('<', '\\u003c')} />
   </head>
   <body class={product.id} id="top">
-    <a class="skip-link" href="#main">{isChinese ? '跳到正文' : 'Skip to content'}</a>
+    <a class="skip-link" href="#main">{messages[locale].accessibility.skipToContent}</a>
     <slot />
   </body>
 </html>

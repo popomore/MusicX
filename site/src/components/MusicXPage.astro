@@ -1,4 +1,5 @@
 ---
+import { messages as siteMessages } from '../locales/index.ts';
 import ProductSite from '../site-kit/ProductSite.astro';
 import { productActions } from '../site-kit/actions';
 import type { Locale, Product } from '../site-kit/types';
@@ -11,41 +12,20 @@ const product: Product = config;
 const copy = product.copy[locale];
 const a = productActions(product, locale);
 const zh = locale === 'zh';
-const words = zh ? {
-  player: '播放器', agent: '智能体', plugins: '音乐插件',
-  native: '菜单栏播放器', control: '智能体控制', sources: '多平台音乐源',
-  listening: '播放功能',
-  agentTitle: ['通过智能体', '控制播放'],
-  pluginsLabel: '多平台音乐源，通过插件接入',
-  pluginsTitle: ['多平台', '音乐源插件'],
-  examples: '社区插件示例',
-  pluginCaption: '插件能力', playerCaption: '播放与队列',
-  start: '安装与设置', questions: '常见问题',
-  ending: '下载 MusicX', footer: 'macOS 菜单栏音乐播放器',
-} : {
-  player: 'Player', agent: 'Agent', plugins: 'Music plugins',
-  native: 'Menu bar player', control: 'Agent controls', sources: 'Music platform plugins',
-  listening: 'Playback features',
-  agentTitle: ['Agent', 'playback controls'],
-  pluginsLabel: 'Music platforms, connected through plugins',
-  pluginsTitle: ['Music-source', 'plugins'],
-  examples: 'Community plugin examples',
-  pluginCaption: 'Plugin capabilities', playerCaption: 'Playback & queue',
-  start: 'Installation and setup', questions: 'Questions',
-  ending: 'Download MusicX', footer: 'A macOS menu bar music player',
-};
+const messages = siteMessages[locale];
+const words = messages.page;
 const sourceExamples = [
-  { name: zh ? '网易云音乐' : 'NetEase Cloud Music', url: 'https://github.com/hubandad/mygo-music-netease' },
+  { name: words.neteaseCloudMusic, url: 'https://github.com/hubandad/mygo-music-netease' },
   { name: 'QQ Music', url: 'https://github.com/dddaniel1/mygo-plugin-qqmusic' },
   { name: 'Bilibili', url: 'https://github.com/GentleM4dman/mygo-music-bilibili' },
 ];
 ---
 <ProductSite {product} {locale}>
   <header class="mx-header mx-container">
-    <a class="mx-brand" href={a.home} aria-label={`MusicX ${zh ? '首页' : 'home'}`}><img src="/icon.png" alt="" width="44" height="44" /><span>MusicX</span></a>
-    <nav aria-label={zh ? '主导航' : 'Main navigation'}>
+    <a class="mx-brand" href={a.home} aria-label={`MusicX ${messages.accessibility.home}`}><img src="/icon.png" alt="" width="44" height="44" /><span>MusicX</span></a>
+    <nav aria-label={messages.accessibility.mainNavigation}>
       <a href="#features">{words.player}</a><a href="#agent">{words.agent}</a><a href="#sources">{words.plugins}</a>
-      <a class="mx-language" href={zh ? '/' : '/zh/'} lang={zh ? 'en' : 'zh-CN'} aria-label={zh ? 'Read this page in English' : '用中文阅读此页'}>{zh ? 'English' : '中文'}</a>
+      <a class="mx-language" href={zh ? '/' : '/zh/'} lang={zh ? 'en' : 'zh-CN'} aria-label={messages.accessibility.languageLabel}>{messages.accessibility.languageName}</a>
     </nav>
   </header>
   <main id="main" tabindex="-1">
@@ -100,5 +80,5 @@ const sourceExamples = [
       <div class="mx-release"><p>{a.availability}</p>{product.release && <><a href={product.release.url}>{product.release.tag}</a><a href={`${product.repository}/releases`}>{a.releases} ↗</a></>}</div>
     </div></section>
   </main>
-  <footer class="mx-footer mx-container"><p>{words.footer}</p><nav aria-label={zh ? '页脚链接' : 'Footer links'}><a href={`${product.repository}/blob/main/LICENSE`}>{a.license}</a><a href="https://chuo.me">chuo.me ↗</a><a href="#top">{a.back} ↑</a></nav></footer>
+  <footer class="mx-footer mx-container"><p>{words.footer}</p><nav aria-label={messages.accessibility.footerLinks}><a href={`${product.repository}/blob/main/LICENSE`}>{a.license}</a><a href="https://chuo.me">chuo.me ↗</a><a href="#top">{a.back} ↑</a></nav></footer>
 </ProductSite>
