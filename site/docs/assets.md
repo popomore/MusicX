@@ -1,6 +1,6 @@
 # Website asset provenance
 
-Captured/verified on 2026-11-16. Migrated byte-for-byte from [Mill 6c68c515](https://github.com/popomore-org/mill/tree/6c68c5157dcc2cc53f1ca8b0816ffd559c4f2b26/products/chuome/apps/musicx-site). These are real native application images.
+The website uses native application screenshots and the application icon.
 
 | File | Origin | Treatment |
 | --- | --- | --- |

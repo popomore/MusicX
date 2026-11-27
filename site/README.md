@@ -2,7 +2,7 @@
 
 Static bilingual Astro site for https://musicx.chuo.me. English is at `/`;
 Simplified Chinese is at `/zh/`. This directory owns its source, templates,
-screenshots, tests, npm lockfile and tooling independently of Mill.
+screenshots, tests, npm lockfile and tooling.
 
 ## Development
 
@@ -47,17 +47,3 @@ The `test` and `production` GitHub Environments need `CLOUDFLARE_API_TOKEN` and
 already named in `wrangler.jsonc`; do not copy credentials into the repository.
 See [Cloudflare's CI authentication guide](https://developers.cloudflare.com/workers/ci-cd/external-cicd/github-actions/).
 Credential availability and live deployment are separate acceptance steps.
-
-## Ownership handover
-
-The source was migrated from [Mill `6c68c515`](https://github.com/popomore-org/mill/tree/6c68c5157dcc2cc53f1ca8b0816ffd559c4f2b26/products/chuome/apps/musicx-site),
-including its templates, tests and unmodified screenshots. The Worker names,
-compatibility date, domain, routes, headers and page content are preserved.
-
-Merge the destination site change and arrange its Environment credentials before
-merging the companion Mill cleanup. The Mill cleanup removes its deployment
-matrix/policy entries; it does not delete either Worker or its Custom Domain.
-Verify the test deployment from this repository first, then use a reviewed stable
-site tag for production and check both languages, assets and 404 behavior.
-Coordinate the handover so Mill and this repository do not publish the same
-Worker concurrently. No deployment or DNS change is performed by the migration.
