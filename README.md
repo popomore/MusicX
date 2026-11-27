@@ -69,3 +69,7 @@ Thank you to [MyGo Music](https://github.com/egoist/mygo-music), its authors, an
 ## License
 
 MusicX is licensed under the [MIT License](LICENSE). Third-party dependencies and vendored code retain their respective licenses.
+
+## Product website
+
+The bilingual public website is maintained in [site/](site/README.md), including its build, checks and Cloudflare release workflow.

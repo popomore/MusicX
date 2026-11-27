@@ -1,0 +1,84 @@
+---
+import { messages as siteMessages } from '../locales/index.ts';
+import ProductSite from '../site-kit/ProductSite.astro';
+import { productActions } from '../site-kit/actions';
+import type { Locale, Product } from '../site-kit/types';
+import { product as config } from '../product';
+import '../styles/musicx.css';
+
+interface Props { locale: Locale }
+const { locale } = Astro.props;
+const product: Product = config;
+const copy = product.copy[locale];
+const a = productActions(product, locale);
+const zh = locale === 'zh';
+const messages = siteMessages[locale];
+const words = messages.page;
+const sourceExamples = [
+  { name: words.neteaseCloudMusic, url: 'https://github.com/hubandad/mygo-music-netease' },
+  { name: 'QQ Music', url: 'https://github.com/dddaniel1/mygo-plugin-qqmusic' },
+  { name: 'Bilibili', url: 'https://github.com/GentleM4dman/mygo-music-bilibili' },
+];
+---
+<ProductSite {product} {locale}>
+  <header class="mx-header mx-container">
+    <a class="mx-brand" href={a.home} aria-label={`MusicX ${messages.accessibility.home}`}><img src="/icon.png" alt="" width="44" height="44" /><span>MusicX</span></a>
+    <nav aria-label={messages.accessibility.mainNavigation}>
+      <a href="#features">{words.player}</a><a href="#agent">{words.agent}</a><a href="#sources">{words.plugins}</a>
+      <a class="mx-language" href={zh ? '/' : '/zh/'} lang={zh ? 'en' : 'zh-CN'} aria-label={messages.accessibility.languageLabel}>{messages.accessibility.languageName}</a>
+    </nav>
+  </header>
+  <main id="main" tabindex="-1">
+    <section class="mx-hero mx-container" aria-labelledby="hero-title">
+      <div class="mx-hero-copy">
+        <p class="eyebrow">{copy.eyebrow}</p>
+        <h1 id="hero-title">{copy.headline.map((line) => <span>{line}</span>)}</h1>
+        <p class="mx-intro">{copy.intro}</p>
+        <svg class="mx-score" aria-hidden="true" viewBox="0 0 420 42" fill="none"><path d="M1 25C80-12 110 55 200 21S320 5 419 22M1 32C80-5 110 62 200 28S320 12 419 29M1 39C80 2 110 69 200 35S320 19 419 36"/><g><circle cx="54" cy="15" r="3"/><circle cx="152" cy="33" r="3"/><circle cx="257" cy="12" r="3"/><circle cx="365" cy="14" r="3"/></g></svg>
+        <div class="actions"><a class="button" href={a.primaryHref}>{a.primaryLabel}<span aria-hidden="true">↓</span></a><a class="text-link" href={a.secondaryHref}>{a.secondaryLabel}<span aria-hidden="true">↗</span></a></div>
+        <p class="requirements">{a.requirements}</p>
+      </div>
+      <figure class="mx-player">
+        <a class="screenshot-link" href={product.hero.src} aria-label={`${a.image}: MusicX`}><img class="app-screenshot" src={product.hero.src} alt={copy.imageAlt} width={product.hero.width} height={product.hero.height} fetchpriority="high" /></a>
+        <figcaption>{copy.imageCaption} <a href={product.hero.src}>{a.image} ↗</a></figcaption>
+      </figure>
+      <ul class="mx-signature"><li>{words.native}</li><li>{words.control}</li><li>{words.sources}</li></ul>
+    </section>
+
+    <section class="mx-listening mx-container" id="features" aria-labelledby="listening-title">
+      <p class="eyebrow">MusicX / {words.player}</p><h2 id="listening-title">{words.listening}</h2>
+      <div class="mx-listening-grid">
+        {copy.features.slice(0, 1).map((feature) => <article class="mx-stay-playing"><svg aria-hidden="true" viewBox="0 0 64 48" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="1" width="62" height="46" rx="7"/><path d="M1 13h62"/><circle cx="10" cy="7" r="1.5"/><circle cx="17" cy="7" r="1.5"/><path d="m27 22 13 7-13 7Z" fill="currentColor" stroke="none"/></svg><h3>{feature.title}</h3><p>{feature.description}</p></article>)}
+        <div class="mx-player-details">{copy.features.slice(1).map((feature) => <article><h3>{feature.title}</h3><p>{feature.description}</p></article>)}</div>
+      </div>
+    </section>
+
+    <section class="mx-agent-band" id="agent" aria-labelledby="agent-title">
+      <div class="mx-container mx-agent-inner">
+        <div><p class="eyebrow">MusicX / {words.agent}</p><h2 id="agent-title">{words.agentTitle.map((line) => <span>{line}</span>)}</h2>{copy.story.paragraphs.map((p) => <p>{p}</p>)}<a class="text-link" href={product.guide}>{a.guide} ↗</a></div>
+        <div class="mx-request"><p class="eyebrow">{copy.story.quoteLabel}</p><blockquote><p>“{copy.story.quote}”</p></blockquote><span>MusicX · MCP</span></div>
+      </div>
+    </section>
+
+    <section class="mx-sources mx-container" id="sources" aria-labelledby="sources-title">
+      <div><p class="eyebrow">{words.pluginsLabel}</p><h2 id="sources-title">{words.pluginsTitle.map((line) => <span>{line}</span>)}</h2><p>{copy.detail.description}</p><div class="mx-source-examples"><p class="eyebrow">{words.examples}</p><ul>{sourceExamples.map((source) => <li><a href={source.url}>{source.name} ↗</a></li>)}</ul></div></div>
+      <figure class="mx-plugin-map">
+        <div class="mx-capabilities"><p class="eyebrow">{words.pluginCaption}</p><ul>{copy.detail.items.map((item) => <li>{item}<span aria-hidden="true">↗</span></li>)}</ul></div>
+        <div class="mx-plugin-player"><img src="/icon.png" alt="" width="104" height="104" loading="lazy" /><strong>MusicX</strong><span>{words.playerCaption}</span></div>
+        <figcaption>{copy.detail.note}</figcaption>
+      </figure>
+    </section>
+
+    <section class="mx-start mx-container" aria-labelledby="start-title">
+      <h2 id="start-title">{words.start}</h2><ol>{copy.steps.map((step) => <li><h3>{step.title}</h3><p>{step.description}</p></li>)}</ol>
+    </section>
+    <section class="mx-faq mx-container" aria-labelledby="faq-title"><h2 id="faq-title">{words.questions}</h2><div>{copy.faq.map((item) => <details><summary>{item.question}<span class="faq-indicator" aria-hidden="true">+</span></summary><p>{item.answer}</p></details>)}</div></section>
+
+    <section class="mx-get" id="download" aria-labelledby="download-title"><div class="mx-container mx-get-inner">
+      <div class="mx-get-title"><img src="/icon.png" alt="" width="72" height="72" loading="lazy" /><div><p class="eyebrow">MusicX</p><h2 id="download-title">{words.ending}</h2></div></div>
+      <div><div class="actions"><a class="button" href={a.primaryHref}>{a.primaryLabel} ↓</a><a class="text-link" href={a.secondaryHref}>{a.secondaryLabel} ↗</a></div><p class="requirements">{a.requirements}</p></div>
+      <div class="mx-release"><p>{a.availability}</p>{product.release && <><a href={product.release.url}>{product.release.tag}</a><a href={`${product.repository}/releases`}>{a.releases} ↗</a></>}</div>
+    </div></section>
+  </main>
+  <footer class="mx-footer mx-container"><p>{words.footer}</p><nav aria-label={messages.accessibility.footerLinks}><a href={`${product.repository}/blob/main/LICENSE`}>{a.license}</a><a href="https://chuo.me">chuo.me ↗</a><a href="#top">{a.back} ↑</a></nav></footer>
+</ProductSite>

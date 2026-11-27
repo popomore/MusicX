@@ -1,0 +1,22 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "chuome-musicx-site-test",
+  "compatibility_date": "2026-11-16",
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "404-page"
+  },
+  "env": {
+    "test": {
+      "name": "chuome-musicx-site-test",
+      "workers_dev": true,
+      "assets": { "directory": "./dist", "not_found_handling": "404-page" }
+    },
+    "production": {
+      "name": "chuome-musicx-site",
+      "workers_dev": false,
+      "routes": [{ "pattern": "musicx.chuo.me", "custom_domain": true }],
+      "assets": { "directory": "./dist", "not_found_handling": "404-page" }
+    }
+  }
+}
