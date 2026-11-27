@@ -7,3 +7,4 @@
 /scripts/ @popomore
 /Cargo.lock @popomore
 /rust-toolchain.toml @popomore
+/site/ @popomore

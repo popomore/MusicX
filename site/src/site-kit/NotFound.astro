@@ -1,0 +1,23 @@
+---
+import './site.css';
+interface Props { name: string }
+const { name } = Astro.props;
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>Page not found · {name}</title>
+    <link rel="icon" type="image/png" href="/icon.png" />
+  </head>
+  <body>
+    <main class="page-shell not-found">
+      <p class="eyebrow">{name} · 404</p>
+      <h1>Page not found</h1>
+      <p lang="zh-CN">未找到页面，请返回首页。</p>
+      <div class="actions"><a class="button" href="/">English homepage</a><a class="text-link" href="/zh/" lang="zh-CN">中文首页 →</a></div>
+    </main>
+  </body>
+</html>

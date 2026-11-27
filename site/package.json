@@ -1,0 +1,30 @@
+{
+  "name": "@musicx/site",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev --port 4324",
+    "build": "astro build",
+    "preview": "astro preview --port 4324",
+    "typecheck": "astro check",
+    "lint": "oxlint --config .oxlintrc.json src tests",
+    "test": "astro build && node --test tests/*.test.mjs",
+    "deploy:test": "npm run build && wrangler deploy --env test",
+    "deploy:production": "npm run build && wrangler deploy --env production",
+    "check:deploy": "wrangler deploy --env test --dry-run && wrangler deploy --env production --dry-run"
+  },
+  "dependencies": {
+    "@astrojs/check": "0.9.11",
+    "astro": "7.4.1"
+  },
+  "devDependencies": {
+    "oxlint": "1.89.0",
+    "typescript": "6.0.3",
+    "vite": "8.3.4",
+    "wrangler": "4.151.3"
+  },
+  "engines": {
+    "node": ">=22.22.0"
+  }
+}
